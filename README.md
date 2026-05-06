@@ -16,7 +16,7 @@ OmniTAK speaks Cursor-on-Target (CoT) over TLS to any TAK Server, supports tacti
 - **Always-latest APK:** [releases/latest](https://github.com/engindearing-projects/OmniTAK-Android/releases/latest)
 - **Google Play (closed testing):** ask J for an invite
 
-> **Upgrading from v0.1.8?** versionCode resets to 1 with each versionName (v0.1.9 starts at vc1; this respin is vc2). Same-versionName upgrades install cleanly without uninstall.
+> **Upgrading?** versionCode is monotonic — every release ratchets the integer up (vc13 here, vc14 next). Android allows in-place upgrade as long as the signing cert is unchanged.
 
 Verify the APK before installing — signing cert SHA-256 should be `9f3b1fd54ad4eb1dc5b45d91deac4699869617d3d2ac425a1b70337aa0eb13af`:
 
