@@ -25,6 +25,24 @@
     <uses-feature
         android:name="android.hardware.bluetooth_le"
         android:required="false" />
+    <!-- Classic Bluetooth is implied-required by the BLUETOOTH permission;
+         mark it optional so devices like Nothing Phone (2a) Plus / A142P
+         that report a non-standard BT feature profile aren't filtered. -->
+    <uses-feature
+        android:name="android.hardware.bluetooth"
+        android:required="false" />
+    <!-- Location features are implied-required by FINE/COARSE_LOCATION;
+         the map and CoT work without a GPS fix (PPLI just goes dark), so
+         mark them optional rather than excluding GPS-less devices. -->
+    <uses-feature
+        android:name="android.hardware.location"
+        android:required="false" />
+    <uses-feature
+        android:name="android.hardware.location.gps"
+        android:required="false" />
+    <uses-feature
+        android:name="android.hardware.location.network"
+        android:required="false" />
 
     <application
         android:name=".OmniTAKApp"

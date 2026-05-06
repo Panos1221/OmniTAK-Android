@@ -10,18 +10,18 @@ OmniTAK speaks Cursor-on-Target (CoT) over TLS to any TAK Server, supports tacti
 
 [![Latest release](https://img.shields.io/github/v/release/engindearing-projects/OmniTAK-Android?label=latest&sort=semver)](https://github.com/engindearing-projects/OmniTAK-Android/releases/latest)
 
-**Current release: [v0.1.9 (versionCode 2)](https://github.com/engindearing-projects/OmniTAK-Android/releases/tag/v0.1.9)** — mTLS client-cert (.p12) import + chat send fix (NetworkOnMainThreadException) + auto-connect on Save. App icon now matches the iOS build for store-listing parity. Verified end-to-end against TAK Server 5.7 and tak.dh2.io:8088.
+**Current release: [v0.1.10 (versionCode 14)](https://github.com/engindearing-projects/OmniTAK-Android/releases/tag/v0.1.10)** — broader device compatibility (Nothing Phone (2a) Plus / A142P unblocked) by marking optional hardware (BLE, GPS, classic Bluetooth) as not-required. Carries forward the v0.1.9 fixes: chat send (NetworkOnMainThreadException), mTLS .p12 import for TAK Server 5.7, auto-connect on Save, iOS-matching app icon.
 
-- **Signed APK (sideload):** [OmniTAK-0.1.9-vc2.apk](https://github.com/engindearing-projects/OmniTAK-Android/releases/download/v0.1.9/OmniTAK-0.1.9-vc2.apk)
+- **Signed APK (sideload):** [OmniTAK-0.1.10-vc14.apk](https://github.com/engindearing-projects/OmniTAK-Android/releases/download/v0.1.10/OmniTAK-0.1.10-vc14.apk)
 - **Always-latest APK:** [releases/latest](https://github.com/engindearing-projects/OmniTAK-Android/releases/latest)
 - **Google Play (closed testing):** ask J for an invite
 
-> **Upgrading?** versionCode is monotonic — every release ratchets the integer up (vc13 here, vc14 next). Android allows in-place upgrade as long as the signing cert is unchanged.
+> **Upgrading?** versionCode is monotonic — every release ratchets the integer up. Android allows in-place upgrade as long as the signing cert is unchanged.
 
 Verify the APK before installing — signing cert SHA-256 should be `9f3b1fd54ad4eb1dc5b45d91deac4699869617d3d2ac425a1b70337aa0eb13af`:
 
 ```bash
-apksigner verify --print-certs OmniTAK-0.1.9-vc2.apk
+apksigner verify --print-certs OmniTAK-0.1.10-vc14.apk
 ```
 
 ## Features
