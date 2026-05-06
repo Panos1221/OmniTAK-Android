@@ -10,18 +10,18 @@ OmniTAK speaks Cursor-on-Target (CoT) over TLS to any TAK Server, supports tacti
 
 [![Latest release](https://img.shields.io/github/v/release/engindearing-projects/OmniTAK-Android?label=latest&sort=semver)](https://github.com/engindearing-projects/OmniTAK-Android/releases/latest)
 
-**Current release: [v0.1.8 (versionCode 1)](https://github.com/engindearing-projects/OmniTAK-Android/releases/tag/v0.1.8)** — fixes unreachable Save button on the Add Server form (S23 Ultra / Android 16). Built on top of v0.1.7 (mesh chat, DMs, multi-channel, node detail).
+**Current release: [v0.1.9 (versionCode 2)](https://github.com/engindearing-projects/OmniTAK-Android/releases/tag/v0.1.9)** — mTLS client-cert (.p12) import + chat send fix (NetworkOnMainThreadException) + auto-connect on Save. App icon now matches the iOS build for store-listing parity. Verified end-to-end against TAK Server 5.7 and tak.dh2.io:8088.
 
-- **Signed APK (sideload):** [OmniTAK-0.1.8-vc1.apk](https://github.com/engindearing-projects/OmniTAK-Android/releases/download/v0.1.8/OmniTAK-0.1.8-vc1.apk)
+- **Signed APK (sideload):** [OmniTAK-0.1.9-vc2.apk](https://github.com/engindearing-projects/OmniTAK-Android/releases/download/v0.1.9/OmniTAK-0.1.9-vc2.apk)
 - **Always-latest APK:** [releases/latest](https://github.com/engindearing-projects/OmniTAK-Android/releases/latest)
 - **Google Play (closed testing):** ask J for an invite
 
-> **Upgrading from v0.1.7?** versionCode resets to 1 with each versionName, so Android will refuse to install v0.1.8 over an existing v0.1.7. Uninstall v0.1.7 first, then install v0.1.8.
+> **Upgrading from v0.1.8?** versionCode resets to 1 with each versionName (v0.1.9 starts at vc1; this respin is vc2). Same-versionName upgrades install cleanly without uninstall.
 
 Verify the APK before installing — signing cert SHA-256 should be `9f3b1fd54ad4eb1dc5b45d91deac4699869617d3d2ac425a1b70337aa0eb13af`:
 
 ```bash
-apksigner verify --print-certs OmniTAK-0.1.8-vc1.apk
+apksigner verify --print-certs OmniTAK-0.1.9-vc2.apk
 ```
 
 ## Features
