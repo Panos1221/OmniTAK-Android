@@ -6,6 +6,22 @@ OmniTAK speaks Cursor-on-Target (CoT) over TLS to any TAK Server, supports tacti
 
 > **Bring your own TAK Server.** OmniTAK is a client. Stand up [TAK Server](https://tak.gov) (community CIV edition) or [FreeTAKServer](https://github.com/FreeTAKTeam/FreeTakServer) and point OmniTAK at it.
 
+## Download
+
+[![Latest release](https://img.shields.io/github/v/release/engindearing-projects/OmniTAK-Android?label=latest&sort=semver)](https://github.com/engindearing-projects/OmniTAK-Android/releases/latest)
+
+**Current release: [v0.1.7 (versionCode 12)](https://github.com/engindearing-projects/OmniTAK-Android/releases/tag/v0.1.7)** — mesh chat, DMs, multi-channel, node detail.
+
+- **Signed APK (sideload):** [OmniTAK-0.1.7-vc12.apk](https://github.com/engindearing-projects/OmniTAK-Android/releases/download/v0.1.7/OmniTAK-0.1.7-vc12.apk)
+- **Always-latest APK:** [releases/latest](https://github.com/engindearing-projects/OmniTAK-Android/releases/latest)
+- **Google Play (closed testing):** ask J for an invite
+
+Verify the APK before installing — signing cert SHA-256 should be `9f3b1fd54ad4eb1dc5b45d91deac4699869617d3d2ac425a1b70337aa0eb13af`:
+
+```bash
+apksigner verify --print-certs OmniTAK-0.1.7-vc12.apk
+```
+
 ## Features
 
 - **TAK Server connectivity** — TCP / TLS / mTLS with client-certificate enrollment

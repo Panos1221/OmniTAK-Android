@@ -13,7 +13,17 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import java.io.ByteArrayOutputStream
+import soy.engindearing.omnitak.mobile.data.AdminMessageParser
+import soy.engindearing.omnitak.mobile.data.AdminMessageSerializer
+import soy.engindearing.omnitak.mobile.data.AdminResponse
 import soy.engindearing.omnitak.mobile.data.AtakPluginParser
+import soy.engindearing.omnitak.mobile.data.ChatMessage
+import soy.engindearing.omnitak.mobile.data.ChatStatus
+import soy.engindearing.omnitak.mobile.data.MeshDeviceConfig
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+import java.util.TimeZone
 import soy.engindearing.omnitak.mobile.data.AtakPluginSerializer
 import soy.engindearing.omnitak.mobile.data.CoTEvent
 import soy.engindearing.omnitak.mobile.data.FromRadioFrame
@@ -210,6 +220,16 @@ class MeshtasticManager(private val context: Context? = null) {
                 Log.i(TAG, "my_node_num=${parsed.nodeNum}")
             }
             is FromRadioFrame.ConfigComplete -> Log.i(TAG, "config complete id=${parsed.id}")
+            is FromRadioFrame.ConfigFrame -> {
+                Log.i(TAG, "RX FromRadio.config (post-want_config_id dump): ${parsed.response}")
+                runCatching { adminResponseSink?.invoke(parsed.response) }
+                    .onFailure { Log.w(TAG, "adminResponseSink (config) failed: ${it.message}") }
+            }
+            is FromRadioFrame.ChannelFrame -> {
+                Log.i(TAG, "RX FromRadio.channel: ${parsed.response}")
+                runCatching { adminResponseSink?.invoke(parsed.response) }
+                    .onFailure { Log.w(TAG, "adminResponseSink (channel) failed: ${it.message}") }
+            }
             is FromRadioFrame.Unknown -> Log.v(TAG, "unrecognised FromRadio frame (${frame.size}B)")
             null -> Log.w(TAG, "frame parse returned null (${frame.size}B)")
         }
@@ -273,8 +293,203 @@ class MeshtasticManager(private val context: Context? = null) {
                     )
                 }
             }
+            PORTNUM_ADMIN_APP -> {
+                // GAP-109 read-back — radio's response to one of our
+                // get_*_request admin messages. Decode and notify the
+                // listener so MeshDeviceConfigStore can mirror radio state.
+                val response = AdminMessageParser.parse(packet.payload)
+                if (response != null) {
+                    Log.i(TAG, "RX admin response: $response")
+                    runCatching { adminResponseSink?.invoke(response) }
+                        .onFailure { Log.w(TAG, "adminResponseSink failed: ${it.message}") }
+                } else {
+                    Log.v(TAG, "RX admin packet from=${packet.from} payload=${packet.payload.size}B (unrecognised)")
+                }
+            }
+            PORTNUM_TEXT_MESSAGE_APP -> {
+                // GAP-122 — Meshtastic text message. Payload is plain UTF-8.
+                // GAP-124 — directed packets (packet.to == my node num) are
+                // surfaced as DM conversations "MESH-DM-{otherNodeId}";
+                // broadcasts (packet.to == 0xFFFFFFFF) stay on channel
+                // conversations "MESH-CHn".
+                //
+                // Echo skip: when our own outgoing text round-trips through
+                // the radio it comes back with from == my_node_num. The TX
+                // path already inserted the message via markOutgoing, so
+                // ingesting again would double-display it.
+                val myNum = _myNodeNum
+                if (myNum != null && packet.from == myNum) return
+                val text = runCatching { String(packet.payload, Charsets.UTF_8) }.getOrNull()
+                if (text.isNullOrEmpty()) return
+                val nodeId = packet.from.toLong() and 0xFFFFFFFFL
+                val node = _nodes.value[nodeId]
+                val callsign = node?.longName?.takeIf { it.isNotBlank() }
+                    ?: node?.shortName?.takeIf { it.isNotBlank() }
+                    ?: "Node ${"%08x".format(nodeId.toInt())}"
+                val now = System.currentTimeMillis()
+                val nowIso = chatTimeFormatter.format(Date(now))
+                val isDm = myNum != null && packet.to != BROADCAST_ADDR && packet.to == myNum
+                val conversationId = if (isDm) {
+                    meshDmConversationId(nodeId)
+                } else {
+                    meshConversationId(packet.channel.toInt())
+                }
+                val msg = ChatMessage(
+                    conversationId = conversationId,
+                    senderUid = "MESHTASTIC-${"%08X".format(nodeId.toInt())}",
+                    senderCallsign = callsign,
+                    text = text,
+                    timeIso = nowIso,
+                    status = ChatStatus.RECEIVED,
+                    isFromSelf = false,
+                )
+                Log.i(
+                    TAG,
+                    if (isDm) "RX mesh DM from $callsign: $text"
+                    else "RX mesh text from $callsign on ch${packet.channel}: $text",
+                )
+                runCatching { chatSink?.invoke(msg) }
+                    .onFailure { Log.w(TAG, "chatSink failed: ${it.message}") }
+            }
             else -> Log.v(TAG, "MeshPacket portnum=${packet.portnum} from=${packet.from} payload=${packet.payload.size}B")
         }
+    }
+
+    /**
+     * GAP-122 — listener for decoded Meshtastic text messages. Wired in
+     * [OmniTAKApp] to [ChatStore.ingest] so the Chat tab surfaces them
+     * in a "Mesh: channel N" conversation.
+     */
+    @Volatile var chatSink: ((ChatMessage) -> Unit)? = null
+
+    /**
+     * GAP-122 — send a text message over the Meshtastic transport on
+     * the requested channel. Builds a ToRadio with portnum=1
+     * (TEXT_MESSAGE_APP) and dispatches via the active TCP / BLE.
+     * Returns true on successful wire-layer dispatch.
+     *
+     * GAP-124 — when [toNodeId] is non-null the message is sent as a
+     * directed packet (DM) by setting `MeshPacket.to` to that nodeNum
+     * instead of the broadcast address. Recipients see it as a DM in
+     * conversation "MESH-DM-<myNodeId>".
+     */
+    suspend fun sendMeshChat(text: String, channelIndex: Int = 0, toNodeId: UInt? = null): Boolean {
+        if (text.isEmpty()) return false
+        val transport = _activeTransport.value ?: return false
+        val payload = text.toByteArray(Charsets.UTF_8)
+        val frame = buildTextMessageToRadio(payload, channelIndex.toUInt(), toNodeId ?: BROADCAST_ADDR)
+        return when (transport) {
+            MeshConnectionType.TCP -> tcpClient.sendBytes(frame)
+            MeshConnectionType.BLUETOOTH -> bleClient?.sendToRadio(frame) ?: false
+        }
+    }
+
+    /** Build a ToRadio { MeshPacket { Data { portnum=1, payload } } } frame. */
+    private fun buildTextMessageToRadio(text: ByteArray, channelIndex: UInt, toNodeNum: UInt): ByteArray {
+        val out = java.io.ByteArrayOutputStream()
+        // Data { 1=portnum varint=1, 2=payload bytes=text }
+        val data = java.io.ByteArrayOutputStream().apply {
+            // tag (1<<3)|0 = 0x08, varint 1
+            write(0x08); write(0x01)
+            // tag (2<<3)|2 = 0x12, length-delim
+            write(0x12)
+            writeVarintTo(this, text.size.toULong())
+            write(text)
+        }.toByteArray()
+        // MeshPacket { 2=to fixed32, 3=channel varint (if non-zero), 4=decoded data, 6=id fixed32, 10=want_ack varint=0 }
+        val pkt = java.io.ByteArrayOutputStream().apply {
+            // to: fixed32 — broadcast (0xFFFFFFFF) for channel-wide chat,
+            // a specific nodeNum for DMs (GAP-124).
+            write(0x15)
+            write(byteArrayOf(
+                (toNodeNum.toInt() and 0xFF).toByte(),
+                ((toNodeNum.toInt() shr 8) and 0xFF).toByte(),
+                ((toNodeNum.toInt() shr 16) and 0xFF).toByte(),
+                ((toNodeNum.toInt() shr 24) and 0xFF).toByte(),
+            ))
+            // channel
+            if (channelIndex != 0u) {
+                write(0x18); writeVarintTo(this, channelIndex.toULong())
+            }
+            // decoded data submessage
+            write(0x22)
+            writeVarintTo(this, data.size.toULong())
+            write(data)
+            // id: random non-zero fixed32
+            val id = (1..Int.MAX_VALUE).random()
+            write(0x35)
+            write(byteArrayOf(
+                (id and 0xFF).toByte(),
+                ((id shr 8) and 0xFF).toByte(),
+                ((id shr 16) and 0xFF).toByte(),
+                ((id shr 24) and 0xFF).toByte(),
+            ))
+        }.toByteArray()
+        // ToRadio { 1=packet length-delim }
+        out.write(0x0A)
+        writeVarintTo(out, pkt.size.toULong())
+        out.write(pkt)
+        return out.toByteArray()
+    }
+
+    private fun writeVarintTo(out: java.io.OutputStream, value: ULong) {
+        var v = value
+        while (v >= 0x80uL) {
+            out.write(((v and 0x7FuL).toInt()) or 0x80)
+            v = v shr 7
+        }
+        out.write(v.toInt() and 0x7F)
+    }
+
+    /** Conversation id used by [ChatStore] to bucket incoming mesh text by channel. */
+    fun meshConversationId(channelIndex: Int): String = "MESH-CH$channelIndex"
+
+    /** GAP-124 — conversation id used by [ChatStore] to bucket directed
+     *  mesh text by the *other* party's nodenum. Both my outgoing DM to
+     *  node X and X's reply to me end up in the same bucket. */
+    fun meshDmConversationId(nodeId: Long): String =
+        "MESH-DM-${"%08X".format(nodeId.toInt())}"
+
+    /**
+     * GAP-109 read-back — listener for decoded AdminMessage responses.
+     * Wired in [OmniTAKApp] to [MeshDeviceConfigStore.applyAdminResponse]
+     * so the Device Settings screen reflects the radio's actual state
+     * after a `requestDeviceConfig()` round-trip.
+     */
+    @Volatile var adminResponseSink: ((AdminResponse) -> Unit)? = null
+
+    /**
+     * Ask the connected radio for its current owner / device role / PLI
+     * cadence / LoRa preset / primary-channel name. Sends 5 admin
+     * requests; responses arrive asynchronously via [adminResponseSink].
+     *
+     * No-op when no transport is active. Returns the count successfully
+     * dispatched so the caller can toast on partial / total failure.
+     */
+    suspend fun requestDeviceConfig(): Int {
+        val transport = _activeTransport.value ?: return 0
+        // GAP-123 — ask for all 8 channel slots (Meshtastic firmware caps
+        // at 8). Disabled slots come back with role=0 and are filtered
+        // out at the chat seeding layer; non-disabled ones become chat
+        // conversations with the operator's actual channel names.
+        val channelRequests = (0 until 8).map { idx ->
+            AdminMessageSerializer.buildGetChannelRequest(idx)
+        }
+        val requests = listOf(
+            AdminMessageSerializer.buildGetOwnerRequest(),
+            AdminMessageSerializer.buildGetConfigRequest(GET_CONFIG_DEVICE),
+            AdminMessageSerializer.buildGetConfigRequest(GET_CONFIG_POSITION),
+            AdminMessageSerializer.buildGetConfigRequest(GET_CONFIG_LORA),
+        ) + channelRequests
+        var sent = 0
+        for (bytes in requests) {
+            val ok = when (transport) {
+                MeshConnectionType.TCP -> tcpClient.sendBytes(bytes)
+                MeshConnectionType.BLUETOOTH -> bleClient?.sendToRadio(bytes) ?: false
+            }
+            if (ok) sent += 1 else break
+        }
+        return sent
     }
 
     /**
@@ -301,9 +516,58 @@ class MeshtasticManager(private val context: Context? = null) {
         }
     }
 
+    /**
+     * GAP-109a — push the operator's draft device config to the connected
+     * radio via portnum-6 (ADMIN_APP) AdminMessage payloads.
+     *
+     * Splits the config across four admin messages because the firmware
+     * groups settings into separate protobuf submessages. Sends them
+     * sequentially over the active transport; each one is a fully-framed
+     * `ToRadio`, so a single missed write doesn't corrupt the others.
+     *
+     * Returns the count of messages successfully dispatched (0..4). The
+     * caller can surface this to the operator — e.g. "3 of 4 settings
+     * pushed; retry?". Doesn't wait for AdminMessage acks: those come
+     * back as `FromRadio.routing` frames and would need protobuf decode
+     * we haven't built yet (filed under GAP-109b).
+     */
+    suspend fun pushDeviceConfig(config: MeshDeviceConfig): Int {
+        val transport = _activeTransport.value ?: return 0
+
+        val messages = listOf(
+            AdminMessageSerializer.buildSetOwner(config.longName, config.shortName),
+            AdminMessageSerializer.buildSetDeviceRole(config.role),
+            AdminMessageSerializer.buildSetPositionBroadcastSecs(config.positionBroadcastSecs),
+            AdminMessageSerializer.buildSetChannel0Name(config.channelName),
+            AdminMessageSerializer.buildSetLoraPreset(config.channelPreset),
+        )
+        var sent = 0
+        for (bytes in messages) {
+            val ok = when (transport) {
+                MeshConnectionType.TCP -> tcpClient.sendBytes(bytes)
+                MeshConnectionType.BLUETOOTH -> bleClient?.sendToRadio(bytes) ?: false
+            }
+            if (ok) sent += 1 else break // bail on first failure so we don't wedge mid-write
+        }
+        return sent
+    }
+
     companion object {
         private const val TAG = "MeshtasticManager"
+        private const val PORTNUM_TEXT_MESSAGE_APP = 1
         private const val PORTNUM_POSITION_APP = 3
+        private const val PORTNUM_ADMIN_APP = 6
+        /** Meshtastic broadcast address — channel-wide chat / position / etc. */
+        private val BROADCAST_ADDR: UInt = 0xFFFFFFFFu
+        // ConfigType enum values (admin.proto)
+        private const val GET_CONFIG_DEVICE = 0
+        private const val GET_CONFIG_POSITION = 1
+        private const val GET_CONFIG_LORA = 5
+
+        private val chatTimeFormatter = SimpleDateFormat(
+            "yyyy-MM-dd'T'HH:mm:ss'Z'",
+            Locale.US,
+        ).apply { timeZone = TimeZone.getTimeZone("UTC") }
         private const val PORTNUM_ATAK_PLUGIN = 72
         // Some ATAK plugin builds send via portnum 257 (ATAK_FORWARDER)
         // — accept both so OmniTAK can interop with both clients.

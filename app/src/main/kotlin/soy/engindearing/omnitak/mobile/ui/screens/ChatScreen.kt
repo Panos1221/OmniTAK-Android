@@ -72,13 +72,23 @@ import java.util.UUID
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun ChatScreen() {
+fun ChatScreen(initialConversationId: String? = null) {
     val app = LocalContext.current.applicationContext as OmniTAKApp
     val conversations by app.chatStore.conversations.collectAsState()
     val messagesByConvo by app.chatStore.messagesByConversation.collectAsState()
     val prefs by app.userPrefsStore.prefs.collectAsState(initial = UserPrefs())
+    val chatScope = rememberCoroutineScope()
 
-    var selectedConversation by remember { mutableStateOf<String?>(null) }
+    // GAP-124 — when arriving with an initial convo id (eg. from the
+    // node-detail sheet's "Message" button), open that conversation
+    // straight away instead of dropping the user on the conversation list.
+    var selectedConversation by remember(initialConversationId) {
+        mutableStateOf(initialConversationId)
+    }
+    LaunchedEffect(selectedConversation) {
+        val id = selectedConversation ?: return@LaunchedEffect
+        app.chatStore.markRead(id)
+    }
 
     if (selectedConversation == null) {
         ConversationListView(
@@ -101,7 +111,7 @@ fun ChatScreen() {
             selfUid = selfUidFor(prefs),
             selfCallsign = prefs.callsign,
             onBack = { selectedConversation = null },
-            onSend = { text -> sendChat(app, convo, prefs, text) },
+            onSend = { text -> sendChat(app, convo, prefs, text, chatScope) },
         )
     }
 }
@@ -377,8 +387,46 @@ private fun sendChat(
     convo: ChatConversation,
     prefs: UserPrefs,
     text: String,
+    scope: kotlinx.coroutines.CoroutineScope,
 ) {
     val senderUid = selfUidFor(prefs)
+    val now = DateTimeFormatter.ISO_INSTANT.format(Instant.now())
+
+    // GAP-122 / GAP-124 — Mesh conversations route through
+    // MeshtasticManager (portnum 1) instead of the TAK server's CoT
+    // GeoChat path. Channel chat → broadcast on a channel index;
+    // DM → directed packet to the peer's nodenum (parsed back from the
+    // 8-hex-char suffix on the convo id).
+    if (convo.id.startsWith("MESH-CH") || convo.id.startsWith("MESH-DM-")) {
+        val channelIndex = if (convo.id.startsWith("MESH-CH")) {
+            convo.id.removePrefix("MESH-CH").toIntOrNull() ?: 0
+        } else 0
+        val toNodeId: UInt? = if (convo.id.startsWith("MESH-DM-")) {
+            convo.id.removePrefix("MESH-DM-").toLongOrNull(16)?.toUInt()
+        } else null
+        val msgId = UUID.randomUUID().toString()
+        val outgoing = ChatMessage(
+            id = msgId,
+            conversationId = convo.id,
+            senderUid = senderUid,
+            senderCallsign = prefs.callsign,
+            text = text,
+            timeIso = now,
+            status = ChatStatus.SENDING,
+            isFromSelf = true,
+        )
+        app.chatStore.markOutgoing(outgoing)
+        scope.launch {
+            val sent = app.meshtastic.sendMeshChat(text, channelIndex, toNodeId)
+            app.chatStore.updateMessageStatus(
+                conversationId = convo.id,
+                messageId = msgId,
+                status = if (sent) ChatStatus.SENT else ChatStatus.FAILED,
+            )
+        }
+        return
+    }
+
     val recipient = convo.participants.firstOrNull { it.uid != senderUid }
     val isGroup = convo.isGroup
 
@@ -391,7 +439,6 @@ private fun sendChat(
         recipientCallsign = recipient?.callsign,
         messageId = UUID.randomUUID().toString(),
     )
-    val now = DateTimeFormatter.ISO_INSTANT.format(Instant.now())
     val message = ChatMessage(
         id = generated.messageId,
         conversationId = convo.id,

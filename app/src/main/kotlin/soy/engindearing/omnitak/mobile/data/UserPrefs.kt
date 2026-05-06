@@ -11,8 +11,8 @@ import kotlinx.coroutines.flow.map
 private val Context.userPrefsDataStore by preferencesDataStore(name = "user_prefs")
 
 enum class DistanceUnit { METRIC, IMPERIAL }
-enum class CoordFormat { LATLON_DECIMAL, LATLON_DMS, MGRS }
-enum class MapProvider { OSM_RASTER, SATELLITE_HINT, TOPO_HINT }
+enum class CoordFormat { LATLON_DECIMAL, LATLON_DMS, MGRS, UTM }
+enum class MapProvider { OSM_RASTER, SATELLITE_HINT, TOPO_HINT, WMTS_CUSTOM }
 
 /**
  * Operator preferences — callsign, units, coord format, tile choice.
@@ -35,8 +35,21 @@ data class UserPrefs(
     val distanceUnit: DistanceUnit = DistanceUnit.METRIC,
     val coordFormat: CoordFormat = CoordFormat.LATLON_DECIMAL,
     val mapProvider: MapProvider = MapProvider.OSM_RASTER,
+    // GAP-107 — XYZ tile URL template the operator pasted in. Used when
+    // mapProvider == WMTS_CUSTOM. Format: https://host/{z}/{x}/{y}.png
+    val customTileUrl: String = "",
     val autoPublishMeshToTak: Boolean = true,
     val meshNodesLayerVisible: Boolean = true,
+    // GAP-110 — persisted UI toggles. Each one mirrors a switch the operator
+    // hits via the long-press radial menu / Layers sheet / map controls. Used
+    // to evaporate on relaunch (`var X by remember { mutableStateOf(...) }`)
+    // which made the picks feel meaningless.
+    val callsignCardVisible: Boolean = true,
+    val gridEnabled: Boolean = false,
+    val drawingsVisible: Boolean = true,
+    val aircraftVisible: Boolean = true,
+    val contactsVisible: Boolean = true,
+    val followMeActive: Boolean = false,
 )
 
 class UserPrefsStore(private val context: Context) {
@@ -45,8 +58,16 @@ class UserPrefsStore(private val context: Context) {
     private val KEY_DIST = stringPreferencesKey("distance_unit")
     private val KEY_COORD = stringPreferencesKey("coord_format")
     private val KEY_MAP = stringPreferencesKey("map_provider")
+    private val KEY_CUSTOM_TILE_URL = stringPreferencesKey("custom_tile_url")
     private val KEY_AUTO_PUBLISH_MESH = booleanPreferencesKey("auto_publish_mesh_to_tak")
     private val KEY_MESH_LAYER_VISIBLE = booleanPreferencesKey("mesh_nodes_layer_visible")
+    // GAP-110 keys
+    private val KEY_CALLSIGN_CARD = booleanPreferencesKey("callsign_card_visible")
+    private val KEY_GRID = booleanPreferencesKey("grid_enabled")
+    private val KEY_DRAWINGS_VIS = booleanPreferencesKey("drawings_visible")
+    private val KEY_AIRCRAFT_VIS = booleanPreferencesKey("aircraft_visible")
+    private val KEY_CONTACTS_VIS = booleanPreferencesKey("contacts_visible")
+    private val KEY_FOLLOW_ME = booleanPreferencesKey("follow_me_active")
 
     val prefs: Flow<UserPrefs> = context.userPrefsDataStore.data.map { p -> readFrom(p) }
 
@@ -58,8 +79,15 @@ class UserPrefsStore(private val context: Context) {
             p[KEY_DIST] = next.distanceUnit.name
             p[KEY_COORD] = next.coordFormat.name
             p[KEY_MAP] = next.mapProvider.name
+            p[KEY_CUSTOM_TILE_URL] = next.customTileUrl
             p[KEY_AUTO_PUBLISH_MESH] = next.autoPublishMeshToTak
             p[KEY_MESH_LAYER_VISIBLE] = next.meshNodesLayerVisible
+            p[KEY_CALLSIGN_CARD] = next.callsignCardVisible
+            p[KEY_GRID] = next.gridEnabled
+            p[KEY_DRAWINGS_VIS] = next.drawingsVisible
+            p[KEY_AIRCRAFT_VIS] = next.aircraftVisible
+            p[KEY_CONTACTS_VIS] = next.contactsVisible
+            p[KEY_FOLLOW_ME] = next.followMeActive
         }
     }
 
@@ -83,7 +111,14 @@ class UserPrefsStore(private val context: Context) {
             ?: CoordFormat.LATLON_DECIMAL,
         mapProvider = p[KEY_MAP]?.let { runCatching { MapProvider.valueOf(it) }.getOrNull() }
             ?: MapProvider.OSM_RASTER,
+        customTileUrl = p[KEY_CUSTOM_TILE_URL] ?: "",
         autoPublishMeshToTak = p[KEY_AUTO_PUBLISH_MESH] ?: true,
         meshNodesLayerVisible = p[KEY_MESH_LAYER_VISIBLE] ?: true,
+        callsignCardVisible = p[KEY_CALLSIGN_CARD] ?: true,
+        gridEnabled = p[KEY_GRID] ?: false,
+        drawingsVisible = p[KEY_DRAWINGS_VIS] ?: true,
+        aircraftVisible = p[KEY_AIRCRAFT_VIS] ?: true,
+        contactsVisible = p[KEY_CONTACTS_VIS] ?: true,
+        followMeActive = p[KEY_FOLLOW_ME] ?: false,
     )
 }

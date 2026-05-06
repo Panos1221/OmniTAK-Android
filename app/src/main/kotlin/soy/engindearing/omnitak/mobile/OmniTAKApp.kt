@@ -7,6 +7,8 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
+import soy.engindearing.omnitak.mobile.data.AdminResponse
+import soy.engindearing.omnitak.mobile.data.MeshDeviceConfigStore
 import soy.engindearing.omnitak.mobile.data.TAKServerStore
 import soy.engindearing.omnitak.mobile.data.UserPrefsStore
 import soy.engindearing.omnitak.mobile.domain.ChatStore
@@ -22,15 +24,68 @@ class OmniTAKApp : Application() {
     private val appScope = CoroutineScope(Dispatchers.Default + SupervisorJob())
     val contactStore: ContactStore by lazy { ContactStore() }
     val drawingStore: DrawingStore by lazy { DrawingStore() }
-    val chatStore: ChatStore by lazy { ChatStore() }
+    val chatStore: ChatStore by lazy {
+        ChatStore().also { store ->
+            // GAP-122 — Mesh primary channel always visible so users can
+            // open it before any text traffic has arrived.
+            store.upsertConversationIfMissing(
+                id = "MESH-CH0",
+                title = "Mesh: Primary",
+            )
+        }
+    }
     val meshtastic: MeshtasticManager by lazy {
         MeshtasticManager(this).also { mgr ->
             // Phase 4: portnum-72 ATAK-plugin payloads decode straight
             // into CoT events; route them into the same ingest sink the
             // node-table bridge uses so they surface as map contacts.
             mgr.cotSink = { event -> contactStore.ingest(event) }
+            // GAP-109 read-back — admin responses to our get_*_request
+            // calls fold into the device-config store on a background
+            // coroutine. Screen collects from the store and re-renders.
+            //
+            // GAP-123 — non-disabled Channel responses also seed/rename
+            // the chat conversation for that channel index, so the Chat
+            // tab shows every channel the radio actually has configured
+            // (not just CH0).
+            mgr.adminResponseSink = { response ->
+                appScope.launch { meshDeviceConfigStore.applyAdminResponse(response) }
+                if (response is AdminResponse.Channel && !response.isDisabled) {
+                    val title = meshChannelTitle(response)
+                    chatStore.upsertOrRenameConversation(
+                        id = "MESH-CH${response.index}",
+                        title = title,
+                    )
+                }
+            }
+            // GAP-122 — ingest mesh text messages into the same ChatStore
+            // the TAK GeoChat path uses, so the Chat tab shows mesh chat
+            // alongside server chat.
+            //
+            // GAP-124 — DM bucket "MESH-DM-{otherNodeIdHex}" titled with
+            // the sender's callsign; broadcast bucket "MESH-CHn" titled
+            // with the channel name (or placeholder when the radio
+            // hasn't read back yet).
+            mgr.chatSink = { msg ->
+                val title = when {
+                    msg.conversationId.startsWith("MESH-DM-") -> "DM: ${msg.senderCallsign}"
+                    msg.conversationId == "MESH-CH0" -> "Mesh: Primary"
+                    msg.conversationId.startsWith("MESH-CH") -> {
+                        val ch = msg.conversationId.removePrefix("MESH-CH")
+                        "Mesh: Channel $ch"
+                    }
+                    else -> msg.senderCallsign
+                }
+                chatStore.upsertConversationIfMissing(
+                    id = msg.conversationId,
+                    title = title,
+                    isGroup = !msg.conversationId.startsWith("MESH-DM-"),
+                )
+                chatStore.ingest(msg)
+            }
         }
     }
+    val meshDeviceConfigStore: MeshDeviceConfigStore by lazy { MeshDeviceConfigStore(this) }
     val userPrefsStore: UserPrefsStore by lazy { UserPrefsStore(this) }
     val serverManager: ServerManager by lazy {
         ServerManager(TAKServerStore(this), contactStore, chatStore)
@@ -61,5 +116,20 @@ class OmniTAKApp : Application() {
                     .collect { bridge.enabled = it }
             }
         }
+    }
+}
+
+/**
+ * GAP-123 — render a chat-conversation title for a Meshtastic channel
+ * the radio reported. Prefers the operator's actual channel name; falls
+ * back to "Primary" / "Channel N" when the radio left the slot blank
+ * (eg. PRIMARY with no custom name).
+ */
+private fun meshChannelTitle(channel: AdminResponse.Channel): String {
+    val name = channel.name.trim()
+    return when {
+        name.isNotEmpty() -> "Mesh: $name"
+        channel.isPrimary -> "Mesh: Primary"
+        else -> "Mesh: Channel ${channel.index}"
     }
 }
