@@ -7,6 +7,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import soy.engindearing.omnitak.mobile.data.CertVault
 import soy.engindearing.omnitak.mobile.data.ChatXml
 import soy.engindearing.omnitak.mobile.data.CoTParser
 import soy.engindearing.omnitak.mobile.data.TAKConnection
@@ -27,6 +28,7 @@ class ServerManager(
     private val store: TAKServerStore,
     private val contactStore: ContactStore? = null,
     private val chatStore: ChatStore? = null,
+    private val certVault: CertVault? = null,
 ) {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
@@ -49,7 +51,7 @@ class ServerManager(
     /** Tear down any existing connection and open a new one to [server]. */
     fun connect(server: TAKServer) {
         disconnect()
-        val conn = TAKConnection(server)
+        val conn = TAKConnection(server, certVault)
         currentConnection = conn
         connectionCollectorJob = scope.launch {
             conn.state.collect { _connectionState.value = it }
@@ -71,7 +73,7 @@ class ServerManager(
     }
 
     /** Send a CoT XML payload on the active connection. */
-    fun sendCoT(xml: String): Boolean = currentConnection?.send(xml) ?: false
+    suspend fun sendCoT(xml: String): Boolean = currentConnection?.send(xml) ?: false
 
     /** Disconnect the current connection if any. */
     fun disconnect() {
@@ -110,11 +112,19 @@ class ServerManager(
 
         val updated = _servers.value + server
         _servers.value = updated
-        if (server.enabled && (_activeServer.value == null || _activeServer.value?.enabled != true)) {
+        val becomingActive = server.enabled &&
+            (_activeServer.value == null || _activeServer.value?.enabled != true)
+        if (becomingActive) {
             _activeServer.value = server
             persistActive(server.id)
         }
         persist(updated)
+        // Auto-connect when this server becomes active and nothing is on the wire.
+        // Users expect "I added a server, it works" — the explicit play button is
+        // for switching between configured servers, not for first-use bootstrap.
+        if (becomingActive && currentConnection == null) {
+            connect(server)
+        }
         return server
     }
 
@@ -145,16 +155,26 @@ class ServerManager(
         _servers.value = updated
 
         val toggled = updated.firstOrNull { it.id == id }
-        if (_activeServer.value?.id == id) {
+        val wasActive = _activeServer.value?.id == id
+        if (wasActive) {
             if (toggled?.enabled == true) {
                 _activeServer.value = toggled
             } else {
+                disconnect()
                 val next = updated.firstOrNull { it.enabled }
                 _activeServer.value = next
                 persistActive(next?.id)
             }
         }
         persist(updated)
+        // Switch ON should put the server on the wire, not just permit it.
+        if (toggled?.enabled == true && currentConnection == null) {
+            if (!wasActive) {
+                _activeServer.value = toggled
+                persistActive(toggled.id)
+            }
+            connect(toggled)
+        }
     }
 
     fun setActive(id: String) {

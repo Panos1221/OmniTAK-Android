@@ -32,6 +32,10 @@ data class TAKServer(
     // (matches how username is stored). Move to EncryptedSharedPreferences /
     // Android KeyStore before any non-test deployment.
     val password: String? = null,
+    // GAP-105 — passphrase for the PKCS12 referenced by [certificateName].
+    // Same plaintext caveat as [password]; the CertVault stores the .p12
+    // bytes themselves in app-internal storage (off the JSON blob).
+    val certificatePassword: String? = null,
 ) {
     val displayName: String get() = "$name ($host:$port)"
 

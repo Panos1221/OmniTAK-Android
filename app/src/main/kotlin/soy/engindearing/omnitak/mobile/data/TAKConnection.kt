@@ -18,10 +18,14 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import soy.engindearing.omnitak.mobile.domain.ConnectionState
 import java.io.BufferedReader
+import java.io.ByteArrayInputStream
 import java.net.InetSocketAddress
 import java.net.Socket
+import java.security.KeyStore
 import java.security.SecureRandom
 import java.security.cert.X509Certificate
+import javax.net.ssl.KeyManager
+import javax.net.ssl.KeyManagerFactory
 import javax.net.ssl.SSLContext
 import javax.net.ssl.SSLSocket
 import javax.net.ssl.TrustManager
@@ -39,7 +43,10 @@ import kotlin.coroutines.coroutineContext
  *   - 15s connect timeout so "Connecting…" never sticks forever (iOS #40)
  *   - Single-shot state transitions guarded by coroutine cancellation
  */
-class TAKConnection(private val server: TAKServer) {
+class TAKConnection(
+    private val server: TAKServer,
+    private val certVault: CertVault? = null,
+) {
 
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private var connectJob: Job? = null
@@ -88,20 +95,23 @@ class TAKConnection(private val server: TAKServer) {
 
     /**
      * Fire-and-forget CoT XML send. Returns false if no socket is open
-     * or if the write fails. Runs on the IO dispatcher so callers can
-     * invoke from any scope.
+     * or if the write fails. Suspends on [Dispatchers.IO] so a UI-thread
+     * caller (eg. ChatScreen's send button) doesn't trip
+     * NetworkOnMainThreadException.
      */
-    fun send(xml: String): Boolean {
+    suspend fun send(xml: String): Boolean {
         val sock = socket ?: return false
         if (_state.value !is ConnectionState.Connected) return false
-        return try {
-            val out = sock.getOutputStream()
-            out.write(xml.toByteArray(Charsets.UTF_8))
-            out.flush()
-            true
-        } catch (t: Throwable) {
-            Log.w(TAG, "send failed: ${t.javaClass.simpleName}: ${t.message}")
-            false
+        return withContext(Dispatchers.IO) {
+            try {
+                val out = sock.getOutputStream()
+                out.write(xml.toByteArray(Charsets.UTF_8))
+                out.flush()
+                true
+            } catch (t: Throwable) {
+                Log.w(TAG, "send failed: ${t.javaClass.simpleName}: ${t.message}")
+                false
+            }
         }
     }
 
@@ -114,21 +124,58 @@ class TAKConnection(private val server: TAKServer) {
     }
 
     /**
-     * DEV-MODE TLS. TAK servers typically use self-signed certs or a
-     * private CA, so strict trust-store validation fails out of the
-     * box. Until we add the CA-import flow, we accept any server cert
-     * with a loud log warning. Do NOT ship a release build in this state.
+     * Mutual-TLS when the operator imported a `.p12` for this server, plain
+     * TLS otherwise. TAK servers default to mTLS — without a client cert the
+     * server closes the connection at handshake (PEER_DID_NOT_RETURN_A_CERTIFICATE).
+     *
+     * Server-side trust still uses [TrustAllX509Manager] because TAK servers
+     * almost always present a self-signed CA. CA-import / pinning is the next
+     * GAP after this one.
      */
     private fun openTlsSocket(): Socket {
-        Log.w(TAG, "⚠ DEV-MODE TLS: accepting any server certificate. Add CA trust before shipping.")
+        val keyManagers = loadClientKeyManagers()
+        if (keyManagers == null) {
+            Log.w(TAG, "⚠ TLS without client cert — server may reject. Import a .p12 if mTLS is required.")
+        } else {
+            Log.i(TAG, "TLS with client cert ${server.certificateName} (mTLS)")
+        }
+        Log.w(TAG, "⚠ DEV-MODE server trust: accepting any server certificate. Add CA trust before shipping.")
         val ctx = SSLContext.getInstance("TLS")
-        ctx.init(null, arrayOf<TrustManager>(TrustAllX509Manager()), SecureRandom())
+        ctx.init(keyManagers, arrayOf<TrustManager>(TrustAllX509Manager()), SecureRandom())
         val s = ctx.socketFactory.createSocket() as SSLSocket
         s.tcpNoDelay = true
         s.soTimeout = READ_TIMEOUT_MS
         s.connect(InetSocketAddress(server.host, server.port), CONNECT_TIMEOUT_MS.toInt())
         s.startHandshake()
         return s
+    }
+
+    /**
+     * Build a KeyManager array from the operator-imported `.p12`. Returns
+     * null when the server has no cert configured or the import failed —
+     * both cases fall through to anonymous TLS (which most TAK servers
+     * will reject, but we leave the option for non-mTLS deployments).
+     */
+    private fun loadClientKeyManagers(): Array<KeyManager>? {
+        val name = server.certificateName ?: return null
+        val pass = server.certificatePassword ?: return null
+        val vault = certVault ?: run {
+            Log.w(TAG, "Cert configured but no vault available — skipping client auth.")
+            return null
+        }
+        val bytes = vault.read(name) ?: run {
+            Log.w(TAG, "Cert '$name' missing from vault — skipping client auth.")
+            return null
+        }
+        return runCatching {
+            val ks = KeyStore.getInstance("PKCS12")
+            ByteArrayInputStream(bytes).use { ks.load(it, pass.toCharArray()) }
+            val kmf = KeyManagerFactory.getInstance(KeyManagerFactory.getDefaultAlgorithm())
+            kmf.init(ks, pass.toCharArray())
+            kmf.keyManagers
+        }.onFailure {
+            Log.w(TAG, "Cert load failed: ${it.javaClass.simpleName}: ${it.message}")
+        }.getOrNull()
     }
 
     private suspend fun readLoop(sock: Socket) {

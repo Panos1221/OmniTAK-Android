@@ -453,10 +453,12 @@ private fun sendChat(
     )
     app.chatStore.markOutgoing(message)
 
-    val sent = app.serverManager.sendCoT(generated.xml)
-    app.chatStore.updateMessageStatus(
-        conversationId = convo.id,
-        messageId = generated.messageId,
-        status = if (sent) ChatStatus.SENT else ChatStatus.FAILED,
-    )
+    scope.launch {
+        val sent = app.serverManager.sendCoT(generated.xml)
+        app.chatStore.updateMessageStatus(
+            conversationId = convo.id,
+            messageId = generated.messageId,
+            status = if (sent) ChatStatus.SENT else ChatStatus.FAILED,
+        )
+    }
 }

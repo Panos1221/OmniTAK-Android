@@ -1,5 +1,9 @@
 package soy.engindearing.omnitak.mobile.ui.screens
 
+import android.net.Uri
+import android.provider.OpenableColumns
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -22,6 +26,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Scaffold
@@ -50,8 +55,10 @@ import soy.engindearing.omnitak.mobile.ui.theme.TacticalBackground
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AddServerScreen(onDone: () -> Unit) {
-    val app = LocalContext.current.applicationContext as OmniTAKApp
+    val context = LocalContext.current
+    val app = context.applicationContext as OmniTAKApp
     val manager = app.serverManager
+    val certVault = app.certVault
 
     var name by remember { mutableStateOf("") }
     var host by remember { mutableStateOf("") }
@@ -60,6 +67,24 @@ fun AddServerScreen(onDone: () -> Unit) {
     // GAP-105 — basic-auth credentials. Either both fields filled or both blank.
     var username by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
+    // GAP-105 — client-cert .p12 + passphrase for mTLS to TAK Server.
+    var certName by remember { mutableStateOf<String?>(null) }
+    var certPassword by remember { mutableStateOf("") }
+    var certError by remember { mutableStateOf<String?>(null) }
+
+    val pickCertLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument(),
+    ) { uri: Uri? ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        val displayName = queryDisplayName(context, uri) ?: uri.lastPathSegment ?: "client.p12"
+        val saved = certVault.import(context, uri, displayName)
+        if (saved != null) {
+            certName = saved
+            certError = null
+        } else {
+            certError = "Couldn't read that file. Pick a .p12 from local storage."
+        }
+    }
 
     val port = portText.toIntOrNull()
     val canSave = name.isNotBlank() && host.isNotBlank() && port != null && port in 1..65535
@@ -145,6 +170,72 @@ fun AddServerScreen(onDone: () -> Unit) {
                 )
             }
 
+            if (useTLS) {
+                Spacer(Modifier.height(4.dp))
+
+                Text(
+                    "Client certificate",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = MaterialTheme.colorScheme.onBackground,
+                )
+                Text(
+                    "Required by TAK Server's default mTLS input on port 8089. " +
+                        "Pick the .p12 your admin gave you, then enter its password.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.65f),
+                )
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            certName ?: "No certificate selected",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = if (certName != null) {
+                                TacticalAccent
+                            } else {
+                                MaterialTheme.colorScheme.onBackground.copy(alpha = 0.5f)
+                            },
+                        )
+                    }
+                    Spacer(Modifier.width(12.dp))
+                    OutlinedButton(
+                        onClick = {
+                            certError = null
+                            // Most file pickers don't expose application/x-pkcs12,
+                            // so accept any file and validate by extension/content.
+                            pickCertLauncher.launch(arrayOf("*/*"))
+                        },
+                    ) {
+                        Text(if (certName == null) "Choose .p12" else "Replace")
+                    }
+                }
+
+                if (certName != null) {
+                    OutlinedTextField(
+                        value = certPassword,
+                        onValueChange = { certPassword = it },
+                        label = { Text("Certificate password") },
+                        placeholder = { Text("atakatak") },
+                        singleLine = true,
+                        visualTransformation = PasswordVisualTransformation(),
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = tacticalOutlineColors(),
+                    )
+                }
+
+                if (certError != null) {
+                    Text(
+                        certError!!,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
+            }
+
             Spacer(Modifier.height(4.dp))
 
             Text(
@@ -193,6 +284,8 @@ fun AddServerScreen(onDone: () -> Unit) {
                             useTLS = useTLS,
                             username = username.takeIf { it.isNotBlank() },
                             password = password.takeIf { it.isNotEmpty() },
+                            certificateName = certName.takeIf { useTLS },
+                            certificatePassword = certPassword.takeIf { useTLS && certName != null && it.isNotEmpty() },
                         ),
                     )
                     onDone()
@@ -207,6 +300,15 @@ fun AddServerScreen(onDone: () -> Unit) {
                 Text("Save Server")
             }
         }
+    }
+}
+
+private fun queryDisplayName(context: android.content.Context, uri: Uri): String? {
+    val cursor = context.contentResolver.query(
+        uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null,
+    ) ?: return null
+    return cursor.use { c ->
+        if (c.moveToFirst()) c.getString(0) else null
     }
 }
 
