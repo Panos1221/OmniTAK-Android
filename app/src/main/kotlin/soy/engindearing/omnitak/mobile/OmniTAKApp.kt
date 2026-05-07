@@ -14,10 +14,12 @@ import soy.engindearing.omnitak.mobile.data.TAKServerStore
 import soy.engindearing.omnitak.mobile.data.UserPrefsStore
 import soy.engindearing.omnitak.mobile.domain.ChatStore
 import soy.engindearing.omnitak.mobile.domain.ContactStore
+import soy.engindearing.omnitak.mobile.domain.ConnectionState
 import soy.engindearing.omnitak.mobile.domain.DataPackageBootstrap
 import soy.engindearing.omnitak.mobile.domain.DrawingStore
 import soy.engindearing.omnitak.mobile.domain.MapCameraStore
 import soy.engindearing.omnitak.mobile.domain.MeshtasticCoTBridge
+import soy.engindearing.omnitak.mobile.domain.TAKConnectionService
 import soy.engindearing.omnitak.mobile.domain.MeshtasticManager
 import soy.engindearing.omnitak.mobile.domain.ServerManager
 
@@ -29,6 +31,22 @@ class OmniTAKApp : Application() {
         // Touches `serverManager` (and through it `userPrefsStore`,
         // `certVault`), so kicking it off here also wakes those lazies.
         DataPackageBootstrap(this, certVault, serverManager).runIfNeeded()
+
+        // Issue #5 — start a foreground service while we're holding a
+        // connection so Doze doesn't kill the read loop within ~10s of
+        // backgrounding. The service is just a privilege carrier; the
+        // socket itself stays in ServerManager.
+        appScope.launch {
+            serverManager.connectionState.collect { state ->
+                when (state) {
+                    is ConnectionState.Connected ->
+                        TAKConnectionService.start(this@OmniTAKApp, state.serverName)
+                    ConnectionState.Disconnected ->
+                        TAKConnectionService.stop(this@OmniTAKApp)
+                    else -> { /* Connecting / Failed: leave service state alone */ }
+                }
+            }
+        }
     }
 
     // Application-scoped singletons. Screens reach these via

@@ -6,6 +6,15 @@
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
 
+    <!-- Issue #5 — foreground service holds the TLS socket warm while the
+         app is backgrounded so Android's Doze / app-standby scheduler
+         doesn't kill the read loop after ~10s. POST_NOTIFICATIONS is
+         opt-in on Android 13+ but we degrade gracefully if denied:
+         the service still runs, the persistent chip just doesn't show. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
     <!-- Bluetooth LE for the Meshtastic BLE transport (Android 12+). -->
     <!-- BLUETOOTH_SCAN with neverForLocation: we don't infer location from
          scan results, so we don't request the legacy ACCESS_FINE_LOCATION
@@ -78,5 +87,10 @@
                 <data android:scheme="omnitak" />
             </intent-filter>
         </activity>
+
+        <service
+            android:name=".domain.TAKConnectionService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
     </application>
 </manifest>
