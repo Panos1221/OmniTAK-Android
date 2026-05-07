@@ -10,9 +10,9 @@ OmniTAK speaks Cursor-on-Target (CoT) over TLS to any TAK Server, supports tacti
 
 [![Latest release](https://img.shields.io/github/v/release/engindearing-projects/OmniTAK-Android?label=latest&sort=semver)](https://github.com/engindearing-projects/OmniTAK-Android/releases/latest)
 
-**Current release: [v0.2.0 (versionCode 16)](https://github.com/engindearing-projects/OmniTAK-Android/releases/tag/v0.2.0)** — auto-PPLI broadcast (server assigns your callsign and federates you to peers automatically), live status-bar `↓`/`↑` counters, headless zip-sideload importer, and cold-launch auto-reconnect. Carries forward v0.1.10's wider device compatibility (Nothing Phone (2a) Plus unblocked) and v0.1.9's chat-send and mTLS fixes.
+**Current release: [v0.2.1 (versionCode 17)](https://github.com/engindearing-projects/OmniTAK-Android/releases/tag/v0.2.1)** — Discord-tester feedback fixes: self-position card now reads real `Lat/Lon`/`DMS`/`MGRS`/`UTM` from Settings (was hardcoded to a Spokane MGRS), map preserves pan/zoom across bottom-nav switches, and the app re-opens its TLS socket on foreground-resume. Carries forward v0.2.0's auto-PPLI, live status counters, headless zip sideload, and cold-launch reconnect.
 
-- **Signed APK (sideload):** [OmniTAK-0.2.0-vc16.apk](https://github.com/engindearing-projects/OmniTAK-Android/releases/download/v0.2.0/OmniTAK-0.2.0-vc16.apk)
+- **Signed APK (sideload):** [OmniTAK-0.2.1-vc17.apk](https://github.com/engindearing-projects/OmniTAK-Android/releases/download/v0.2.1/OmniTAK-0.2.1-vc17.apk)
 - **Always-latest APK:** [releases/latest](https://github.com/engindearing-projects/OmniTAK-Android/releases/latest)
 - **Google Play (closed testing):** ask J for an invite
 
@@ -21,7 +21,7 @@ OmniTAK speaks Cursor-on-Target (CoT) over TLS to any TAK Server, supports tacti
 Verify the APK before installing — signing cert SHA-256 should be `9f3b1fd54ad4eb1dc5b45d91deac4699869617d3d2ac425a1b70337aa0eb13af`:
 
 ```bash
-apksigner verify --print-certs OmniTAK-0.2.0-vc16.apk
+apksigner verify --print-certs OmniTAK-0.2.1-vc17.apk
 ```
 
 ## Features

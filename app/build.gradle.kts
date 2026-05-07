@@ -15,8 +15,8 @@ android {
         applicationId = "soy.engindearing.omnitak.mobile"
         minSdk = 26
         targetSdk = 35
-        versionCode = 16
-        versionName = "0.2.0"
+        versionCode = 17
+        versionName = "0.2.1"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables { useSupportLibrary = true }
@@ -112,6 +112,11 @@ dependencies {
 
     // MapLibre Android (open-source fork of Mapbox) — parallel to iOS
     implementation("org.maplibre.gl:android-sdk:11.8.0")
+
+    // NGA's tested MGRS / UTM converter. Operators rely on grid coords
+    // for navigation; rolling our own would risk silent miscalculation.
+    // Pure-Java, ~250 KB, no Android resources.
+    implementation("mil.nga.mgrs:mgrs-android:2.2.3")
 
     // Nordic Semiconductor BLE library — used by MeshtasticBleClient.
     // Wraps the platform GATT API in a queueable, callback-driven manager

@@ -152,6 +152,18 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
     ) {
         TacticalMap(
             modifier = Modifier.fillMaxSize(),
+            // Restore the operator's last pan/zoom across bottom-nav
+            // switches. Falls back to TacticalMap's own default on first
+            // run / fresh process. Issue #7.
+            initialCenter = run {
+                val lat = app.mapCameraStore.lastTargetLat
+                val lon = app.mapCameraStore.lastTargetLon
+                if (lat != null && lon != null) LatLng(lat, lon) else LatLng(47.6588, -117.4260)
+            },
+            initialZoom = app.mapCameraStore.lastZoom ?: 11.0,
+            onCameraIdle = { target, zoom ->
+                app.mapCameraStore.update(target.latitude, target.longitude, zoom)
+            },
             // GAP-101 / GAP-107 — react to the basemap selection from Settings.
             // WMTS_CUSTOM uses the operator-pasted XYZ tile URL.
             styleJson = styleJsonForProvider(userPrefs.mapProvider, userPrefs.customTileUrl),
@@ -226,17 +238,26 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
             )
         }
 
-        // GAP-030 PPLI self-position card — bottom-right, mirrors iOS layout.
-        // Stub coords; live position plumbing tracked as GAP-030b.
-        // Callsign is sourced from UserPrefs (GAP-100 fix — was hardcoded).
-        // Operators can hide it via long-press → Layers → Callsign card.
+        // PPLI self-position card — bottom-right, mirrors iOS layout.
+        // Position pulls from UserPrefs.selfLat/selfLon (the same values
+        // SelfPositionBroadcaster sends in PPLI), formatted per the
+        // operator's coordinate-format and unit prefs. Issues #3 + #4.
+        // FusedLocationProviderClient hookup remains GAP-030b.
         if (callsignCardVisible) {
             SelfPositionCard(
                 callsign = userPrefs.callsign,
-                coordinateLabel = "11T  MN  37479  1222423",
-                altitudeMetersMSL = 0.0,
-                speedKmh = 0.0,
-                accuracyMeters = 5,
+                coordinateLabel = soy.engindearing.omnitak.mobile.data.CoordFormatter.position(
+                    userPrefs.selfLat, userPrefs.selfLon, userPrefs.coordFormat,
+                ),
+                altitudeLabel = soy.engindearing.omnitak.mobile.data.CoordFormatter.altitude(
+                    0.0, userPrefs.distanceUnit,
+                ),
+                speedLabel = soy.engindearing.omnitak.mobile.data.CoordFormatter.speed(
+                    0.0, userPrefs.distanceUnit,
+                ),
+                accuracyLabel = soy.engindearing.omnitak.mobile.data.CoordFormatter.accuracy(
+                    5, userPrefs.distanceUnit,
+                ),
                 modifier = Modifier
                     .align(Alignment.BottomEnd)
                     .padding(end = 12.dp, bottom = 96.dp),

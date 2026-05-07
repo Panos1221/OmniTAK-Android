@@ -93,6 +93,21 @@ class ServerManager(
         conn.connect()
     }
 
+    /**
+     * Re-open a connection if there's an enabled active server but no
+     * live socket. Called from MainActivity's ON_RESUME hook so that
+     * coming back from the background (where Android may have killed
+     * the read loop after Doze / app-standby) recovers without the
+     * operator needing to tap play. Issue #6.
+     */
+    fun reconnectIfNeeded() {
+        val state = _connectionState.value
+        if (state is ConnectionState.Connected || state is ConnectionState.Connecting) return
+        val target = _activeServer.value ?: return
+        if (!target.enabled) return
+        connect(target)
+    }
+
     /** Send a CoT XML payload on the active connection. */
     suspend fun sendCoT(xml: String): Boolean {
         val ok = currentConnection?.send(xml) ?: false

@@ -63,6 +63,7 @@ fun TacticalMap(
     panTarget: LatLng? = null,
     panTargetTick: Int = 0,
     followMeActive: Boolean = false,
+    onCameraIdle: ((LatLng, Double) -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -76,6 +77,7 @@ fun TacticalMap(
     val currentDrawings by rememberUpdatedState(drawings)
     val currentGridCenter by rememberUpdatedState(gridCenter)
     val currentAircraft by rememberUpdatedState(aircraft)
+    val currentCameraIdle by rememberUpdatedState(onCameraIdle)
 
     val mapView = remember {
         MapLibre.getInstance(context)
@@ -100,6 +102,14 @@ fun TacticalMap(
                     isCompassEnabled = true
                     isLogoEnabled = false
                     isAttributionEnabled = true
+                }
+                // Persist camera state on idle so bottom-nav switches
+                // (Map → Settings → Map etc.) don't reset the operator's
+                // pan/zoom — see [MapCameraStore].
+                map.addOnCameraIdleListener {
+                    val pos = map.cameraPosition
+                    val target = pos.target ?: return@addOnCameraIdleListener
+                    currentCameraIdle?.invoke(target, pos.zoom)
                 }
                 map.addOnMapLongClickListener { latLng ->
                     val screen = map.projection.toScreenLocation(latLng)

@@ -1,0 +1,69 @@
+package soy.engindearing.omnitak.mobile.data
+
+import mil.nga.grid.features.Point
+import mil.nga.mgrs.MGRS
+import mil.nga.mgrs.utm.UTM
+import kotlin.math.abs
+
+/**
+ * Format a (lat, lon) pair to the operator's chosen [CoordFormat] and
+ * format altitude/speed to their chosen [DistanceUnit]. Used by
+ * [SelfPositionCard] and any other widget that surfaces a coordinate
+ * to the operator. Issue #3 + #4 — settings pickers were no-ops because
+ * nothing read the prefs.
+ *
+ * MGRS / UTM round-trip the NGA `mil.nga.mgrs` library so grid coords
+ * stay correct under zone boundaries, polar overrides, and the special
+ * cases for Norway / Svalbard.
+ */
+object CoordFormatter {
+
+    fun position(lat: Double, lon: Double, format: CoordFormat): String = when (format) {
+        CoordFormat.LATLON_DECIMAL -> latLonDecimal(lat, lon)
+        CoordFormat.LATLON_DMS -> latLonDms(lat, lon)
+        CoordFormat.MGRS -> runCatching { MGRS.from(Point.point(lon, lat)).coordinate() }
+            .getOrElse { latLonDecimal(lat, lon) }
+        CoordFormat.UTM -> runCatching {
+            val u = UTM.from(Point.point(lon, lat))
+            "%dZ %.0fE %.0fN".format(u.zone, u.easting, u.northing)
+        }.getOrElse { latLonDecimal(lat, lon) }
+    }
+
+    fun altitude(meters: Double, unit: DistanceUnit): String = when (unit) {
+        DistanceUnit.METRIC -> "%.1f m MSL".format(meters)
+        DistanceUnit.IMPERIAL -> "%.0f ft MSL".format(meters * 3.28084)
+    }
+
+    fun speed(kmh: Double, unit: DistanceUnit): String = when (unit) {
+        DistanceUnit.METRIC -> "%.1f km/h".format(kmh)
+        DistanceUnit.IMPERIAL -> "%.1f mph".format(kmh * 0.621371)
+    }
+
+    fun accuracy(meters: Int, unit: DistanceUnit): String = when (unit) {
+        DistanceUnit.METRIC -> "+/- ${meters}m"
+        DistanceUnit.IMPERIAL -> "+/- ${(meters * 3.28084).toInt()}ft"
+    }
+
+    private fun latLonDecimal(lat: Double, lon: Double): String =
+        "%.5f, %.5f".format(lat, lon)
+
+    private fun latLonDms(lat: Double, lon: Double): String {
+        val latDms = toDms(abs(lat))
+        val lonDms = toDms(abs(lon))
+        val latHemi = if (lat >= 0) "N" else "S"
+        val lonHemi = if (lon >= 0) "E" else "W"
+        return "${latDms.format()} $latHemi  ${lonDms.format()} $lonHemi"
+    }
+
+    private data class Dms(val deg: Int, val min: Int, val sec: Double) {
+        fun format(): String = "%d° %02d′ %05.2f″".format(deg, min, sec)
+    }
+
+    private fun toDms(decimalDeg: Double): Dms {
+        val deg = decimalDeg.toInt()
+        val minFull = (decimalDeg - deg) * 60.0
+        val min = minFull.toInt()
+        val sec = (minFull - min) * 60.0
+        return Dms(deg, min, sec)
+    }
+}

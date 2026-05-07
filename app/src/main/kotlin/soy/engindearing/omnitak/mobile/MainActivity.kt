@@ -8,6 +8,8 @@ import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -37,6 +39,20 @@ class MainActivity : ComponentActivity() {
         }
 
         handleImportIntent(intent)
+
+        // Re-open the TLS socket on every foreground resume if Android
+        // killed the read loop while we were backgrounded (Doze, app
+        // standby, network swap). Cold-launch reconnect lives in
+        // ServerManager.hydrate; this hook handles foreground-resume.
+        // Issue #6.
+        val app = applicationContext as OmniTAKApp
+        lifecycle.addObserver(
+            LifecycleEventObserver { _, event ->
+                if (event == Lifecycle.Event.ON_RESUME) {
+                    app.serverManager.reconnectIfNeeded()
+                }
+            },
+        )
     }
 
     override fun onNewIntent(intent: Intent) {

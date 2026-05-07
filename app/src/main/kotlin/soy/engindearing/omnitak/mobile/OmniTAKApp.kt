@@ -16,6 +16,7 @@ import soy.engindearing.omnitak.mobile.domain.ChatStore
 import soy.engindearing.omnitak.mobile.domain.ContactStore
 import soy.engindearing.omnitak.mobile.domain.DataPackageBootstrap
 import soy.engindearing.omnitak.mobile.domain.DrawingStore
+import soy.engindearing.omnitak.mobile.domain.MapCameraStore
 import soy.engindearing.omnitak.mobile.domain.MeshtasticCoTBridge
 import soy.engindearing.omnitak.mobile.domain.MeshtasticManager
 import soy.engindearing.omnitak.mobile.domain.ServerManager
@@ -35,6 +36,7 @@ class OmniTAKApp : Application() {
     private val appScope = CoroutineScope(Dispatchers.Default + SupervisorJob())
     val contactStore: ContactStore by lazy { ContactStore() }
     val drawingStore: DrawingStore by lazy { DrawingStore() }
+    val mapCameraStore: MapCameraStore by lazy { MapCameraStore() }
     val chatStore: ChatStore by lazy {
         ChatStore().also { store ->
             // GAP-122 — Mesh primary channel always visible so users can

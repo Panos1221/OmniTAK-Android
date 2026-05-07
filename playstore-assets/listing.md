@@ -107,10 +107,10 @@ in SECURITY.md in the repo.
 
 ## What's new (≤500 chars) — current release
 
-For v0.2.0 (versionCode 16):
+For v0.2.1 (versionCode 16):
 
 ```
-What's new in 0.2.0:
+What's new in 0.2.1:
 • Wider device compatibility — fixes "does not work on your device" on Nothing Phone (2a) Plus and similar by marking optional hardware (BLE, GPS, classic Bluetooth) as not-required
 • Fixes chat broadcast — was silently failing due to a main-thread network call
 • mTLS client-cert (.p12) import for TAK Server 5.7 on port 8089
@@ -218,9 +218,9 @@ Source code: https://github.com/engindearing-projects/OmniTAK-Android
 
 ---
 
-## Production release notes (for the v0.2.0 AAB upload)
+## Production release notes (for the v0.2.1 AAB upload)
 
-Version: `0.2.0` · Version code: `16`
+Version: `0.2.1` · Version code: `17`
 
 ```
 OmniTAK Mobile — first production-track release.
@@ -261,13 +261,13 @@ Apache 2.0 licensed. Source: https://github.com/engindearing-projects/OmniTAK-An
 - [x] `PRIVACY.md` committed to repo
 - [x] Signed upload keystore (`omnitak-upload.jks`, props in `keystore.properties`)
 - [x] AAB build pipeline: `playstore-assets/build-release.sh` (auto-bumps vc)
-- [x] Current AAB staged: `playstore-assets/OmniTAK-0.2.0-vc16.aab`
+- [x] Current AAB staged: `playstore-assets/OmniTAK-0.2.1-vc17.aab`
 - [x] Store icon refreshed to match iOS: `playstore-assets/icon-512.png`
 - [x] Feature graphic refreshed to match iOS icon: `playstore-assets/feature-graphic.png`
 - [x] Screenshots staged: `playstore-assets/screenshots/01-07-*.png` (7 images)
 
 **Play Console — manual upload (PENDING):**
-- [ ] Upload `OmniTAK-0.2.0-vc16.aab` to Closed testing → Create new release
+- [ ] Upload `OmniTAK-0.2.1-vc17.aab` to Closed testing → Create new release
 - [ ] Paste "What's new" notes from this file into release notes (wrap in `<en-US>...</en-US>`)
 - [ ] Upload `icon-512.png` → Main store listing → App icon
 - [ ] Upload `feature-graphic.png` → Main store listing → Feature graphic
