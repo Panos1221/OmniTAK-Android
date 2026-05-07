@@ -9,6 +9,7 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import soy.engindearing.omnitak.mobile.data.AdminResponse
 import soy.engindearing.omnitak.mobile.data.CertVault
+import soy.engindearing.omnitak.mobile.data.LocationProvider
 import soy.engindearing.omnitak.mobile.data.MeshDeviceConfigStore
 import soy.engindearing.omnitak.mobile.data.TAKServerStore
 import soy.engindearing.omnitak.mobile.data.UserPrefsStore
@@ -119,8 +120,9 @@ class OmniTAKApp : Application() {
     val meshDeviceConfigStore: MeshDeviceConfigStore by lazy { MeshDeviceConfigStore(this) }
     val userPrefsStore: UserPrefsStore by lazy { UserPrefsStore(this) }
     val certVault: CertVault by lazy { CertVault(this) }
+    val locationProvider: LocationProvider by lazy { LocationProvider(this) }
     val serverManager: ServerManager by lazy {
-        ServerManager(TAKServerStore(this), contactStore, chatStore, certVault, userPrefsStore)
+        ServerManager(TAKServerStore(this), contactStore, chatStore, certVault, userPrefsStore, locationProvider)
     }
 
     /** Bridges Meshtastic node updates into the active server's CoT

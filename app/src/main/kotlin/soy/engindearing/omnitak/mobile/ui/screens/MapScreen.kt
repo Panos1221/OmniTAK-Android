@@ -114,6 +114,12 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
     }
 
     val locationGranted by rememberLocationPermission()
+    // GAP-030b — start the FusedLocationProviderClient as soon as we have
+    // permission. Idempotent, safe to re-invoke on every recomposition.
+    val selfFix by app.locationProvider.fix.collectAsState()
+    LaunchedEffect(locationGranted) {
+        if (locationGranted) app.locationProvider.start()
+    }
     var radialAnchor by remember { mutableStateOf<Offset?>(null) }
     var radialLatLng by remember { mutableStateOf<LatLng?>(null) }
     var markerSheetLatLng by remember { mutableStateOf<LatLng?>(null) }
@@ -226,8 +232,7 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
                 isConnected = connState is ConnectionState.Connected,
                 messagesReceived = msgReceived,
                 messagesSent = msgSent,
-                // GAP-023: stub until FusedLocationProviderClient is wired (GAP-030b)
-                gpsAccuracyMeters = 5,
+                gpsAccuracyMeters = selfFix?.accuracyM?.toInt() ?: 0,
                 timeLabel = nowLabel,
                 // GAP-102 — wire the previously dead status-bar taps to
                 // their natural destinations. Server icon goes to the
@@ -239,24 +244,28 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
         }
 
         // PPLI self-position card — bottom-right, mirrors iOS layout.
-        // Position pulls from UserPrefs.selfLat/selfLon (the same values
-        // SelfPositionBroadcaster sends in PPLI), formatted per the
-        // operator's coordinate-format and unit prefs. Issues #3 + #4.
-        // FusedLocationProviderClient hookup remains GAP-030b.
+        // GAP-030b — coordinates pull from FusedLocationProviderClient
+        // (LocationProvider). Until a fix arrives we show "Acquiring
+        // fix…" so users in Germany don't see San Francisco (issue #10).
         if (callsignCardVisible) {
+            val fix = selfFix
             SelfPositionCard(
                 callsign = userPrefs.callsign,
-                coordinateLabel = soy.engindearing.omnitak.mobile.data.CoordFormatter.position(
-                    userPrefs.selfLat, userPrefs.selfLon, userPrefs.coordFormat,
-                ),
+                coordinateLabel = if (fix != null) {
+                    soy.engindearing.omnitak.mobile.data.CoordFormatter.position(
+                        fix.lat, fix.lon, userPrefs.coordFormat,
+                    )
+                } else {
+                    "Acquiring fix…"
+                },
                 altitudeLabel = soy.engindearing.omnitak.mobile.data.CoordFormatter.altitude(
-                    0.0, userPrefs.distanceUnit,
+                    fix?.altitudeM ?: 0.0, userPrefs.distanceUnit,
                 ),
                 speedLabel = soy.engindearing.omnitak.mobile.data.CoordFormatter.speed(
-                    0.0, userPrefs.distanceUnit,
+                    fix?.speedKmh ?: 0.0, userPrefs.distanceUnit,
                 ),
                 accuracyLabel = soy.engindearing.omnitak.mobile.data.CoordFormatter.accuracy(
-                    5, userPrefs.distanceUnit,
+                    fix?.accuracyM?.toInt() ?: 0, userPrefs.distanceUnit,
                 ),
                 modifier = Modifier
                     .align(Alignment.BottomEnd)

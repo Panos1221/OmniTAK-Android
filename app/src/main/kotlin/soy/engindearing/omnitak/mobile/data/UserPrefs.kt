@@ -37,12 +37,12 @@ data class UserPrefs(
     // that it never changes so TAK servers see a stable contact across
     // restarts. iOS uses the same convention with an `IOS-` prefix.
     val selfUid: String = "",
-    // Self-position used for PPLI broadcast. Defaults to San Francisco
-    // because the AVD's mock GPS lives there by default and we don't
-    // want a "0,0 off the coast of Africa" first impression. Replaced
-    // by FusedLocationProviderClient when GAP-030b lands.
-    val selfLat: Double = 37.7749,
-    val selfLon: Double = -122.4194,
+    // Self-position used for PPLI broadcast. NaN sentinels mean "no fix
+    // yet" — GAP-030b wires real GPS via FusedLocationProviderClient
+    // (LocationProvider) and the broadcaster suppresses PPLI until a
+    // real fix arrives, fixing issue #10 (HUD showing San Francisco).
+    val selfLat: Double = Double.NaN,
+    val selfLon: Double = Double.NaN,
     val distanceUnit: DistanceUnit = DistanceUnit.METRIC,
     val coordFormat: CoordFormat = CoordFormat.LATLON_DECIMAL,
     val mapProvider: MapProvider = MapProvider.OSM_RASTER,
@@ -123,8 +123,8 @@ class UserPrefsStore(private val context: Context) {
         callsign = p[KEY_CALLSIGN] ?: "OMNI-1",
         team = p[KEY_TEAM] ?: "CYAN",
         selfUid = p[KEY_SELF_UID] ?: "",
-        selfLat = p[KEY_SELF_LAT]?.toDoubleOrNull() ?: 37.7749,
-        selfLon = p[KEY_SELF_LON]?.toDoubleOrNull() ?: -122.4194,
+        selfLat = p[KEY_SELF_LAT]?.toDoubleOrNull() ?: Double.NaN,
+        selfLon = p[KEY_SELF_LON]?.toDoubleOrNull() ?: Double.NaN,
         distanceUnit = p[KEY_DIST]?.let { runCatching { DistanceUnit.valueOf(it) }.getOrNull() }
             ?: DistanceUnit.METRIC,
         coordFormat = p[KEY_COORD]?.let { runCatching { CoordFormat.valueOf(it) }.getOrNull() }

@@ -4,9 +4,12 @@ import android.util.Log
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import soy.engindearing.omnitak.mobile.data.SelfFix
 import soy.engindearing.omnitak.mobile.data.UserPrefs
 import soy.engindearing.omnitak.mobile.data.UserPrefsStore
 import java.text.SimpleDateFormat
@@ -29,13 +32,32 @@ import java.util.UUID
  * server treats this device as a stable contact across restarts. The
  * `ANDROID-` prefix triggers the correct ATAK icon set.
  */
-class SelfPositionBroadcaster(
+class SelfPositionBroadcaster internal constructor(
     private val scope: CoroutineScope,
-    private val prefsStore: UserPrefsStore,
+    private val prefsFlow: Flow<UserPrefs>,
+    private val updatePrefs: suspend ((UserPrefs) -> UserPrefs) -> Unit,
     private val sendCoT: suspend (String) -> Boolean,
+    private val locationFix: StateFlow<SelfFix?>,
     private val intervalMs: Long = DEFAULT_INTERVAL_MS,
     private val staleSeconds: Long = DEFAULT_STALE_SECONDS,
 ) {
+    constructor(
+        scope: CoroutineScope,
+        prefsStore: UserPrefsStore,
+        sendCoT: suspend (String) -> Boolean,
+        locationFix: StateFlow<SelfFix?>,
+        intervalMs: Long = DEFAULT_INTERVAL_MS,
+        staleSeconds: Long = DEFAULT_STALE_SECONDS,
+    ) : this(
+        scope = scope,
+        prefsFlow = prefsStore.prefs,
+        updatePrefs = { mutator -> prefsStore.update(mutator) },
+        sendCoT = sendCoT,
+        locationFix = locationFix,
+        intervalMs = intervalMs,
+        staleSeconds = staleSeconds,
+    )
+
     private var job: Job? = null
 
     fun start() {
@@ -64,24 +86,51 @@ class SelfPositionBroadcaster(
         val current = currentPrefs()
         if (current.selfUid.isNotBlank()) return current
         val generated = "ANDROID-${UUID.randomUUID()}"
-        prefsStore.update { it.copy(selfUid = generated) }
+        updatePrefs { it.copy(selfUid = generated) }
         return current.copy(selfUid = generated)
     }
 
-    private suspend fun currentPrefs(): UserPrefs = prefsStore.prefs.first()
+    private suspend fun currentPrefs(): UserPrefs = prefsFlow.first()
 
-    private suspend fun broadcastOnce(prefs: UserPrefs) {
+    internal suspend fun broadcastOnce(prefs: UserPrefs) {
+        val fix = locationFix.value
+        val lat: Double
+        val lon: Double
+        val hae: Double
+        val speedKmh: Double
+        val ce: Double
+        if (fix != null) {
+            lat = fix.lat
+            lon = fix.lon
+            hae = fix.altitudeM
+            speedKmh = fix.speedKmh
+            ce = if (fix.accuracyM.isNaN()) 9999999.0 else fix.accuracyM.toDouble()
+        } else if (prefs.selfLat.isNaN() || prefs.selfLon.isNaN()) {
+            // Issue #10 — never broadcast PPLI without a real fix; the
+            // San Francisco fallback was misleading operators in Germany.
+            Log.d(TAG, "PPLI suppressed — no GPS fix yet")
+            return
+        } else {
+            lat = prefs.selfLat
+            lon = prefs.selfLon
+            hae = 0.0
+            speedKmh = 0.0
+            ce = 9999999.0
+        }
         val xml = buildSelfCoT(
             uid = prefs.selfUid.ifBlank { "ANDROID-fallback" },
             callsign = prefs.callsign,
             team = prefs.team,
-            lat = prefs.selfLat,
-            lon = prefs.selfLon,
+            lat = lat,
+            lon = lon,
+            hae = hae,
+            ce = ce,
+            speedKmh = speedKmh,
             staleSeconds = staleSeconds,
         )
         val ok = sendCoT(xml)
         if (ok) {
-            Log.d(TAG, "PPLI sent — ${prefs.callsign} @ ${prefs.selfLat},${prefs.selfLon}")
+            Log.d(TAG, "PPLI sent — ${prefs.callsign} @ $lat,$lon")
         } else {
             Log.w(TAG, "PPLI send failed (no socket?)")
         }
@@ -104,12 +153,17 @@ class SelfPositionBroadcaster(
             lat: Double,
             lon: Double,
             staleSeconds: Long,
+            hae: Double = 0.0,
+            ce: Double = 9999999.0,
+            speedKmh: Double = 0.0,
         ): String {
             val now = System.currentTimeMillis()
             val time = isoUtc(now)
             val stale = isoUtc(now + staleSeconds * 1000L)
             val safeCallsign = escapeXml(callsign)
             val safeTeam = escapeXml(team.replaceFirstChar { it.uppercase() })
+            // CoT track speed is m/s.
+            val speedMs = speedKmh / 3.6
             return buildString {
                 append("<?xml version=\"1.0\" encoding=\"UTF-8\"?>")
                 append("<event version=\"2.0\"")
@@ -121,13 +175,16 @@ class SelfPositionBroadcaster(
                 append(" how=\"m-g\">")
                 append("<point lat=\"").append(lat).append('"')
                 append(" lon=\"").append(lon).append('"')
-                append(" hae=\"0.0\" ce=\"9999999.0\" le=\"9999999.0\"/>")
+                append(" hae=\"").append(formatDouble(hae)).append('"')
+                append(" ce=\"").append(formatDouble(ce)).append('"')
+                append(" le=\"9999999.0\"/>")
                 append("<detail>")
                 append("<contact callsign=\"").append(safeCallsign).append("\" endpoint=\"*:-1:stcp\"/>")
                 append("<__group name=\"").append(safeTeam).append("\" role=\"Team Member\"/>")
                 append("<status battery=\"100\"/>")
                 append("<takv device=\"AVD\" platform=\"OmniTAK-Android\" os=\"Android\" version=\"0.1\"/>")
-                append("<track speed=\"0.00\" course=\"0.00\"/>")
+                append("<track speed=\"").append(String.format(Locale.US, "%.2f", speedMs))
+                    .append("\" course=\"0.00\"/>")
                 append("<precisionlocation altsrc=\"GPS\" geopointsrc=\"GPS\"/>")
                 append("<uid Droid=\"").append(safeCallsign).append("\"/>")
                 append("<usericon iconsetpath=\"COT_MAPPING_2525B/a-f/a-f-G-U-C\"/>")
@@ -135,6 +192,9 @@ class SelfPositionBroadcaster(
                 append("</event>")
             }
         }
+
+        private fun formatDouble(v: Double): String =
+            if (v == v.toLong().toDouble()) "${v.toLong()}.0" else v.toString()
 
         private val ISO_FMT = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", Locale.US).apply {
             timeZone = TimeZone.getTimeZone("UTC")

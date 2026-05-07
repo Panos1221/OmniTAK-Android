@@ -11,6 +11,7 @@ import kotlinx.coroutines.launch
 import soy.engindearing.omnitak.mobile.data.CertVault
 import soy.engindearing.omnitak.mobile.data.ChatXml
 import soy.engindearing.omnitak.mobile.data.CoTParser
+import soy.engindearing.omnitak.mobile.data.LocationProvider
 import soy.engindearing.omnitak.mobile.data.TAKConnection
 import soy.engindearing.omnitak.mobile.data.TAKServer
 import soy.engindearing.omnitak.mobile.data.TAKServerStore
@@ -32,6 +33,7 @@ class ServerManager(
     private val chatStore: ChatStore? = null,
     private val certVault: CertVault? = null,
     private val userPrefsStore: UserPrefsStore? = null,
+    private val locationProvider: LocationProvider? = null,
 ) {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
@@ -129,10 +131,16 @@ class ServerManager(
 
     private fun startPliBroadcast() {
         if (pliBroadcaster != null || userPrefsStore == null) return
+        // GAP-030b — thread the live FusedLocationProviderClient fix
+        // through so PPLI carries real GPS instead of a SF default.
+        // Empty StateFlow when no provider is wired (older callers/tests).
+        val fixFlow = locationProvider?.fix
+            ?: kotlinx.coroutines.flow.MutableStateFlow(null)
         pliBroadcaster = SelfPositionBroadcaster(
             scope = scope,
             prefsStore = userPrefsStore,
             sendCoT = { xml -> sendCoT(xml) },
+            locationFix = fixFlow,
         ).also { it.start() }
     }
 

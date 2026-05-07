@@ -15,8 +15,8 @@ android {
         applicationId = "soy.engindearing.omnitak.mobile"
         minSdk = 26
         targetSdk = 35
-        versionCode = 18
-        versionName = "0.2.2"
+        versionCode = 19
+        versionName = "0.2.3"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables { useSupportLibrary = true }
@@ -87,6 +87,12 @@ android {
             )
         }
     }
+
+    // Let JVM unit tests call android.util.Log without "Method not mocked"
+    // RuntimeExceptions. Default values mean Log.* returns 0 / "" / false.
+    testOptions {
+        unitTests.isReturnDefaultValues = true
+    }
 }
 
 dependencies {
@@ -123,6 +129,9 @@ dependencies {
     // with built-in MTU negotiation, bond handling, and reconnection.
     implementation("no.nordicsemi.android:ble:2.8.0")
     implementation("no.nordicsemi.android:ble-ktx:2.8.0")
+
+    // GAP-030b — FusedLocationProviderClient for real GPS fixes.
+    implementation("com.google.android.gms:play-services-location:21.3.0")
 
     debugImplementation("androidx.compose.ui:ui-tooling")
     debugImplementation("androidx.compose.ui:ui-test-manifest")
