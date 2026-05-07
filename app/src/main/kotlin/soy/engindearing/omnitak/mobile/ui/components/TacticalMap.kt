@@ -89,7 +89,7 @@ fun TacticalMap(
                     .zoom(initialZoom)
                     .build()
                 map.setStyle(Style.Builder().fromJson(styleJson)) { style ->
-                    ContactLayer.update(map, currentContacts)
+                    ContactLayer.update(map, context, currentContacts)
                     MeasurementLayer.update(map, currentMeasurementPoints)
                     DrawingLayer.update(map, currentDrawings)
                     currentGridCenter?.let { GridLayer.update(map, it) }
@@ -114,6 +114,20 @@ fun TacticalMap(
                 map.addOnMapLongClickListener { latLng ->
                     val screen = map.projection.toScreenLocation(latLng)
                     currentLongPress?.invoke(latLng, Offset(screen.x, screen.y))
+                    true
+                }
+                // Annotation-API markers (created by ContactLayer)
+                // would otherwise pop their default InfoWindow on tap
+                // and swallow the gesture before our contact-tap
+                // hit-test runs. Intercept here, look up the matching
+                // CoTEvent by marker title (= UID or callsign), and
+                // dispatch the same callback the geographic tap uses.
+                map.setOnMarkerClickListener { marker ->
+                    val cb = currentContactTap ?: return@setOnMarkerClickListener true
+                    val match = currentContacts.firstOrNull { c ->
+                        marker.title == (c.callsign ?: c.uid)
+                    }
+                    if (match != null) cb(match)
                     true
                 }
                 map.addOnMapClickListener { latLng ->
@@ -203,7 +217,7 @@ fun TacticalMap(
     // caller's collection reference changes.
     DisposableEffect(mapView, contacts) {
         mapView.getMapAsync { map ->
-            if (map.style != null) ContactLayer.update(map, contacts)
+            if (map.style != null) ContactLayer.update(map, context, contacts)
         }
         onDispose { }
     }
@@ -218,7 +232,7 @@ fun TacticalMap(
             // getMapAsync block during MapView construction (line ~88).
             if (map.style != null && map.style?.json != styleJson) {
                 map.setStyle(Style.Builder().fromJson(styleJson)) { _ ->
-                    ContactLayer.update(map, currentContacts)
+                    ContactLayer.update(map, context, currentContacts)
                     MeasurementLayer.update(map, currentMeasurementPoints)
                     DrawingLayer.update(map, currentDrawings)
                     currentGridCenter?.let { GridLayer.update(map, it) }
