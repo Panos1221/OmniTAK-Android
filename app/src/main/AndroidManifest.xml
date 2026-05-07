@@ -12,7 +12,7 @@
          opt-in on Android 13+ but we degrade gracefully if denied:
          the service still runs, the persistent chip just doesn't show. -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <!-- Bluetooth LE for the Meshtastic BLE transport (Android 12+). -->
@@ -91,6 +91,6 @@
         <service
             android:name=".domain.TAKConnectionService"
             android:exported="false"
-            android:foregroundServiceType="connectedDevice" />
+            android:foregroundServiceType="dataSync" />
     </application>
 </manifest>
