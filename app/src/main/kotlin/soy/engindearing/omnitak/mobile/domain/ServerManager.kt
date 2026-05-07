@@ -6,6 +6,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.launch
 import soy.engindearing.omnitak.mobile.data.CertVault
 import soy.engindearing.omnitak.mobile.data.ChatXml
@@ -132,18 +133,24 @@ class ServerManager(
             if (initial.isEmpty() && loaded.isNotEmpty()) {
                 initial = loaded
                 val activeId = peekActiveId()
-                _activeServer.value = loaded.firstOrNull { it.id == activeId }
+                val active = loaded.firstOrNull { it.id == activeId }
                     ?: loaded.firstOrNull { it.enabled }
                     ?: loaded.firstOrNull()
+                _activeServer.value = active
+                // Resume the previously-active enabled server on cold
+                // launch. Without this the operator has to hit play after
+                // every app restart even though the server entry is still
+                // saved. The `currentConnection == null` guard means
+                // DataPackageBootstrap can race ahead and we won't
+                // double-connect on a fresh-import launch.
+                if (active != null && active.enabled && currentConnection == null) {
+                    connect(active)
+                }
             }
         }
     }
 
-    private suspend fun peekActiveId(): String? {
-        var out: String? = null
-        store.activeServerId.collect { out = it; return@collect }
-        return out
-    }
+    private suspend fun peekActiveId(): String? = store.activeServerId.firstOrNull()
 
     fun addServer(server: TAKServer): TAKServer {
         val existing = _servers.value.firstOrNull { it.matchesEndpoint(server) }
