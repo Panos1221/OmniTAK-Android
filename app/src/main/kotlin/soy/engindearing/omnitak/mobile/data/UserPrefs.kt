@@ -32,6 +32,17 @@ enum class MapProvider { OSM_RASTER, SATELLITE_HINT, TOPO_HINT, WMTS_CUSTOM }
 data class UserPrefs(
     val callsign: String = "OMNI-1",
     val team: String = "CYAN",
+    // Persistent EUD identifier broadcast in every PPLI CoT event. Empty
+    // until the first connection generates one (`ANDROID-<uuid>`); after
+    // that it never changes so TAK servers see a stable contact across
+    // restarts. iOS uses the same convention with an `IOS-` prefix.
+    val selfUid: String = "",
+    // Self-position used for PPLI broadcast. Defaults to San Francisco
+    // because the AVD's mock GPS lives there by default and we don't
+    // want a "0,0 off the coast of Africa" first impression. Replaced
+    // by FusedLocationProviderClient when GAP-030b lands.
+    val selfLat: Double = 37.7749,
+    val selfLon: Double = -122.4194,
     val distanceUnit: DistanceUnit = DistanceUnit.METRIC,
     val coordFormat: CoordFormat = CoordFormat.LATLON_DECIMAL,
     val mapProvider: MapProvider = MapProvider.OSM_RASTER,
@@ -55,6 +66,9 @@ data class UserPrefs(
 class UserPrefsStore(private val context: Context) {
     private val KEY_CALLSIGN = stringPreferencesKey("callsign")
     private val KEY_TEAM = stringPreferencesKey("team")
+    private val KEY_SELF_UID = stringPreferencesKey("self_uid")
+    private val KEY_SELF_LAT = stringPreferencesKey("self_lat")
+    private val KEY_SELF_LON = stringPreferencesKey("self_lon")
     private val KEY_DIST = stringPreferencesKey("distance_unit")
     private val KEY_COORD = stringPreferencesKey("coord_format")
     private val KEY_MAP = stringPreferencesKey("map_provider")
@@ -76,6 +90,9 @@ class UserPrefsStore(private val context: Context) {
             val next = block(readFrom(p))
             p[KEY_CALLSIGN] = next.callsign
             p[KEY_TEAM] = next.team
+            p[KEY_SELF_UID] = next.selfUid
+            p[KEY_SELF_LAT] = next.selfLat.toString()
+            p[KEY_SELF_LON] = next.selfLon.toString()
             p[KEY_DIST] = next.distanceUnit.name
             p[KEY_COORD] = next.coordFormat.name
             p[KEY_MAP] = next.mapProvider.name
@@ -105,6 +122,9 @@ class UserPrefsStore(private val context: Context) {
     private fun readFrom(p: androidx.datastore.preferences.core.Preferences): UserPrefs = UserPrefs(
         callsign = p[KEY_CALLSIGN] ?: "OMNI-1",
         team = p[KEY_TEAM] ?: "CYAN",
+        selfUid = p[KEY_SELF_UID] ?: "",
+        selfLat = p[KEY_SELF_LAT]?.toDoubleOrNull() ?: 37.7749,
+        selfLon = p[KEY_SELF_LON]?.toDoubleOrNull() ?: -122.4194,
         distanceUnit = p[KEY_DIST]?.let { runCatching { DistanceUnit.valueOf(it) }.getOrNull() }
             ?: DistanceUnit.METRIC,
         coordFormat = p[KEY_COORD]?.let { runCatching { CoordFormat.valueOf(it) }.getOrNull() }

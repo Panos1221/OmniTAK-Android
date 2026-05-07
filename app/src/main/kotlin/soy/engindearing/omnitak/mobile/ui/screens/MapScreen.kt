@@ -76,6 +76,8 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
     val app = LocalContext.current.applicationContext as OmniTAKApp
     val active by app.serverManager.activeServer.collectAsState()
     val connState by app.serverManager.connectionState.collectAsState()
+    val msgReceived by app.serverManager.messagesReceived.collectAsState()
+    val msgSent by app.serverManager.messagesSent.collectAsState()
     val contacts by app.contactStore.contacts.collectAsState()
     // Layers toggle: mesh-origin contacts are persisted because the
     // operator's last choice should survive a process restart. Default
@@ -210,8 +212,8 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
             ATAKStatusBar(
                 serverName = headerLabel,
                 isConnected = connState is ConnectionState.Connected,
-                messagesReceived = 0,
-                messagesSent = 0,
+                messagesReceived = msgReceived,
+                messagesSent = msgSent,
                 // GAP-023: stub until FusedLocationProviderClient is wired (GAP-030b)
                 gpsAccuracyMeters = 5,
                 timeLabel = nowLabel,

@@ -107,7 +107,7 @@ in SECURITY.md in the repo.
 
 ## What's new (≤500 chars) — current release
 
-For v0.1.10 (versionCode 14):
+For v0.1.10 (versionCode 15):
 
 ```
 What's new in 0.1.10:
@@ -220,7 +220,7 @@ Source code: https://github.com/engindearing-projects/OmniTAK-Android
 
 ## Production release notes (for the v0.1.10 AAB upload)
 
-Version: `0.1.10` · Version code: `14`
+Version: `0.1.10` · Version code: `15`
 
 ```
 OmniTAK Mobile — first production-track release.
@@ -261,13 +261,13 @@ Apache 2.0 licensed. Source: https://github.com/engindearing-projects/OmniTAK-An
 - [x] `PRIVACY.md` committed to repo
 - [x] Signed upload keystore (`omnitak-upload.jks`, props in `keystore.properties`)
 - [x] AAB build pipeline: `playstore-assets/build-release.sh` (auto-bumps vc)
-- [x] Current AAB staged: `playstore-assets/OmniTAK-0.1.10-vc14.aab`
+- [x] Current AAB staged: `playstore-assets/OmniTAK-0.1.10-vc15.aab`
 - [x] Store icon refreshed to match iOS: `playstore-assets/icon-512.png`
 - [x] Feature graphic refreshed to match iOS icon: `playstore-assets/feature-graphic.png`
 - [x] Screenshots staged: `playstore-assets/screenshots/01-07-*.png` (7 images)
 
 **Play Console — manual upload (PENDING):**
-- [ ] Upload `OmniTAK-0.1.10-vc14.aab` to Closed testing → Create new release
+- [ ] Upload `OmniTAK-0.1.10-vc15.aab` to Closed testing → Create new release
 - [ ] Paste "What's new" notes from this file into release notes (wrap in `<en-US>...</en-US>`)
 - [ ] Upload `icon-512.png` → Main store listing → App icon
 - [ ] Upload `feature-graphic.png` → Main store listing → Feature graphic

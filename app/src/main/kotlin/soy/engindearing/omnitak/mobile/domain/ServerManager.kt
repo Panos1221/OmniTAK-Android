@@ -13,6 +13,7 @@ import soy.engindearing.omnitak.mobile.data.CoTParser
 import soy.engindearing.omnitak.mobile.data.TAKConnection
 import soy.engindearing.omnitak.mobile.data.TAKServer
 import soy.engindearing.omnitak.mobile.data.TAKServerStore
+import soy.engindearing.omnitak.mobile.data.UserPrefsStore
 
 /**
  * Application-scoped TAK server registry. Exposes [servers] and
@@ -29,6 +30,7 @@ class ServerManager(
     private val contactStore: ContactStore? = null,
     private val chatStore: ChatStore? = null,
     private val certVault: CertVault? = null,
+    private val userPrefsStore: UserPrefsStore? = null,
 ) {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
@@ -42,9 +44,19 @@ class ServerManager(
     private val _connectionState = MutableStateFlow<ConnectionState>(ConnectionState.Disconnected)
     val connectionState: StateFlow<ConnectionState> = _connectionState.asStateFlow()
 
+    // GAP-030c — real ATAK-style status-bar counters. The status bar
+    // chips ↓ / ↑ on MapScreen previously read hardcoded zeros, which
+    // made the app look silent even when CoT was flowing both ways.
+    private val _messagesReceived = MutableStateFlow(0)
+    val messagesReceived: StateFlow<Int> = _messagesReceived.asStateFlow()
+
+    private val _messagesSent = MutableStateFlow(0)
+    val messagesSent: StateFlow<Int> = _messagesSent.asStateFlow()
+
     private var currentConnection: TAKConnection? = null
     private var connectionCollectorJob: kotlinx.coroutines.Job? = null
     private var receivedCollectorJob: kotlinx.coroutines.Job? = null
+    private var pliBroadcaster: SelfPositionBroadcaster? = null
 
     init { scope.launch { hydrate() } }
 
@@ -53,11 +65,19 @@ class ServerManager(
         disconnect()
         val conn = TAKConnection(server, certVault)
         currentConnection = conn
+        // Reset per-session counters so the status bar reflects this
+        // connection only, not the cumulative app lifetime.
+        _messagesReceived.value = 0
+        _messagesSent.value = 0
         connectionCollectorJob = scope.launch {
-            conn.state.collect { _connectionState.value = it }
+            conn.state.collect { state ->
+                _connectionState.value = state
+                if (state is ConnectionState.Connected) startPliBroadcast() else stopPliBroadcast()
+            }
         }
         receivedCollectorJob = scope.launch {
             conn.received.collect { xml ->
+                _messagesReceived.value = _messagesReceived.value + 1
                 // A frame is either a chat event or a contact/marker event,
                 // depending on the CoT type. Parsing chat first is cheap
                 // (string probe) and avoids double-ingesting as a contact.
@@ -73,10 +93,15 @@ class ServerManager(
     }
 
     /** Send a CoT XML payload on the active connection. */
-    suspend fun sendCoT(xml: String): Boolean = currentConnection?.send(xml) ?: false
+    suspend fun sendCoT(xml: String): Boolean {
+        val ok = currentConnection?.send(xml) ?: false
+        if (ok) _messagesSent.value = _messagesSent.value + 1
+        return ok
+    }
 
     /** Disconnect the current connection if any. */
     fun disconnect() {
+        stopPliBroadcast()
         currentConnection?.disconnect()
         currentConnection = null
         connectionCollectorJob?.cancel()
@@ -84,6 +109,20 @@ class ServerManager(
         receivedCollectorJob?.cancel()
         receivedCollectorJob = null
         _connectionState.value = ConnectionState.Disconnected
+    }
+
+    private fun startPliBroadcast() {
+        if (pliBroadcaster != null || userPrefsStore == null) return
+        pliBroadcaster = SelfPositionBroadcaster(
+            scope = scope,
+            prefsStore = userPrefsStore,
+            sendCoT = { xml -> sendCoT(xml) },
+        ).also { it.start() }
+    }
+
+    private fun stopPliBroadcast() {
+        pliBroadcaster?.stop()
+        pliBroadcaster = null
     }
 
     private suspend fun hydrate() {

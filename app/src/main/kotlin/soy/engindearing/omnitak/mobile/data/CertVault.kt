@@ -50,6 +50,24 @@ class CertVault(context: Context) {
         }
     }
 
+    /**
+     * Save a cert that's already in memory (e.g. extracted from a zip).
+     * Returns the sanitized filename written, or null on IO failure.
+     */
+    fun importBytes(displayName: String, bytes: ByteArray): String? {
+        val safeName = sanitize(displayName)
+        if (safeName.isBlank()) return null
+        val target = File(dir, safeName)
+        return try {
+            target.writeBytes(bytes)
+            safeName
+        } catch (t: Throwable) {
+            Log.w(TAG, "importBytes failed: ${t.javaClass.simpleName}: ${t.message}")
+            target.delete()
+            null
+        }
+    }
+
     /** Read the raw bytes for [name], or null if missing/unreadable. */
     fun read(name: String): ByteArray? {
         val f = File(dir, sanitize(name))

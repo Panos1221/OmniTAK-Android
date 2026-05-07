@@ -14,12 +14,22 @@ import soy.engindearing.omnitak.mobile.data.TAKServerStore
 import soy.engindearing.omnitak.mobile.data.UserPrefsStore
 import soy.engindearing.omnitak.mobile.domain.ChatStore
 import soy.engindearing.omnitak.mobile.domain.ContactStore
+import soy.engindearing.omnitak.mobile.domain.DataPackageBootstrap
 import soy.engindearing.omnitak.mobile.domain.DrawingStore
 import soy.engindearing.omnitak.mobile.domain.MeshtasticCoTBridge
 import soy.engindearing.omnitak.mobile.domain.MeshtasticManager
 import soy.engindearing.omnitak.mobile.domain.ServerManager
 
 class OmniTAKApp : Application() {
+
+    override fun onCreate() {
+        super.onCreate()
+        // Sideload data-package zips dropped into <files-dir>/import/.
+        // Touches `serverManager` (and through it `userPrefsStore`,
+        // `certVault`), so kicking it off here also wakes those lazies.
+        DataPackageBootstrap(this, certVault, serverManager).runIfNeeded()
+    }
+
     // Application-scoped singletons. Screens reach these via
     // LocalContext.current.applicationContext as OmniTAKApp.
     private val appScope = CoroutineScope(Dispatchers.Default + SupervisorJob())
@@ -90,7 +100,7 @@ class OmniTAKApp : Application() {
     val userPrefsStore: UserPrefsStore by lazy { UserPrefsStore(this) }
     val certVault: CertVault by lazy { CertVault(this) }
     val serverManager: ServerManager by lazy {
-        ServerManager(TAKServerStore(this), contactStore, chatStore, certVault)
+        ServerManager(TAKServerStore(this), contactStore, chatStore, certVault, userPrefsStore)
     }
 
     /** Bridges Meshtastic node updates into the active server's CoT
