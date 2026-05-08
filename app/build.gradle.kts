@@ -50,11 +50,15 @@ android {
 
     buildTypes {
         getByName("release") {
-            isMinifyEnabled = false
+            isMinifyEnabled = true
+            isShrinkResources = true
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
+            // Bundles unstripped .so files into the AAB so Play Console can
+            // symbolicate native crashes without a separate symbols upload.
+            ndk { debugSymbolLevel = "FULL" }
             signingConfig = if (signingConfigs.getByName("release").storeFile != null) {
                 signingConfigs.getByName("release")
             } else {
