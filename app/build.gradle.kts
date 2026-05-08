@@ -10,12 +10,18 @@ plugins {
 android {
     namespace = "soy.engindearing.omnitak.mobile"
     compileSdk = 35
+    // Pin to the locally-installed NDK so AGP can find llvm-objcopy when it
+    // needs to (re)strip overlaid prebuilt libs from app/src/main/jniLibs/
+    // and extract their debug info into BUNDLE-METADATA. Without this AGP
+    // logs "Unable to strip the following libraries" and ships the
+    // unstripped binaries — a ~750 MB AAB instead of ~38 MB.
+    ndkVersion = "28.2.13676358"
 
     defaultConfig {
         applicationId = "soy.engindearing.omnitak.mobile"
         minSdk = 26
         targetSdk = 35
-        versionCode = 24
+        versionCode = 26
         versionName = "0.2.7"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
