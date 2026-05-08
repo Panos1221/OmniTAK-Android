@@ -1,29 +1,88 @@
 package soy.engindearing.omnitak.mobile
 
 import android.app.Application
+import android.content.Context
+import android.os.BatteryManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import soy.engindearing.omnitak.mobile.data.AdminResponse
+import soy.engindearing.omnitak.mobile.data.CertVault
+import soy.engindearing.omnitak.mobile.data.LocationProvider
 import soy.engindearing.omnitak.mobile.data.MeshDeviceConfigStore
 import soy.engindearing.omnitak.mobile.data.TAKServerStore
 import soy.engindearing.omnitak.mobile.data.UserPrefsStore
 import soy.engindearing.omnitak.mobile.domain.ChatStore
 import soy.engindearing.omnitak.mobile.domain.ContactStore
+import soy.engindearing.omnitak.mobile.domain.ConnectionState
+import soy.engindearing.omnitak.mobile.domain.DataPackageBootstrap
 import soy.engindearing.omnitak.mobile.domain.DrawingStore
+import soy.engindearing.omnitak.mobile.domain.MapCameraStore
 import soy.engindearing.omnitak.mobile.domain.MeshtasticCoTBridge
+import soy.engindearing.omnitak.mobile.domain.TAKConnectionService
 import soy.engindearing.omnitak.mobile.domain.MeshtasticManager
 import soy.engindearing.omnitak.mobile.domain.ServerManager
 
 class OmniTAKApp : Application() {
+
+    override fun onCreate() {
+        super.onCreate()
+        // Sideload data-package zips dropped into <files-dir>/import/.
+        // Touches `serverManager` (and through it `userPrefsStore`,
+        // `certVault`), so kicking it off here also wakes those lazies.
+        DataPackageBootstrap(this, certVault, serverManager).runIfNeeded()
+
+        // Issue #5 — start a foreground service while we're holding a
+        // connection so Doze doesn't kill the read loop within ~10s of
+        // backgrounding. The service is just a privilege carrier; the
+        // socket itself stays in ServerManager.
+        //
+        // Issues #12 / SLAB-2026-05-07 — debounce Connected before firing
+        // startForegroundService(). When a TAK Server requires mTLS and we
+        // connect without a client cert, the TLS handshake completes (state
+        // briefly = Connected), then the server immediately sends
+        // TLSV1_ALERT_CERTIFICATE_REQUIRED and the read loop dies in
+        // milliseconds. If we fire startForegroundService() in that window
+        // and then stopService() right after, Android tears the service
+        // down before onStartCommand can call startForeground() — and the
+        // 5-second FGS-must-elevate timer still fires, crashing the app
+        // with ForegroundServiceDidNotStartInTimeException. Waiting
+        // [FGS_DEBOUNCE_MS] before calling start() means transient
+        // connections never trigger the FGS at all.
+        appScope.launch {
+            var pendingStart: Job? = null
+            serverManager.connectionState.collect { state ->
+                when (state) {
+                    is ConnectionState.Connected -> {
+                        pendingStart?.cancel()
+                        pendingStart = appScope.launch {
+                            delay(FGS_DEBOUNCE_MS)
+                            if (serverManager.connectionState.value is ConnectionState.Connected) {
+                                TAKConnectionService.start(this@OmniTAKApp, state.serverName)
+                            }
+                        }
+                    }
+                    ConnectionState.Disconnected -> {
+                        pendingStart?.cancel()
+                        TAKConnectionService.stop(this@OmniTAKApp)
+                    }
+                    else -> { /* Connecting / Failed: leave service state alone */ }
+                }
+            }
+        }
+    }
+
     // Application-scoped singletons. Screens reach these via
     // LocalContext.current.applicationContext as OmniTAKApp.
     private val appScope = CoroutineScope(Dispatchers.Default + SupervisorJob())
     val contactStore: ContactStore by lazy { ContactStore() }
     val drawingStore: DrawingStore by lazy { DrawingStore() }
+    val mapCameraStore: MapCameraStore by lazy { MapCameraStore() }
     val chatStore: ChatStore by lazy {
         ChatStore().also { store ->
             // GAP-122 — Mesh primary channel always visible so users can
@@ -87,8 +146,28 @@ class OmniTAKApp : Application() {
     }
     val meshDeviceConfigStore: MeshDeviceConfigStore by lazy { MeshDeviceConfigStore(this) }
     val userPrefsStore: UserPrefsStore by lazy { UserPrefsStore(this) }
+    val certVault: CertVault by lazy { CertVault(this) }
+    val locationProvider: LocationProvider by lazy { LocationProvider(this) }
     val serverManager: ServerManager by lazy {
-        ServerManager(TAKServerStore(this), contactStore, chatStore)
+        ServerManager(
+            store = TAKServerStore(this),
+            contactStore = contactStore,
+            chatStore = chatStore,
+            certVault = certVault,
+            userPrefsStore = userPrefsStore,
+            locationProvider = locationProvider,
+            // Issue #11 — read the EUD's real battery level instead of
+            // hardcoding 100 in PPLI. BatteryManager returns -1 for
+            // unknown; map that to null so SelfPositionBroadcaster omits
+            // <status> rather than emitting a misleading number.
+            batteryProvider = ::readDeviceBatteryPercent,
+        )
+    }
+
+    private fun readDeviceBatteryPercent(): Int? {
+        val bm = getSystemService(Context.BATTERY_SERVICE) as? BatteryManager ?: return null
+        val level = bm.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY)
+        return if (level in 0..100) level else null
     }
 
     /** Bridges Meshtastic node updates into the active server's CoT
@@ -101,6 +180,10 @@ class OmniTAKApp : Application() {
      *  the bridge stays "started" but its `enabled` flag is observed
      *  off the prefs store so flipping the menu item from any screen
      *  immediately stops/resumes pushes to `cotSink`. */
+    private companion object {
+        const val FGS_DEBOUNCE_MS = 750L
+    }
+
     val meshtasticCoTBridge: MeshtasticCoTBridge by lazy {
         MeshtasticCoTBridge(
             mesh = meshtastic,

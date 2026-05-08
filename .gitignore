@@ -41,5 +41,14 @@ captures/
 *.ap_
 *.dex
 
+# Unstripped native libs sourced at build-time for symbol extraction.
+# These come from MapLibre's GitHub Releases (see
+# playstore-assets/fetch-native-symbols.sh) and weigh ~750 MB total —
+# not something to track in source. The stripped versions ship inside
+# org.maplibre.gl:android-sdk's AAR; this directory only exists to give
+# AGP an unstripped copy so debugSymbolLevel = "FULL" has something to
+# extract for Play's native crash symbolication.
+app/src/main/jniLibs/
+
 # Agent worktrees
 .claude/worktrees/

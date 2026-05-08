@@ -63,6 +63,7 @@ fun TacticalMap(
     panTarget: LatLng? = null,
     panTargetTick: Int = 0,
     followMeActive: Boolean = false,
+    onCameraIdle: ((LatLng, Double) -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -76,6 +77,7 @@ fun TacticalMap(
     val currentDrawings by rememberUpdatedState(drawings)
     val currentGridCenter by rememberUpdatedState(gridCenter)
     val currentAircraft by rememberUpdatedState(aircraft)
+    val currentCameraIdle by rememberUpdatedState(onCameraIdle)
 
     val mapView = remember {
         MapLibre.getInstance(context)
@@ -87,7 +89,7 @@ fun TacticalMap(
                     .zoom(initialZoom)
                     .build()
                 map.setStyle(Style.Builder().fromJson(styleJson)) { style ->
-                    ContactLayer.update(map, currentContacts)
+                    ContactLayer.update(map, context, currentContacts)
                     MeasurementLayer.update(map, currentMeasurementPoints)
                     DrawingLayer.update(map, currentDrawings)
                     currentGridCenter?.let { GridLayer.update(map, it) }
@@ -101,9 +103,31 @@ fun TacticalMap(
                     isLogoEnabled = false
                     isAttributionEnabled = true
                 }
+                // Persist camera state on idle so bottom-nav switches
+                // (Map → Settings → Map etc.) don't reset the operator's
+                // pan/zoom — see [MapCameraStore].
+                map.addOnCameraIdleListener {
+                    val pos = map.cameraPosition
+                    val target = pos.target ?: return@addOnCameraIdleListener
+                    currentCameraIdle?.invoke(target, pos.zoom)
+                }
                 map.addOnMapLongClickListener { latLng ->
                     val screen = map.projection.toScreenLocation(latLng)
                     currentLongPress?.invoke(latLng, Offset(screen.x, screen.y))
+                    true
+                }
+                // Annotation-API markers (created by ContactLayer)
+                // would otherwise pop their default InfoWindow on tap
+                // and swallow the gesture before our contact-tap
+                // hit-test runs. Intercept here, look up the matching
+                // CoTEvent by marker title (= UID or callsign), and
+                // dispatch the same callback the geographic tap uses.
+                map.setOnMarkerClickListener { marker ->
+                    val cb = currentContactTap ?: return@setOnMarkerClickListener true
+                    val match = currentContacts.firstOrNull { c ->
+                        marker.title == (c.callsign ?: c.uid)
+                    }
+                    if (match != null) cb(match)
                     true
                 }
                 map.addOnMapClickListener { latLng ->
@@ -193,7 +217,7 @@ fun TacticalMap(
     // caller's collection reference changes.
     DisposableEffect(mapView, contacts) {
         mapView.getMapAsync { map ->
-            if (map.style != null) ContactLayer.update(map, contacts)
+            if (map.style != null) ContactLayer.update(map, context, contacts)
         }
         onDispose { }
     }
@@ -208,7 +232,7 @@ fun TacticalMap(
             // getMapAsync block during MapView construction (line ~88).
             if (map.style != null && map.style?.json != styleJson) {
                 map.setStyle(Style.Builder().fromJson(styleJson)) { _ ->
-                    ContactLayer.update(map, currentContacts)
+                    ContactLayer.update(map, context, currentContacts)
                     MeasurementLayer.update(map, currentMeasurementPoints)
                     DrawingLayer.update(map, currentDrawings)
                     currentGridCenter?.let { GridLayer.update(map, it) }
@@ -618,9 +642,41 @@ val TACTICAL_STYLE_DARK_MATTER = buildTacticalStyle(
 )
 
 /**
+ * Normalize tile-URL placeholder syntax to MapLibre/Mapbox convention.
+ *
+ * CivTAK / ATAK and a handful of WMTS docs use `{$z}/{$y}/{$x}` (dollar
+ * inside braces). MapLibre's raster source spec only understands plain
+ * `{z}/{y}/{x}` (and `{bbox-epsg-3857}`, `{quadkey}`). Without this
+ * rewrite the literal `{$z}` text gets requested → 404 and the tile
+ * layer renders empty.
+ *
+ * Applied once at the boundary, in [styleJsonForProvider], so call
+ * sites don't have to remember to normalize. We also strip whitespace
+ * — operators paste from chat and frequently get a stray newline.
+ */
+internal fun normalizeTileUrlPlaceholders(raw: String): String {
+    if (raw.isEmpty()) return raw
+    var out = raw.trim()
+    // Common ATAK / WMTS variants. Order matters only insofar as we
+    // want the longest match first; ${z} → {z} happens before {$z} → {z}
+    // even though Kotlin's replace is exact-match (no overlap).
+    val tokens = listOf("z", "x", "y", "s", "q", "r")
+    for (t in tokens) {
+        out = out
+            .replace("\${$t}", "{$t}")  // ${z}
+            .replace("{\$$t}", "{$t}")  // {$z}
+    }
+    return out
+}
+
+/**
  * Map a [MapProvider] preference to its style JSON. For WMTS_CUSTOM,
  * the operator-supplied XYZ URL is wrapped in a fresh tactical style.
  * Falls back to OSM if WMTS_CUSTOM is selected with an empty/invalid URL.
+ *
+ * Accepts both `{z}/{x}/{y}` (MapLibre / OSM) and `{$z}/{$x}/{$y}`
+ * (CivTAK / ATAK) placeholder conventions — the latter is normalized
+ * before the URL is handed to MapLibre.
  */
 fun styleJsonForProvider(
     provider: MapProvider,
@@ -630,7 +686,7 @@ fun styleJsonForProvider(
     MapProvider.TOPO_HINT -> TACTICAL_STYLE_TOPO
     MapProvider.SATELLITE_HINT -> TACTICAL_STYLE_SATELLITE
     MapProvider.WMTS_CUSTOM -> {
-        val url = customTileUrl.trim()
+        val url = normalizeTileUrlPlaceholders(customTileUrl)
         if (url.startsWith("http") && url.contains("{z}") && url.contains("{x}") && url.contains("{y}")) {
             buildTacticalStyle("OmniTAK Custom WMTS", url, "Custom tile source")
         } else {

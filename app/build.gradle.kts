@@ -10,13 +10,19 @@ plugins {
 android {
     namespace = "soy.engindearing.omnitak.mobile"
     compileSdk = 35
+    // Pin to the locally-installed NDK so AGP can find llvm-objcopy when it
+    // needs to (re)strip overlaid prebuilt libs from app/src/main/jniLibs/
+    // and extract their debug info into BUNDLE-METADATA. Without this AGP
+    // logs "Unable to strip the following libraries" and ships the
+    // unstripped binaries — a ~750 MB AAB instead of ~38 MB.
+    ndkVersion = "28.2.13676358"
 
     defaultConfig {
         applicationId = "soy.engindearing.omnitak.mobile"
         minSdk = 26
         targetSdk = 35
-        versionCode = 12
-        versionName = "0.1.7"
+        versionCode = 27
+        versionName = "0.2.7"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables { useSupportLibrary = true }
@@ -50,11 +56,15 @@ android {
 
     buildTypes {
         getByName("release") {
-            isMinifyEnabled = false
+            isMinifyEnabled = true
+            isShrinkResources = true
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
+            // Bundles unstripped .so files into the AAB so Play Console can
+            // symbolicate native crashes without a separate symbols upload.
+            ndk { debugSymbolLevel = "FULL" }
             signingConfig = if (signingConfigs.getByName("release").storeFile != null) {
                 signingConfigs.getByName("release")
             } else {
@@ -87,6 +97,12 @@ android {
             )
         }
     }
+
+    // Let JVM unit tests call android.util.Log without "Method not mocked"
+    // RuntimeExceptions. Default values mean Log.* returns 0 / "" / false.
+    testOptions {
+        unitTests.isReturnDefaultValues = true
+    }
 }
 
 dependencies {
@@ -113,11 +129,19 @@ dependencies {
     // MapLibre Android (open-source fork of Mapbox) — parallel to iOS
     implementation("org.maplibre.gl:android-sdk:11.8.0")
 
+    // NGA's tested MGRS / UTM converter. Operators rely on grid coords
+    // for navigation; rolling our own would risk silent miscalculation.
+    // Pure-Java, ~250 KB, no Android resources.
+    implementation("mil.nga.mgrs:mgrs-android:2.2.3")
+
     // Nordic Semiconductor BLE library — used by MeshtasticBleClient.
     // Wraps the platform GATT API in a queueable, callback-driven manager
     // with built-in MTU negotiation, bond handling, and reconnection.
     implementation("no.nordicsemi.android:ble:2.8.0")
     implementation("no.nordicsemi.android:ble-ktx:2.8.0")
+
+    // GAP-030b — FusedLocationProviderClient for real GPS fixes.
+    implementation("com.google.android.gms:play-services-location:21.3.0")
 
     debugImplementation("androidx.compose.ui:ui-tooling")
     debugImplementation("androidx.compose.ui:ui-test-manifest")

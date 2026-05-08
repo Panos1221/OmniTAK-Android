@@ -29,9 +29,9 @@ import soy.engindearing.omnitak.mobile.ui.theme.TacticalAccent
 fun SelfPositionCard(
     callsign: String,
     coordinateLabel: String,
-    altitudeMetersMSL: Double,
-    speedKmh: Double,
-    accuracyMeters: Int,
+    altitudeLabel: String,
+    speedLabel: String,
+    accuracyLabel: String,
     modifier: Modifier = Modifier,
 ) {
     Column(
@@ -55,13 +55,13 @@ fun SelfPositionCard(
             fontFamily = FontFamily.Monospace,
         )
         Text(
-            "%.1f m MSL".format(altitudeMetersMSL),
+            altitudeLabel,
             color = Color.White,
             fontSize = 11.sp,
             fontFamily = FontFamily.Monospace,
         )
         Text(
-            "%.1f km/h    +/- ${accuracyMeters}m".format(speedKmh),
+            "$speedLabel    $accuracyLabel",
             color = Color.White,
             fontSize = 11.sp,
             fontFamily = FontFamily.Monospace,

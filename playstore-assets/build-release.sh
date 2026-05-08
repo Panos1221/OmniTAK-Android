@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
-# Bump versionCode by 1, build a signed release AAB, stage it under
-# playstore-assets/ with the version in the filename.
+# Build a signed release AAB at the next monotonic versionCode and
+# stage it under playstore-assets/. versionName comes from gradle as-is —
+# bump it by hand when you want the user-facing label to change.
+#
+# Convention: versionName = semver (0.1.10, 0.1.11, …); versionCode = a
+# strictly monotonic integer that never resets, because Play Console
+# rejects any AAB whose vc has been used before regardless of versionName.
 #
 # Usage: ./playstore-assets/build-release.sh
 #
@@ -21,9 +26,17 @@ if [[ -z "$current_vc" || -z "$current_vn" ]]; then
   exit 1
 fi
 
-new_vc=$((current_vc + 1))
+# Highest vc ever staged in playstore-assets/ — that's our floor.
+# Filenames follow OmniTAK-<versionName>-vc<N>.aab.
+max_staged_vc=$(ls playstore-assets/*.aab 2>/dev/null \
+  | sed -E 's/.*-vc([0-9]+)\.aab$/\1/' \
+  | sort -n | tail -1)
+max_staged_vc=${max_staged_vc:-0}
 
-echo ">> bumping versionCode $current_vc -> $new_vc (versionName stays $current_vn)"
+new_vc=$(( max_staged_vc > current_vc ? max_staged_vc + 1 : current_vc + 1 ))
+
+echo ">> versionCode: gradle=$current_vc, max staged=$max_staged_vc -> next=$new_vc"
+echo ">> versionName: $current_vn (unchanged — edit $GRADLE_FILE by hand to bump)"
 sed -i.bak "s/versionCode = $current_vc/versionCode = $new_vc/" "$GRADLE_FILE"
 rm "$GRADLE_FILE.bak"
 

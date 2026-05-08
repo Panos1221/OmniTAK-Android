@@ -76,6 +76,8 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
     val app = LocalContext.current.applicationContext as OmniTAKApp
     val active by app.serverManager.activeServer.collectAsState()
     val connState by app.serverManager.connectionState.collectAsState()
+    val msgReceived by app.serverManager.messagesReceived.collectAsState()
+    val msgSent by app.serverManager.messagesSent.collectAsState()
     val contacts by app.contactStore.contacts.collectAsState()
     // Layers toggle: mesh-origin contacts are persisted because the
     // operator's last choice should survive a process restart. Default
@@ -112,6 +114,12 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
     }
 
     val locationGranted by rememberLocationPermission()
+    // GAP-030b — start the FusedLocationProviderClient as soon as we have
+    // permission. Idempotent, safe to re-invoke on every recomposition.
+    val selfFix by app.locationProvider.fix.collectAsState()
+    LaunchedEffect(locationGranted) {
+        if (locationGranted) app.locationProvider.start()
+    }
     var radialAnchor by remember { mutableStateOf<Offset?>(null) }
     var radialLatLng by remember { mutableStateOf<LatLng?>(null) }
     var markerSheetLatLng by remember { mutableStateOf<LatLng?>(null) }
@@ -150,6 +158,18 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
     ) {
         TacticalMap(
             modifier = Modifier.fillMaxSize(),
+            // Restore the operator's last pan/zoom across bottom-nav
+            // switches. Falls back to TacticalMap's own default on first
+            // run / fresh process. Issue #7.
+            initialCenter = run {
+                val lat = app.mapCameraStore.lastTargetLat
+                val lon = app.mapCameraStore.lastTargetLon
+                if (lat != null && lon != null) LatLng(lat, lon) else LatLng(47.6588, -117.4260)
+            },
+            initialZoom = app.mapCameraStore.lastZoom ?: 11.0,
+            onCameraIdle = { target, zoom ->
+                app.mapCameraStore.update(target.latitude, target.longitude, zoom)
+            },
             // GAP-101 / GAP-107 — react to the basemap selection from Settings.
             // WMTS_CUSTOM uses the operator-pasted XYZ tile URL.
             styleJson = styleJsonForProvider(userPrefs.mapProvider, userPrefs.customTileUrl),
@@ -210,10 +230,9 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
             ATAKStatusBar(
                 serverName = headerLabel,
                 isConnected = connState is ConnectionState.Connected,
-                messagesReceived = 0,
-                messagesSent = 0,
-                // GAP-023: stub until FusedLocationProviderClient is wired (GAP-030b)
-                gpsAccuracyMeters = 5,
+                messagesReceived = msgReceived,
+                messagesSent = msgSent,
+                gpsAccuracyMeters = selfFix?.accuracyM?.toInt() ?: 0,
                 timeLabel = nowLabel,
                 // GAP-102 — wire the previously dead status-bar taps to
                 // their natural destinations. Server icon goes to the
@@ -224,17 +243,30 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
             )
         }
 
-        // GAP-030 PPLI self-position card — bottom-right, mirrors iOS layout.
-        // Stub coords; live position plumbing tracked as GAP-030b.
-        // Callsign is sourced from UserPrefs (GAP-100 fix — was hardcoded).
-        // Operators can hide it via long-press → Layers → Callsign card.
+        // PPLI self-position card — bottom-right, mirrors iOS layout.
+        // GAP-030b — coordinates pull from FusedLocationProviderClient
+        // (LocationProvider). Until a fix arrives we show "Acquiring
+        // fix…" so users in Germany don't see San Francisco (issue #10).
         if (callsignCardVisible) {
+            val fix = selfFix
             SelfPositionCard(
                 callsign = userPrefs.callsign,
-                coordinateLabel = "11T  MN  37479  1222423",
-                altitudeMetersMSL = 0.0,
-                speedKmh = 0.0,
-                accuracyMeters = 5,
+                coordinateLabel = if (fix != null) {
+                    soy.engindearing.omnitak.mobile.data.CoordFormatter.position(
+                        fix.lat, fix.lon, userPrefs.coordFormat,
+                    )
+                } else {
+                    "Acquiring fix…"
+                },
+                altitudeLabel = soy.engindearing.omnitak.mobile.data.CoordFormatter.altitude(
+                    fix?.altitudeM ?: 0.0, userPrefs.distanceUnit,
+                ),
+                speedLabel = soy.engindearing.omnitak.mobile.data.CoordFormatter.speed(
+                    fix?.speedKmh ?: 0.0, userPrefs.distanceUnit,
+                ),
+                accuracyLabel = soy.engindearing.omnitak.mobile.data.CoordFormatter.accuracy(
+                    fix?.accuracyM?.toInt() ?: 0, userPrefs.distanceUnit,
+                ),
                 modifier = Modifier
                     .align(Alignment.BottomEnd)
                     .padding(end = 12.dp, bottom = 96.dp),
@@ -347,7 +379,14 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
                     "drop" -> if (ll != null) markerSheetLatLng = ll
                     "layers" -> layersSheetOpen = true
                     else -> {
-                        val coord = ll?.let { "%.5f, %.5f".format(it.latitude, it.longitude) } ?: ""
+                        // Respect the operator's coordinate-format pref (Lat/Lon,
+                        // DMS, MGRS, UTM) so the "Add @ …" toast matches the
+                        // SelfPositionCard readout instead of always lat/lon.
+                        val coord = ll?.let {
+                            soy.engindearing.omnitak.mobile.data.CoordFormatter.position(
+                                it.latitude, it.longitude, userPrefs.coordFormat,
+                            )
+                        } ?: ""
                         toast("${action.label}${if (coord.isNotEmpty()) " @ $coord" else ""}")
                     }
                 }
