@@ -3,7 +3,9 @@ package soy.engindearing.omnitak.mobile
 import android.app.Application
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
@@ -37,13 +39,36 @@ class OmniTAKApp : Application() {
         // connection so Doze doesn't kill the read loop within ~10s of
         // backgrounding. The service is just a privilege carrier; the
         // socket itself stays in ServerManager.
+        //
+        // Issues #12 / SLAB-2026-05-07 — debounce Connected before firing
+        // startForegroundService(). When a TAK Server requires mTLS and we
+        // connect without a client cert, the TLS handshake completes (state
+        // briefly = Connected), then the server immediately sends
+        // TLSV1_ALERT_CERTIFICATE_REQUIRED and the read loop dies in
+        // milliseconds. If we fire startForegroundService() in that window
+        // and then stopService() right after, Android tears the service
+        // down before onStartCommand can call startForeground() — and the
+        // 5-second FGS-must-elevate timer still fires, crashing the app
+        // with ForegroundServiceDidNotStartInTimeException. Waiting
+        // [FGS_DEBOUNCE_MS] before calling start() means transient
+        // connections never trigger the FGS at all.
         appScope.launch {
+            var pendingStart: Job? = null
             serverManager.connectionState.collect { state ->
                 when (state) {
-                    is ConnectionState.Connected ->
-                        TAKConnectionService.start(this@OmniTAKApp, state.serverName)
-                    ConnectionState.Disconnected ->
+                    is ConnectionState.Connected -> {
+                        pendingStart?.cancel()
+                        pendingStart = appScope.launch {
+                            delay(FGS_DEBOUNCE_MS)
+                            if (serverManager.connectionState.value is ConnectionState.Connected) {
+                                TAKConnectionService.start(this@OmniTAKApp, state.serverName)
+                            }
+                        }
+                    }
+                    ConnectionState.Disconnected -> {
+                        pendingStart?.cancel()
                         TAKConnectionService.stop(this@OmniTAKApp)
+                    }
                     else -> { /* Connecting / Failed: leave service state alone */ }
                 }
             }
@@ -135,6 +160,10 @@ class OmniTAKApp : Application() {
      *  the bridge stays "started" but its `enabled` flag is observed
      *  off the prefs store so flipping the menu item from any screen
      *  immediately stops/resumes pushes to `cotSink`. */
+    private companion object {
+        const val FGS_DEBOUNCE_MS = 750L
+    }
+
     val meshtasticCoTBridge: MeshtasticCoTBridge by lazy {
         MeshtasticCoTBridge(
             mesh = meshtastic,
