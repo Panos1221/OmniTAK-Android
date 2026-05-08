@@ -38,6 +38,11 @@ class SelfPositionBroadcaster internal constructor(
     private val updatePrefs: suspend ((UserPrefs) -> UserPrefs) -> Unit,
     private val sendCoT: suspend (String) -> Boolean,
     private val locationFix: StateFlow<SelfFix?>,
+    // Issue #11 — supplies the device's real battery percentage (0..100).
+    // Returns null when unknown (no Context yet, BatteryManager error, or
+    // a tester-friendly default for unit tests). The previous hardcoded
+    // "100" was misleading every peer that read our PPLI.
+    private val batteryProvider: () -> Int? = { null },
     private val intervalMs: Long = DEFAULT_INTERVAL_MS,
     private val staleSeconds: Long = DEFAULT_STALE_SECONDS,
 ) {
@@ -46,6 +51,7 @@ class SelfPositionBroadcaster internal constructor(
         prefsStore: UserPrefsStore,
         sendCoT: suspend (String) -> Boolean,
         locationFix: StateFlow<SelfFix?>,
+        batteryProvider: () -> Int? = { null },
         intervalMs: Long = DEFAULT_INTERVAL_MS,
         staleSeconds: Long = DEFAULT_STALE_SECONDS,
     ) : this(
@@ -54,6 +60,7 @@ class SelfPositionBroadcaster internal constructor(
         updatePrefs = { mutator -> prefsStore.update(mutator) },
         sendCoT = sendCoT,
         locationFix = locationFix,
+        batteryProvider = batteryProvider,
         intervalMs = intervalMs,
         staleSeconds = staleSeconds,
     )
@@ -127,6 +134,7 @@ class SelfPositionBroadcaster internal constructor(
             ce = ce,
             speedKmh = speedKmh,
             staleSeconds = staleSeconds,
+            batteryPercent = batteryProvider().takeIf { it != null && it in 0..100 },
         )
         val ok = sendCoT(xml)
         if (ok) {
@@ -156,6 +164,10 @@ class SelfPositionBroadcaster internal constructor(
             hae: Double = 0.0,
             ce: Double = 9999999.0,
             speedKmh: Double = 0.0,
+            // null → omit `<status>` entirely. ATAK peers handle a missing
+            // battery field gracefully (column shows blank); a hardcoded
+            // 100 misled operators reading peer status panes.
+            batteryPercent: Int? = null,
         ): String {
             val now = System.currentTimeMillis()
             val time = isoUtc(now)
@@ -181,7 +193,9 @@ class SelfPositionBroadcaster internal constructor(
                 append("<detail>")
                 append("<contact callsign=\"").append(safeCallsign).append("\" endpoint=\"*:-1:stcp\"/>")
                 append("<__group name=\"").append(safeTeam).append("\" role=\"Team Member\"/>")
-                append("<status battery=\"100\"/>")
+                if (batteryPercent != null && batteryPercent in 0..100) {
+                    append("<status battery=\"").append(batteryPercent).append("\"/>")
+                }
                 append("<takv device=\"AVD\" platform=\"OmniTAK-Android\" os=\"Android\" version=\"0.1\"/>")
                 append("<track speed=\"").append(String.format(Locale.US, "%.2f", speedMs))
                     .append("\" course=\"0.00\"/>")

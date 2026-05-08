@@ -1,6 +1,8 @@
 package soy.engindearing.omnitak.mobile
 
 import android.app.Application
+import android.content.Context
+import android.os.BatteryManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -147,7 +149,25 @@ class OmniTAKApp : Application() {
     val certVault: CertVault by lazy { CertVault(this) }
     val locationProvider: LocationProvider by lazy { LocationProvider(this) }
     val serverManager: ServerManager by lazy {
-        ServerManager(TAKServerStore(this), contactStore, chatStore, certVault, userPrefsStore, locationProvider)
+        ServerManager(
+            store = TAKServerStore(this),
+            contactStore = contactStore,
+            chatStore = chatStore,
+            certVault = certVault,
+            userPrefsStore = userPrefsStore,
+            locationProvider = locationProvider,
+            // Issue #11 — read the EUD's real battery level instead of
+            // hardcoding 100 in PPLI. BatteryManager returns -1 for
+            // unknown; map that to null so SelfPositionBroadcaster omits
+            // <status> rather than emitting a misleading number.
+            batteryProvider = ::readDeviceBatteryPercent,
+        )
+    }
+
+    private fun readDeviceBatteryPercent(): Int? {
+        val bm = getSystemService(Context.BATTERY_SERVICE) as? BatteryManager ?: return null
+        val level = bm.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY)
+        return if (level in 0..100) level else null
     }
 
     /** Bridges Meshtastic node updates into the active server's CoT

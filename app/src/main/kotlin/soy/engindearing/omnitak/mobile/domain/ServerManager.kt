@@ -34,6 +34,9 @@ class ServerManager(
     private val certVault: CertVault? = null,
     private val userPrefsStore: UserPrefsStore? = null,
     private val locationProvider: LocationProvider? = null,
+    // Issue #11 — wired from OmniTAKApp to read BatteryManager. Lambda
+    // (not Context) keeps this class headless for unit tests.
+    private val batteryProvider: () -> Int? = { null },
 ) {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
@@ -141,6 +144,7 @@ class ServerManager(
             prefsStore = userPrefsStore,
             sendCoT = { xml -> sendCoT(xml) },
             locationFix = fixFlow,
+            batteryProvider = batteryProvider,
         ).also { it.start() }
     }
 
