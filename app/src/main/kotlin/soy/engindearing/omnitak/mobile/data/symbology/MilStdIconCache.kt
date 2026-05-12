@@ -61,6 +61,20 @@ object MilStdIconCache {
         return icon
     }
 
+    /**
+     * Resolve the raw [Bitmap] for a CoT type. Callers that need to
+     * register an image with the MapLibre style directly (e.g.
+     * `style.addImage(...)` for LocationComponent's `foregroundName`)
+     * use this; everyone else uses [iconFor]. Returns null if every
+     * fallback asset is missing — caller decides what to do (e.g.
+     * keep the existing drawable resource path).
+     */
+    fun bitmapFor(context: Context, cotType: String, sizePx: Int = DEFAULT_SIZE_PX): Bitmap? {
+        val sidc = MilStdIconService.getSidc(cotType)
+        renderSvgToBitmap(context, sidc, sizePx)?.let { return it }
+        return renderSvgToBitmap(context, fallbackSidc(cotType), sizePx)
+    }
+
     private fun renderSvgToBitmap(context: Context, sidc: String, sizePx: Int): Bitmap? {
         val assetPath = "milstd/$sidc.svg"
         return try {
