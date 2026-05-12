@@ -1,0 +1,13 @@
+{
+  "name": "omnitak-milsymbol-generator",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Generates the assets/milstd/*.svg asset bundle from the canonical cot_types.json catalogue using the milsymbol library. Run once per catalogue update; commit the SVG output.",
+  "type": "module",
+  "scripts": {
+    "generate": "node generate.mjs"
+  },
+  "dependencies": {
+    "milsymbol": "^3.0.0"
+  }
+}

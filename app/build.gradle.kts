@@ -143,6 +143,11 @@ dependencies {
     // GAP-030b — FusedLocationProviderClient for real GPS fixes.
     implementation("com.google.android.gms:play-services-location:21.3.0")
 
+    // AndroidSVG — renders MIL-STD-2525 symbols (assets/milstd/*.svg) to
+    // Bitmaps for the MapLibre Marker Icon pipeline. Apache-2.0, stable.
+    // baseProfile="tiny" SVGs convert in under 2 ms each on a Pixel 6.
+    implementation("com.caverock:androidsvg-aar:1.4")
+
     debugImplementation("androidx.compose.ui:ui-tooling")
     debugImplementation("androidx.compose.ui:ui-test-manifest")
 
@@ -151,4 +156,12 @@ dependencies {
     // runTest / StandardTestDispatcher for coroutine-driven tests
     // (e.g. MeshtasticCoTBridge enabled toggle).
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.8.1")
+
+    // Instrumented tests — symbology validation runs on a real device or
+    // emulator because MapLibre's SurfaceView renders through native GL
+    // and can't be captured by JVM/Compose unit tests.
+    androidTestImplementation("androidx.test.ext:junit:1.2.1")
+    androidTestImplementation("androidx.test:rules:1.6.1")
+    androidTestImplementation("androidx.test:runner:1.6.2")
+    androidTestImplementation("androidx.test.uiautomator:uiautomator:2.3.0")
 }

@@ -63,6 +63,10 @@ fun TacticalMap(
     panTarget: LatLng? = null,
     panTargetTick: Int = 0,
     followMeActive: Boolean = false,
+    /** Render self-position with the MIL-STD-2525 friendly-combat
+     *  frame. When false, falls back to the legacy `ic_self_marker`
+     *  tinted disc. Sourced from [soy.engindearing.omnitak.mobile.data.UserPrefs.useMilStdSelfSymbol]. */
+    useMilStdSelfSymbol: Boolean = true,
     onCameraIdle: ((LatLng, Double) -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
@@ -95,7 +99,7 @@ fun TacticalMap(
                     currentGridCenter?.let { GridLayer.update(map, it) }
                     AircraftLayer.update(map, currentAircraft)
                     if (currentLocationEnabled) {
-                        activateLocation(map, style, context)
+                        activateLocation(map, style, context, useMilStdSelfSymbol)
                     }
                 }
                 map.uiSettings.apply {
@@ -169,7 +173,7 @@ fun TacticalMap(
             mapView.getMapAsync { map ->
                 val style = map.style
                 if (style != null && !map.locationComponent.isLocationComponentActivated) {
-                    activateLocation(map, style, context)
+                    activateLocation(map, style, context, useMilStdSelfSymbol)
                 }
                 if (map.locationComponent.isLocationComponentActivated) {
                     safeEnableLocation(map)
@@ -362,28 +366,57 @@ private fun activateLocation(
     map: org.maplibre.android.maps.MapLibreMap,
     style: Style,
     context: android.content.Context,
+    useMilStdSelfSymbol: Boolean,
 ) {
-    // ATAK-style self-position marker — tactical-accent disc + bearing
-    // chevron when heading is known. Replaces MapLibre's default blue
-    // pulse dot so the operator's own pip reads as part of the same
-    // tactical iconography as friendly markers.
-    val markerOptions = LocationComponentOptions.builder(context)
-        .foregroundDrawable(R.drawable.ic_self_marker)
-        .bearingDrawable(R.drawable.ic_self_marker_bearing)
+    // Self-position marker. When [useMilStdSelfSymbol] is true (default),
+    // render with a MIL-STD-2525 friendly combat ground symbol
+    // (a-f-G-U-C → SFGPUC------) so the operator's own pip reads as part
+    // of the same tactical iconography as friendly markers. Otherwise
+    // — or when the SVG pipeline can't produce a bitmap (missing asset,
+    // AndroidSVG parse failure, OEM GL quirk) — fall back to the legacy
+    // tinted-disc drawable.
+    val selfBitmap: android.graphics.Bitmap? = if (useMilStdSelfSymbol) {
+        soy.engindearing.omnitak.mobile.data.symbology.MilStdIconCache
+            .bitmapFor(context, cotType = "a-f-G-U-C", sizePx = 96)
+    } else {
+        null
+    }
+
+    val markerOptionsBuilder = LocationComponentOptions.builder(context)
         .pulseEnabled(true)
         .pulseColor(0xFF4ADE80.toInt())
         .pulseSingleDuration(2200f)
         .accuracyColor(0xFF4ADE80.toInt())
         .accuracyAlpha(0.18f)
-        .build()
+
+    if (selfBitmap != null) {
+        // Register the bitmap with the style so LocationComponent can
+        // reference it by name — MapLibre's LocationComponentOptions
+        // builder accepts resource IDs or names, not direct bitmaps.
+        // Using the same bitmap for foreground and bearing keeps the
+        // symbol upright regardless of heading; the bearing-arrow
+        // chevron is intentionally omitted here because MIL-STD
+        // symbol bodies aren't meant to rotate. Operator heading is
+        // still surfaced numerically in the SelfPositionCard.
+        style.addImage(SELF_FOREGROUND_IMAGE, selfBitmap)
+        markerOptionsBuilder
+            .foregroundName(SELF_FOREGROUND_IMAGE)
+            .bearingName(SELF_FOREGROUND_IMAGE)
+    } else {
+        markerOptionsBuilder
+            .foregroundDrawable(R.drawable.ic_self_marker)
+            .bearingDrawable(R.drawable.ic_self_marker_bearing)
+    }
 
     val options = LocationComponentActivationOptions.builder(context, style)
         .useDefaultLocationEngine(true)
-        .locationComponentOptions(markerOptions)
+        .locationComponentOptions(markerOptionsBuilder.build())
         .build()
     map.locationComponent.activateLocationComponent(options)
     safeEnableLocation(map)
 }
+
+private const val SELF_FOREGROUND_IMAGE = "omnitak-self-milstd-foreground"
 
 @SuppressLint("MissingPermission")
 private fun safeEnableLocation(map: org.maplibre.android.maps.MapLibreMap) {
