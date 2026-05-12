@@ -5,7 +5,9 @@ import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.PorterDuff
 import android.graphics.PorterDuffColorFilter
+import android.util.Log
 import androidx.core.content.ContextCompat
+import org.maplibre.android.annotations.Icon
 import org.maplibre.android.annotations.IconFactory
 import org.maplibre.android.annotations.Marker
 import org.maplibre.android.annotations.MarkerOptions
@@ -14,6 +16,7 @@ import org.maplibre.android.maps.MapLibreMap
 import soy.engindearing.omnitak.mobile.R
 import soy.engindearing.omnitak.mobile.data.CoTAffiliation
 import soy.engindearing.omnitak.mobile.data.CoTEvent
+import soy.engindearing.omnitak.mobile.data.symbology.MilStdIconCache
 
 /**
  * Renders the contacts overlay using MapLibre's Annotation API
@@ -33,19 +36,27 @@ import soy.engindearing.omnitak.mobile.data.CoTEvent
  * across the same drivers — same path LocationComponent uses for
  * its foreground self-marker.
  *
- * Affiliation-to-color mapping follows the ATAK palette:
- *   friend → green, hostile → red, neutral → yellow, unknown → purple.
+ * Each contact's [CoTEvent.type] resolves to a MIL-STD-2525 SIDC via
+ * [MilStdIconCache], which loads the matching SVG from
+ * `assets/milstd/`. The pre-Phase-B tinted-dot path remains as a
+ * runtime fallback — if the SVG pipeline throws (asset missing,
+ * AndroidSVG parse error, OEM GL quirk), markers degrade gracefully
+ * to a coloured dot keyed off affiliation, matching the prior
+ * visual.
  */
 object ContactLayer {
+    private const val TAG = "ContactLayer"
+
     private val markers = mutableMapOf<String, Marker>()
-    private var iconFriend: org.maplibre.android.annotations.Icon? = null
-    private var iconHostile: org.maplibre.android.annotations.Icon? = null
-    private var iconNeutral: org.maplibre.android.annotations.Icon? = null
-    private var iconUnknown: org.maplibre.android.annotations.Icon? = null
+
+    // Affiliation-coloured fallback icons. Populated lazily on first
+    // tinted-dot draw — only happens when the SVG pipeline fails.
+    private var fallbackFriend: Icon? = null
+    private var fallbackHostile: Icon? = null
+    private var fallbackNeutral: Icon? = null
+    private var fallbackUnknown: Icon? = null
 
     fun update(map: MapLibreMap, context: Context, contacts: Collection<CoTEvent>) {
-        ensureIcons(context)
-
         // Build a UID set for quick membership checks.
         val incomingByUid = contacts.associateBy { it.uid }
 
@@ -60,25 +71,26 @@ object ContactLayer {
         contacts.forEach { c ->
             val existing = markers[c.uid]
             val ll = LatLng(c.lat, c.lon)
+            val icon = iconFor(context, c)
             if (existing == null) {
                 val marker = map.addMarker(
                     MarkerOptions()
                         .position(ll)
                         .title(c.callsign ?: c.uid)
-                        .icon(iconFor(c.affiliation))
+                        .icon(icon)
                 )
                 markers[c.uid] = marker
             } else {
                 // Position may have moved (live PPLI). Re-add to
                 // refresh — Marker's `position` setter doesn't
                 // always trigger a redraw on 11.x.
-                if (existing.position != ll || existing.icon != iconFor(c.affiliation)) {
+                if (existing.position != ll || existing.icon != icon) {
                     map.removeMarker(existing)
                     val marker = map.addMarker(
                         MarkerOptions()
                             .position(ll)
                             .title(c.callsign ?: c.uid)
-                            .icon(iconFor(c.affiliation))
+                            .icon(icon)
                     )
                     markers[c.uid] = marker
                 }
@@ -86,22 +98,32 @@ object ContactLayer {
         }
     }
 
-    private fun ensureIcons(context: Context) {
-        if (iconFriend != null) return
-        val factory = IconFactory.getInstance(context)
-        iconFriend = factory.fromBitmap(tintedDot(context, 0xFF4ADE80.toInt()))
-        iconHostile = factory.fromBitmap(tintedDot(context, 0xFFF44336.toInt()))
-        iconNeutral = factory.fromBitmap(tintedDot(context, 0xFFFFC107.toInt()))
-        iconUnknown = factory.fromBitmap(tintedDot(context, 0xFFB39DDB.toInt()))
+    private fun iconFor(context: Context, contact: CoTEvent): Icon =
+        try {
+            MilStdIconCache.iconFor(context, contact.type)
+        } catch (t: Throwable) {
+            Log.w(TAG, "MIL-STD icon resolution failed for ${contact.type}; using affiliation fallback", t)
+            fallbackIconFor(context, contact.affiliation)
+        }
+
+    private fun fallbackIconFor(context: Context, affiliation: CoTAffiliation): Icon {
+        ensureFallbackIcons(context)
+        return when (affiliation) {
+            CoTAffiliation.FRIEND -> fallbackFriend!!
+            CoTAffiliation.HOSTILE -> fallbackHostile!!
+            CoTAffiliation.NEUTRAL -> fallbackNeutral!!
+            else -> fallbackUnknown!!
+        }
     }
 
-    private fun iconFor(affiliation: CoTAffiliation): org.maplibre.android.annotations.Icon =
-        when (affiliation) {
-            CoTAffiliation.FRIEND -> iconFriend!!
-            CoTAffiliation.HOSTILE -> iconHostile!!
-            CoTAffiliation.NEUTRAL -> iconNeutral!!
-            else -> iconUnknown!!
-        }
+    private fun ensureFallbackIcons(context: Context) {
+        if (fallbackFriend != null) return
+        val factory = IconFactory.getInstance(context)
+        fallbackFriend = factory.fromBitmap(tintedDot(context, 0xFF4ADE80.toInt()))
+        fallbackHostile = factory.fromBitmap(tintedDot(context, 0xFFF44336.toInt()))
+        fallbackNeutral = factory.fromBitmap(tintedDot(context, 0xFFFFC107.toInt()))
+        fallbackUnknown = factory.fromBitmap(tintedDot(context, 0xFFB39DDB.toInt()))
+    }
 
     private fun tintedDot(context: Context, colorArgb: Int): Bitmap {
         val drawable = ContextCompat.getDrawable(context, R.drawable.ic_contact_dot)!!.mutate()

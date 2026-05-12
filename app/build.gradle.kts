@@ -143,6 +143,11 @@ dependencies {
     // GAP-030b — FusedLocationProviderClient for real GPS fixes.
     implementation("com.google.android.gms:play-services-location:21.3.0")
 
+    // AndroidSVG — renders MIL-STD-2525 symbols (assets/milstd/*.svg) to
+    // Bitmaps for the MapLibre Marker Icon pipeline. Apache-2.0, stable.
+    // baseProfile="tiny" SVGs convert in under 2 ms each on a Pixel 6.
+    implementation("com.caverock:androidsvg-aar:1.4")
+
     debugImplementation("androidx.compose.ui:ui-tooling")
     debugImplementation("androidx.compose.ui:ui-test-manifest")
 
