@@ -61,6 +61,11 @@ data class UserPrefs(
     val aircraftVisible: Boolean = true,
     val contactsVisible: Boolean = true,
     val followMeActive: Boolean = false,
+    /** Render self-position as a MIL-STD-2525 friendly-combat frame.
+     *  When false, falls back to the legacy `ic_self_marker` tinted disc.
+     *  Default true so the operator's own pip reads as part of the same
+     *  tactical iconography as friendly contact markers. */
+    val useMilStdSelfSymbol: Boolean = true,
 )
 
 class UserPrefsStore(private val context: Context) {
@@ -82,6 +87,7 @@ class UserPrefsStore(private val context: Context) {
     private val KEY_AIRCRAFT_VIS = booleanPreferencesKey("aircraft_visible")
     private val KEY_CONTACTS_VIS = booleanPreferencesKey("contacts_visible")
     private val KEY_FOLLOW_ME = booleanPreferencesKey("follow_me_active")
+    private val KEY_MIL_STD_SELF = booleanPreferencesKey("use_milstd_self_symbol")
 
     val prefs: Flow<UserPrefs> = context.userPrefsDataStore.data.map { p -> readFrom(p) }
 
@@ -105,6 +111,7 @@ class UserPrefsStore(private val context: Context) {
             p[KEY_AIRCRAFT_VIS] = next.aircraftVisible
             p[KEY_CONTACTS_VIS] = next.contactsVisible
             p[KEY_FOLLOW_ME] = next.followMeActive
+            p[KEY_MIL_STD_SELF] = next.useMilStdSelfSymbol
         }
     }
 
@@ -140,5 +147,6 @@ class UserPrefsStore(private val context: Context) {
         aircraftVisible = p[KEY_AIRCRAFT_VIS] ?: true,
         contactsVisible = p[KEY_CONTACTS_VIS] ?: true,
         followMeActive = p[KEY_FOLLOW_ME] ?: false,
+        useMilStdSelfSymbol = p[KEY_MIL_STD_SELF] ?: true,
     )
 }

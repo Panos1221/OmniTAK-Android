@@ -220,6 +220,7 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
             panTarget = panTarget,
             panTargetTick = panTargetTick,
             followMeActive = followMeActive,
+            useMilStdSelfSymbol = userPrefs.useMilStdSelfSymbol,
         )
 
         Column(

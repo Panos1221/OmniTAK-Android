@@ -63,6 +63,10 @@ fun TacticalMap(
     panTarget: LatLng? = null,
     panTargetTick: Int = 0,
     followMeActive: Boolean = false,
+    /** Render self-position with the MIL-STD-2525 friendly-combat
+     *  frame. When false, falls back to the legacy `ic_self_marker`
+     *  tinted disc. Sourced from [soy.engindearing.omnitak.mobile.data.UserPrefs.useMilStdSelfSymbol]. */
+    useMilStdSelfSymbol: Boolean = true,
     onCameraIdle: ((LatLng, Double) -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
@@ -95,7 +99,7 @@ fun TacticalMap(
                     currentGridCenter?.let { GridLayer.update(map, it) }
                     AircraftLayer.update(map, currentAircraft)
                     if (currentLocationEnabled) {
-                        activateLocation(map, style, context)
+                        activateLocation(map, style, context, useMilStdSelfSymbol)
                     }
                 }
                 map.uiSettings.apply {
@@ -169,7 +173,7 @@ fun TacticalMap(
             mapView.getMapAsync { map ->
                 val style = map.style
                 if (style != null && !map.locationComponent.isLocationComponentActivated) {
-                    activateLocation(map, style, context)
+                    activateLocation(map, style, context, useMilStdSelfSymbol)
                 }
                 if (map.locationComponent.isLocationComponentActivated) {
                     safeEnableLocation(map)
@@ -362,18 +366,21 @@ private fun activateLocation(
     map: org.maplibre.android.maps.MapLibreMap,
     style: Style,
     context: android.content.Context,
+    useMilStdSelfSymbol: Boolean,
 ) {
-    // Self-position marker rendered as a MIL-STD-2525 friendly combat
-    // ground symbol (a-f-G-U-C → SFGPUC------) so the operator's own
-    // pip reads as part of the same tactical iconography as friendly
-    // markers. Falls back to the legacy tinted-disc drawable if the
-    // SVG pipeline can't produce a bitmap (missing asset, AndroidSVG
-    // parse failure, OEM GL quirk).
-    //
-    // TODO(task #6): add a UserPrefs toggle so operators can revert
-    // to the tinted-disc style if they prefer it.
-    val selfBitmap = soy.engindearing.omnitak.mobile.data.symbology.MilStdIconCache
-        .bitmapFor(context, cotType = "a-f-G-U-C", sizePx = 96)
+    // Self-position marker. When [useMilStdSelfSymbol] is true (default),
+    // render with a MIL-STD-2525 friendly combat ground symbol
+    // (a-f-G-U-C → SFGPUC------) so the operator's own pip reads as part
+    // of the same tactical iconography as friendly markers. Otherwise
+    // — or when the SVG pipeline can't produce a bitmap (missing asset,
+    // AndroidSVG parse failure, OEM GL quirk) — fall back to the legacy
+    // tinted-disc drawable.
+    val selfBitmap: android.graphics.Bitmap? = if (useMilStdSelfSymbol) {
+        soy.engindearing.omnitak.mobile.data.symbology.MilStdIconCache
+            .bitmapFor(context, cotType = "a-f-G-U-C", sizePx = 96)
+    } else {
+        null
+    }
 
     val markerOptionsBuilder = LocationComponentOptions.builder(context)
         .pulseEnabled(true)
