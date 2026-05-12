@@ -32,6 +32,14 @@ class OmniTAKApp : Application() {
 
     override fun onCreate() {
         super.onCreate()
+
+        // Load the canonical CoT-type → SIDC catalogue from
+        // assets/cot_types.json. Silent failure keeps the hardcoded
+        // floor active so the map still renders if the asset is
+        // missing or corrupt.
+        soy.engindearing.omnitak.mobile.data.symbology.MilStdIconService
+            .loadFromAssets(this)
+
         // Sideload data-package zips dropped into <files-dir>/import/.
         // Touches `serverManager` (and through it `userPrefsStore`,
         // `certVault`), so kicking it off here also wakes those lazies.

@@ -1,14 +1,20 @@
 package soy.engindearing.omnitak.mobile.data.symbology
 
+import android.content.Context
+import android.util.Log
+import kotlinx.serialization.json.Json
+
 /**
  * Maps CoT types to MIL-STD-2525 SIDC codes and resolves the SVG
  * asset path for the matching symbol.
  *
  * Mirrors the iOS `MilStdIconService` so both platforms agree on
- * which SIDC any given CoT type renders as. The hardcoded catalogue
- * here is a Phase A floor that matches the current iOS list verbatim;
- * Phase C replaces it with a YAML load from the shared canonical
- * `cot_types.yaml` so the two platforms can't drift.
+ * which SIDC any given CoT type renders as. The hardcoded floor here
+ * is what tests assert against and what the app uses when no broader
+ * catalogue has been loaded. The full ~108-entry catalogue lives in
+ * `assets/cot_types.json` (Phase C) and is installed at app startup
+ * via [loadFromAssets] — same file is mirrored verbatim into the iOS
+ * bundle so neither platform drifts.
  *
  * ## Lookup rules
  * 1. Exact match on the full CoT type.
@@ -21,8 +27,13 @@ package soy.engindearing.omnitak.mobile.data.symbology
  */
 object MilStdIconService {
 
+    private const val TAG = "MilStdIconService"
+
     /** SVG asset directory under `app/src/main/assets/`. */
     private const val ASSETS_DIR = "milstd"
+
+    /** Filename of the canonical catalogue under `app/src/main/assets/`. */
+    private const val CATALOG_ASSET = "cot_types.json"
 
     private val fallbackSidc: Map<Affiliation, String> = mapOf(
         Affiliation.FRIENDLY to "SFGPU------",
@@ -31,7 +42,13 @@ object MilStdIconService {
         Affiliation.UNKNOWN to "SUGPU------",
     )
 
-    private val defaultDefinitions: List<CoTTypeDefinition> = listOf(
+    /**
+     * Hardcoded floor — what tests assert against and what the app
+     * uses when no broader catalogue has been loaded. Matches the
+     * iOS hardcoded list verbatim so the contract holds even when
+     * the JSON catalogue is missing or unreadable.
+     */
+    private val hardcodedFloor: List<CoTTypeDefinition> = listOf(
         // Friendly Ground Units
         CoTTypeDefinition("a-f-G-U", "SFGPU------.svg", "Friendly Ground - Generic", "Generic friendly marker", "friendly"),
         CoTTypeDefinition("a-f-G-U-C-I", "SFGPUCI----.svg", "Friendly Infantry", "Friendly ground infantry unit", "friendly"),
@@ -73,11 +90,62 @@ object MilStdIconService {
         CoTTypeDefinition("a-u-A", "SUA---------.svg", "Unknown Air", "Unknown aircraft", "unknown"),
     )
 
-    private val cotTypeMap: Map<String, CoTTypeDefinition> =
-        defaultDefinitions.associateBy { it.value }
+    /**
+     * Active catalogue. Starts at the hardcoded floor; [load] replaces
+     * the contents at startup with the JSON-parsed catalogue. Reads
+     * are lock-free; the [load] swap is a single volatile assignment.
+     */
+    @Volatile
+    private var activeDefinitions: List<CoTTypeDefinition> = hardcodedFloor
 
-    private val sidcToCotMap: Map<String, CoTTypeDefinition> =
-        defaultDefinitions.associateBy { it.sidcCode }
+    @Volatile
+    private var cotTypeMap: Map<String, CoTTypeDefinition> =
+        hardcodedFloor.associateBy { it.value }
+
+    @Volatile
+    private var sidcToCotMap: Map<String, CoTTypeDefinition> =
+        hardcodedFloor.associateBy { it.sidcCode }
+
+    private val json = Json { ignoreUnknownKeys = true }
+
+    /**
+     * Replace the active catalogue. Call once at app startup with the
+     * full Phase C list. Subsequent calls overwrite — tests can pass
+     * an empty list to reset to the floor explicitly.
+     */
+    fun load(definitions: List<CoTTypeDefinition>) {
+        // Layer over the hardcoded floor — anything in the JSON wins,
+        // but a test or partial catalogue can't accidentally lose the
+        // entries the rest of the app depends on.
+        val merged = LinkedHashMap<String, CoTTypeDefinition>()
+        hardcodedFloor.forEach { merged[it.value] = it }
+        definitions.forEach { merged[it.value] = it }
+        val finalList = merged.values.toList()
+        activeDefinitions = finalList
+        cotTypeMap = finalList.associateBy { it.value }
+        sidcToCotMap = finalList.associateBy { it.sidcCode }
+    }
+
+    /**
+     * Parse `assets/cot_types.json` and call [load]. Call once from
+     * `Application.onCreate`. Silent on missing/unreadable asset —
+     * the hardcoded floor stays active. Returns the number of
+     * entries actually loaded so the caller can log.
+     */
+    fun loadFromAssets(context: Context): Int {
+        return try {
+            context.assets.open(CATALOG_ASSET).use { stream ->
+                val text = stream.bufferedReader().readText()
+                val parsed = json.decodeFromString<List<CoTTypeDefinition>>(text)
+                load(parsed)
+                Log.i(TAG, "loaded ${parsed.size} CoT type definitions from $CATALOG_ASSET")
+                parsed.size
+            }
+        } catch (t: Throwable) {
+            Log.w(TAG, "failed to load $CATALOG_ASSET; staying on hardcoded floor (${hardcodedFloor.size})", t)
+            0
+        }
+    }
 
     /**
      * Resolve the SIDC code for a CoT type. Exact match → progressive
@@ -115,10 +183,10 @@ object MilStdIconService {
     fun getBattleDimension(cotType: String): BattleDimension =
         BattleDimension.fromCotType(cotType)
 
-    /** Every definition in the catalogue, in insertion order. */
-    fun getAllDefinitions(): List<CoTTypeDefinition> = defaultDefinitions
+    /** Every definition in the active catalogue. */
+    fun getAllDefinitions(): List<CoTTypeDefinition> = activeDefinitions
 
     /** Definitions filtered by affiliation, in catalogue order. */
     fun getDefinitions(forAffiliation: Affiliation): List<CoTTypeDefinition> =
-        defaultDefinitions.filter { it.affiliation == forAffiliation }
+        activeDefinitions.filter { it.affiliation == forAffiliation }
 }

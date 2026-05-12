@@ -200,9 +200,59 @@ class MilStdIconServiceTest {
 
     @Test
     fun `unknown UAS multirotor falls back to unknown air via truncation`() {
-        // a-u-A-M-H-Q (Remote ID drone classification) isn't catalogued
-        // verbatim yet, but a-u-A is — should truncate to it, not the
-        // generic unknown-ground default.
+        // a-u-A-M-H-Q (Remote ID drone classification) isn't in the
+        // hardcoded floor verbatim, but a-u-A is — should truncate to
+        // it, not the generic unknown-ground default. After Phase C's
+        // catalogue loads at runtime, this same input resolves to the
+        // catalogue entry SUAPMHQ----- directly.
         assertEquals("SUA---------", MilStdIconService.getSidc("a-u-A-M-H-Q"))
+    }
+
+    // ---- Phase C — runtime catalogue replacement ------------------------
+
+    @Test
+    fun `load merges over hardcoded floor without losing baseline entries`() {
+        val extra = CoTTypeDefinition(
+            value = "a-f-G-U-C-E",
+            sidc = "SFGPUCE----.svg",
+            label = "Friendly Engineer",
+            description = "Friendly combat engineer unit",
+            category = "friendly",
+        )
+        try {
+            MilStdIconService.load(listOf(extra))
+
+            // New entry takes effect.
+            assertEquals("SFGPUCE----", MilStdIconService.getSidc("a-f-G-U-C-E"))
+            assertEquals("Friendly Engineer", MilStdIconService.getDefinition("a-f-G-U-C-E")?.label)
+
+            // Hardcoded baseline entry still resolves — load() must not
+            // wipe the floor, only layer over it.
+            assertEquals("SFGPUCI----", MilStdIconService.getSidc("a-f-G-U-C-I"))
+            assertNotNull(MilStdIconService.getDefinition("a-u-A"))
+        } finally {
+            // Reset the singleton state for other tests in the suite.
+            MilStdIconService.load(emptyList())
+        }
+    }
+
+    @Test
+    fun `load with overriding entry replaces the floor mapping for that cot type`() {
+        val override = CoTTypeDefinition(
+            value = "a-u-A-M-H-Q",
+            sidc = "SUAPMHQ----.svg",
+            label = "Unknown UAS Multirotor",
+            description = "Phase C catalogue entry",
+            category = "unknown",
+        )
+        try {
+            MilStdIconService.load(listOf(override))
+
+            // Phase C catalogue entry wins over the truncation fallback.
+            assertEquals("SUAPMHQ----", MilStdIconService.getSidc("a-u-A-M-H-Q"))
+            assertEquals("Phase C catalogue entry", MilStdIconService.getDefinition("a-u-A-M-H-Q")?.description)
+        } finally {
+            MilStdIconService.load(emptyList())
+        }
     }
 }

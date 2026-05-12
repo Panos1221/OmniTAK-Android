@@ -1,17 +1,18 @@
 package soy.engindearing.omnitak.mobile.ui
 
-import android.app.UiAutomation
+import android.Manifest
 import androidx.test.core.app.ActivityScenario
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
+import androidx.test.rule.GrantPermissionRule
 import androidx.test.uiautomator.UiDevice
 import org.junit.Assert.assertTrue
+import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import soy.engindearing.omnitak.mobile.MainActivity
 import soy.engindearing.omnitak.mobile.OmniTAKApp
 import soy.engindearing.omnitak.mobile.data.CoTEvent
-import java.io.File
 
 /**
  * Phase E (Phase B gate) — visual validation that ContactLayer
@@ -30,6 +31,15 @@ import java.io.File
  */
 @RunWith(AndroidJUnit4::class)
 class SymbologyValidationTest {
+
+    // Pre-grant the runtime location permission so MapScreen renders
+    // the map UI directly instead of stalling on the system permission
+    // sheet (which would block the screenshot capture).
+    @get:Rule
+    val permissionRule: GrantPermissionRule = GrantPermissionRule.grant(
+        Manifest.permission.ACCESS_FINE_LOCATION,
+        Manifest.permission.ACCESS_COARSE_LOCATION,
+    )
 
     /**
      * Nine sample contacts spanning the SIDC families that exist in
@@ -82,11 +92,34 @@ class SymbologyValidationTest {
             // Give MapLibre a beat to swap in the new markers.
             Thread.sleep(2500)
 
-            val outDir = File("/sdcard/Pictures/omnitak").apply { mkdirs() }
-            val outFile = File(outDir, "phase-b-symbology.png")
-            val captured = device.takeScreenshot(outFile)
-            assertTrue("UiDevice.takeScreenshot() returned false — screenshot not written to ${outFile.absolutePath}", captured)
-            assertTrue("screenshot file empty: ${outFile.absolutePath}", outFile.length() > 0)
+            // Use `screencap` via the UiAutomation shell channel rather
+            // than `UiDevice.takeScreenshot(File)` — shell runs outside
+            // scoped storage so the PNG survives the post-test app
+            // uninstall that AGP performs by default. Path is stable
+            // for `adb pull` from the host.
+            //
+            // We have to drain the PFD to wait for screencap to finish
+            // — `executeShellCommand` is async and the PFD's read side
+            // only closes when the shell process exits.
+            val outPath = "/sdcard/Download/phase-c-symbology.png"
+            instrumentation.uiAutomation.executeShellCommand("screencap -p $outPath").let { pfd ->
+                java.io.FileInputStream(pfd.fileDescriptor).use { it.readBytes() }
+                pfd.close()
+            }
+            println("symbology screenshot → $outPath")
+
+            // Verify the file landed and isn't empty. Read size via
+            // shell `wc -c` because the test process itself can't see
+            // /sdcard/Download/ under scoped storage.
+            val sizeOut = instrumentation.uiAutomation
+                .executeShellCommand("wc -c $outPath")
+                .let { pfd ->
+                    val s = java.io.FileInputStream(pfd.fileDescriptor).bufferedReader().use { it.readText() }
+                    pfd.close()
+                    s
+                }
+            val sizeBytes = sizeOut.trim().split(Regex("\\s+")).firstOrNull()?.toLongOrNull() ?: 0L
+            assertTrue("screencap produced an empty/missing file at $outPath (wc -c: '${sizeOut.trim()}')", sizeBytes > 1024)
         }
     }
 }
