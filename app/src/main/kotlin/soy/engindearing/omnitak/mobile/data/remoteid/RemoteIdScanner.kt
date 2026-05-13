@@ -11,6 +11,7 @@ import android.bluetooth.le.ScanResult
 import android.bluetooth.le.ScanSettings
 import android.content.Context
 import android.content.pm.PackageManager
+import android.os.Build
 import android.os.ParcelUuid
 import android.util.Log
 import androidx.core.content.ContextCompat
@@ -117,11 +118,17 @@ class RemoteIdScanner(
             return false
         }
 
-        val filters = listOf(
-            ScanFilter.Builder()
-                .setServiceUuid(SERVICE_UUID)
-                .build()
-        )
+        // No ScanFilter: ASTM F3411 carries 0xFFFA only in Service Data
+        // (AD type 0x16), and Android's setServiceUuid() filters on the
+        // Service Class UUID list (AD types 0x02/0x03) which the spec
+        // doesn't populate. setServiceData(uuid, null, null) is the
+        // documented match for service-data UUIDs but at least one
+        // common Mediatek BLE driver (TCL 30 SE / API 30) silently
+        // drops every callback when that filter is set, even for adv
+        // that clearly carry the UUID. Empty filter list + an in-code
+        // check on getServiceData(SERVICE_UUID) gives us a portable
+        // path that works across chipsets at modest battery cost.
+        val filters = emptyList<ScanFilter>()
 
         // Low-latency for proper aircraft tracking. BT5 extended adv
         // is opt-in: setLegacy(false) lets us see Mavic 3-class
@@ -129,7 +136,7 @@ class RemoteIdScanner(
         // Legacy advertisements automatically.
         val settings = ScanSettings.Builder()
             .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
-            .setLegacy(false)
+            .setLegacy(true)
             .build()
 
         return try {
@@ -220,9 +227,15 @@ class RemoteIdScanner(
 
     private fun hasScanPermission(context: Context): Boolean {
         // BLUETOOTH_SCAN is the Android-12+ runtime permission for BLE
-        // scanning. Pre-12 falls back to ACCESS_FINE_LOCATION (granted
-        // alongside the LocationComponent activation).
-        return ContextCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_SCAN) ==
+        // scanning. Pre-12 needs ACCESS_FINE_LOCATION instead — the
+        // BLUETOOTH_SCAN permission doesn't exist as a runtime grant on
+        // those releases and checkSelfPermission always returns DENIED.
+        val needed = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            Manifest.permission.BLUETOOTH_SCAN
+        } else {
+            Manifest.permission.ACCESS_FINE_LOCATION
+        }
+        return ContextCompat.checkSelfPermission(context, needed) ==
             PackageManager.PERMISSION_GRANTED
     }
 }

@@ -1,5 +1,11 @@
 package soy.engindearing.omnitak.mobile.ui.screens
 
+import android.Manifest
+import android.content.pm.PackageManager
+import android.os.Build
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.content.ContextCompat
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -214,9 +220,50 @@ fun SettingsScreen() {
                         style = MaterialTheme.typography.bodySmall,
                     )
                 }
+                val context = LocalContext.current
+                val needsRuntimePerm = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
+                var scanPermGranted by remember {
+                    mutableStateOf(
+                        !needsRuntimePerm ||
+                            ContextCompat.checkSelfPermission(
+                                context, Manifest.permission.BLUETOOTH_SCAN,
+                            ) == PackageManager.PERMISSION_GRANTED
+                    )
+                }
+                val permLauncher = rememberLauncherForActivityResult(
+                    ActivityResultContracts.RequestMultiplePermissions(),
+                ) { result ->
+                    val ok = result[Manifest.permission.BLUETOOTH_SCAN] == true
+                    scanPermGranted = ok
+                    if (ok) {
+                        // Pref is already true (user just toggled), but the
+                        // scanner-lifecycle flow won't re-fire start() without
+                        // a distinct change — kick it directly now that perms
+                        // are in hand.
+                        app.remoteIdScanner.start()
+                    } else {
+                        // User denied — undo the optimistic pref flip so the
+                        // Switch reflects reality.
+                        mutate { it.copy(remoteIdScanEnabled = false) }
+                    }
+                }
                 Switch(
-                    checked = prefs.remoteIdScanEnabled,
-                    onCheckedChange = { v -> mutate { it.copy(remoteIdScanEnabled = v) } },
+                    checked = prefs.remoteIdScanEnabled && scanPermGranted,
+                    onCheckedChange = { v ->
+                        if (!v) {
+                            mutate { it.copy(remoteIdScanEnabled = false) }
+                        } else if (scanPermGranted) {
+                            mutate { it.copy(remoteIdScanEnabled = true) }
+                        } else {
+                            mutate { it.copy(remoteIdScanEnabled = true) }
+                            permLauncher.launch(
+                                arrayOf(
+                                    Manifest.permission.BLUETOOTH_SCAN,
+                                    Manifest.permission.BLUETOOTH_CONNECT,
+                                )
+                            )
+                        }
+                    },
                 )
             }
 

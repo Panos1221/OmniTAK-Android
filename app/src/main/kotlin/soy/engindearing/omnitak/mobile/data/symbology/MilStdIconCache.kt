@@ -29,7 +29,7 @@ import java.io.IOException
 object MilStdIconCache {
 
     private const val TAG = "MilStdIconCache"
-    private const val DEFAULT_SIZE_PX = 96
+    private const val DEFAULT_SIZE_PX = 64
 
     private data class Key(val sidc: String, val sizePx: Int)
 
