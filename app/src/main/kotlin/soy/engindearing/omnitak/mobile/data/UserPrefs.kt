@@ -66,6 +66,11 @@ data class UserPrefs(
      *  Default true so the operator's own pip reads as part of the same
      *  tactical iconography as friendly contact markers. */
     val useMilStdSelfSymbol: Boolean = true,
+    /** Run the FAA Remote ID BLE scanner. When on, drones broadcasting
+     *  OpenDroneID (DJI Mavic family, Skydio, Autel, etc.) within range
+     *  appear on the map as unknown-air UAS contacts. Default off — opt-in
+     *  because BLE scanning has a battery cost. */
+    val remoteIdScanEnabled: Boolean = false,
 )
 
 class UserPrefsStore(private val context: Context) {
@@ -88,6 +93,7 @@ class UserPrefsStore(private val context: Context) {
     private val KEY_CONTACTS_VIS = booleanPreferencesKey("contacts_visible")
     private val KEY_FOLLOW_ME = booleanPreferencesKey("follow_me_active")
     private val KEY_MIL_STD_SELF = booleanPreferencesKey("use_milstd_self_symbol")
+    private val KEY_REMOTE_ID_SCAN = booleanPreferencesKey("remote_id_scan_enabled")
 
     val prefs: Flow<UserPrefs> = context.userPrefsDataStore.data.map { p -> readFrom(p) }
 
@@ -112,6 +118,7 @@ class UserPrefsStore(private val context: Context) {
             p[KEY_CONTACTS_VIS] = next.contactsVisible
             p[KEY_FOLLOW_ME] = next.followMeActive
             p[KEY_MIL_STD_SELF] = next.useMilStdSelfSymbol
+            p[KEY_REMOTE_ID_SCAN] = next.remoteIdScanEnabled
         }
     }
 
@@ -148,5 +155,6 @@ class UserPrefsStore(private val context: Context) {
         contactsVisible = p[KEY_CONTACTS_VIS] ?: true,
         followMeActive = p[KEY_FOLLOW_ME] ?: false,
         useMilStdSelfSymbol = p[KEY_MIL_STD_SELF] ?: true,
+        remoteIdScanEnabled = p[KEY_REMOTE_ID_SCAN] ?: false,
     )
 }

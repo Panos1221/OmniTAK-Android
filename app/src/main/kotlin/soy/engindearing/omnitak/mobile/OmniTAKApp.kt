@@ -83,6 +83,45 @@ class OmniTAKApp : Application() {
                 }
             }
         }
+
+        // Phase 2 of the gy6 plan — FAA Remote ID BLE scanner.
+        // Lifecycle is driven by `remoteIdScanEnabled` so operators can
+        // opt out of the always-on BLE scan (battery cost). When a
+        // drone broadcasts OpenDroneID, its track flows scanner →
+        // RemoteIdTrackStore → RemoteIdToCoTConverter → ContactStore,
+        // and ContactLayer renders it with the SUAPMHQ---- multirotor
+        // or SUAPMFQ---- fixed-wing symbol that Phase D's catalogue
+        // provides.
+        appScope.launch {
+            userPrefsStore.prefs
+                .map { it.remoteIdScanEnabled }
+                .distinctUntilChanged()
+                .collect { enabled ->
+                    if (enabled) {
+                        remoteIdScanner.start()
+                    } else {
+                        remoteIdScanner.stop()
+                    }
+                }
+        }
+        appScope.launch {
+            remoteIdScanner.trackUpdates.collect { changedIds ->
+                for (uasId in changedIds) {
+                    val track = remoteIdScanner.tracks.firstOrNull { it.uasId == uasId }
+                    if (track == null) {
+                        // Stale-purged track: drop the marker so the map
+                        // stops showing a ghost.
+                        contactStore.remove(
+                            "RID-$uasId",
+                        )
+                    } else {
+                        soy.engindearing.omnitak.mobile.data.remoteid.RemoteIdToCoTConverter
+                            .toCoT(track)
+                            ?.let { contactStore.ingest(it) }
+                    }
+                }
+            }
+        }
     }
 
     // Application-scoped singletons. Screens reach these via
@@ -154,6 +193,12 @@ class OmniTAKApp : Application() {
     }
     val meshDeviceConfigStore: MeshDeviceConfigStore by lazy { MeshDeviceConfigStore(this) }
     val userPrefsStore: UserPrefsStore by lazy { UserPrefsStore(this) }
+
+    /** FAA Remote ID BLE scanner (Phase 2 of the gy6 plan). Starts/stops
+     *  from a coroutine in [onCreate] driven by `remoteIdScanEnabled`. */
+    val remoteIdScanner: soy.engindearing.omnitak.mobile.data.remoteid.RemoteIdScanner by lazy {
+        soy.engindearing.omnitak.mobile.data.remoteid.RemoteIdScanner(this)
+    }
     val certVault: CertVault by lazy { CertVault(this) }
     val locationProvider: LocationProvider by lazy { LocationProvider(this) }
     val serverManager: ServerManager by lazy {
