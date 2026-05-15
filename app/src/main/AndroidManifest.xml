@@ -92,5 +92,20 @@
             android:name=".domain.TAKConnectionService"
             android:exported="false"
             android:foregroundServiceType="dataSync" />
+
+        <!-- Issue #16 — FileProvider for lasso exports (KML / Mission
+             Package zip) so we can hand them to the system share sheet
+             via Intent.EXTRA_STREAM. Paths declared in
+             res/xml/file_paths.xml; only the externalCacheDir/exports
+             subdir is exposed. -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
     </application>
 </manifest>

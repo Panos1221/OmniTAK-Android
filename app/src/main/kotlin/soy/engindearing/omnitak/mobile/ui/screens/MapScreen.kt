@@ -45,8 +45,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.platform.LocalContext
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import org.maplibre.android.geometry.LatLng
 import soy.engindearing.omnitak.mobile.OmniTAKApp
 import soy.engindearing.omnitak.mobile.data.CoTAffiliation
@@ -158,6 +160,8 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
     val lassoService = remember { soy.engindearing.omnitak.mobile.domain.LassoSelectionService.shared }
     val lassoSelection by lassoService.current.collectAsState()
     var lassoActionsOpen by remember { mutableStateOf(false) }
+    var contactPickerOpen by remember { mutableStateOf(false) }
+    val appContext = LocalContext.current.applicationContext
     // Observe activation requests via a generation counter — every
     // increment means "user picked Lasso Select again." We track the
     // last value we honored so we only flip lassoMode on a fresh
@@ -256,6 +260,28 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
         // marker layers (the Android equivalent of the iOS
         // CAShapeLayer fix). Inert when `active = false` — pan/zoom
         // continue to land on TacticalMap.
+        // Drawing → LassoDrawing adapter. Drawing.id is a String (TAK
+        // UID style); LassoDrawing.id is UUID for parity with the iOS
+        // service shape. We project the string onto a deterministic
+        // UUID via nameUUIDFromBytes so the same drawing always maps
+        // to the same UUID across recompositions and we can reverse
+        // the mapping during bulk delete.
+        val lassoDrawingIdMap = remember(drawings) {
+            drawings.associate {
+                java.util.UUID.nameUUIDFromBytes(it.id.toByteArray()) to it.id
+            }
+        }
+        val lassoDrawings = remember(drawings) {
+            drawings.map { d ->
+                soy.engindearing.omnitak.mobile.domain.LassoDrawing(
+                    id = java.util.UUID.nameUUIDFromBytes(d.id.toByteArray()),
+                    coordinates = d.points.map { (lat, lon) ->
+                        soy.engindearing.omnitak.mobile.domain.LassoLatLng(latitude = lat, longitude = lon)
+                    },
+                )
+            }
+        }
+
         soy.engindearing.omnitak.mobile.ui.components.LassoOverlay(
             active = lassoMode,
             mapboxMap = mapboxMap,
@@ -268,10 +294,7 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
                     ),
                 )
             },
-            // Drawings are deferred to a follow-up pass — Android
-            // drawing model has its own coord shapes we'd need to
-            // adapt. Markers cover the K9Blue SAR ask for v1.
-            drawings = emptyList(),
+            drawings = lassoDrawings,
             onCompleted = { lassoMode = false },
             onCancelled = { lassoMode = false },
         )
@@ -292,36 +315,156 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
             }
         }
         if (lassoActionsOpen) {
+            // Resolve the selection's UIDs back to the live CoTEvent
+            // objects in the contact store. Filters out anything
+            // that's already been removed since the lasso closed.
+            val selectedEvents = lassoSelection.markerIDs.mapNotNull { contacts[it] }
+
             soy.engindearing.omnitak.mobile.ui.components.LassoActionsSheet(
                 selectionCount = lassoSelection.totalCount,
                 onDismiss = { lassoActionsOpen = false },
                 onAddToDataPackage = {
                     lassoActionsOpen = false
-                    toast("Add to Data Package — wiring next build (${lassoSelection.totalCount} staged)")
+                    if (selectedEvents.isEmpty()) {
+                        toast("Selection is empty")
+                    } else {
+                        val ctx = appContext
+                        scope.launch {
+                            val file = withContext(Dispatchers.IO) {
+                                soy.engindearing.omnitak.mobile.domain.LassoExporters.writeMissionPackage(
+                                    context = ctx,
+                                    name = "Lasso selection (${selectedEvents.size})",
+                                    events = selectedEvents,
+                                )
+                            }
+                            val shared = soy.engindearing.omnitak.mobile.domain.LassoExporters.shareFile(
+                                context = ctx,
+                                file = file,
+                                mimeType = "application/zip",
+                                title = "Lasso data package",
+                            )
+                            toast(
+                                if (shared) "Mission package built · share sheet open"
+                                else "Saved package to ${file.parentFile?.name}/${file.name}"
+                            )
+                        }
+                    }
                 },
                 onExportKML = {
                     lassoActionsOpen = false
-                    toast("Export as KML — coming next build (${lassoSelection.totalCount} staged)")
+                    if (selectedEvents.isEmpty()) {
+                        toast("Selection is empty")
+                    } else {
+                        val ctx = appContext
+                        scope.launch {
+                            val file = withContext(Dispatchers.IO) {
+                                soy.engindearing.omnitak.mobile.domain.LassoExporters.writeKml(
+                                    context = ctx,
+                                    name = "Lasso selection (${selectedEvents.size})",
+                                    events = selectedEvents,
+                                )
+                            }
+                            val shared = soy.engindearing.omnitak.mobile.domain.LassoExporters.shareFile(
+                                context = ctx,
+                                file = file,
+                                mimeType = "application/vnd.google-earth.kml+xml",
+                                title = "Lasso KML",
+                            )
+                            toast(
+                                if (shared) "KML built · share sheet open"
+                                else "Saved KML to ${file.parentFile?.name}/${file.name}"
+                            )
+                        }
+                    }
                 },
                 onSendToContacts = {
                     lassoActionsOpen = false
-                    toast("Send to Contacts — picker UX next build (${lassoSelection.totalCount} staged)")
+                    if (selectedEvents.isEmpty()) {
+                        toast("Selection is empty")
+                    } else {
+                        contactPickerOpen = true
+                    }
                 },
                 onBulkDelete = {
                     val n = lassoSelection.totalCount
-                    // Walk each selected marker UID through the
-                    // contact store. drawingIDs are no-op on Android
-                    // for now (no drawing-selection wiring yet).
-                    lassoSelection.markerIDs.forEach { uid ->
-                        app.contactStore.remove(uid)
+                    val mySelfUid = userPrefs.callsign.takeIf { it.isNotBlank() }
+                    val selfFixUid = selfFix?.let { "OMNI-${userPrefs.callsign}" }
+                    val targetEvents = selectedEvents
+                    // Self-marker guard: never accidentally delete our
+                    // own CoT — that would propagate "delete me" to
+                    // every peer.
+                    val protected = setOfNotNull(mySelfUid, selfFixUid)
+                    val toRemove = targetEvents.filterNot { it.uid in protected }
+
+                    // 1) Local removal — ContactStore is the source of
+                    //    truth for the map renderer; drop them
+                    //    immediately so the operator sees the result.
+                    toRemove.forEach { app.contactStore.remove(it.uid) }
+                    // 2) Drawings: project selection UUIDs back to the
+                    //    drawing.id String via the side-map built when
+                    //    we adapted Drawings → LassoDrawings.
+                    val deletedDrawings = lassoSelection.drawingIDs
+                        .mapNotNull { lassoDrawingIdMap[it] }
+                    deletedDrawings.forEach { app.drawingStore.remove(it) }
+                    // 3) Broadcast — for each deleted marker, fire a
+                    //    t-x-d-d tombstone on the active server so
+                    //    other EUDs propagate the removal. Best-effort:
+                    //    if the connection is down the local removal
+                    //    still stands.
+                    scope.launch {
+                        val senderUid = mySelfUid ?: "OMNI-${java.util.UUID.randomUUID()}"
+                        toRemove.forEach { e ->
+                            val xml = soy.engindearing.omnitak.mobile.domain.CotBuilders
+                                .buildDeleteEvent(targetUid = e.uid, senderUid = senderUid)
+                            runCatching { app.serverManager.sendCoT(xml) }
+                        }
                     }
                     lassoService.clear()
                     lassoActionsOpen = false
-                    toast("Deleted $n item(s)")
+                    val drawingNote = if (deletedDrawings.isNotEmpty())
+                        " + ${deletedDrawings.size} drawing(s)" else ""
+                    toast(
+                        if (toRemove.size == targetEvents.size)
+                            "Deleted ${toRemove.size} marker(s)$drawingNote + broadcast"
+                        else
+                            "Deleted ${toRemove.size}/$n (self skipped)$drawingNote"
+                    )
                 },
                 onClear = {
                     lassoService.clear()
                     lassoActionsOpen = false
+                },
+            )
+        }
+        if (contactPickerOpen) {
+            // Snapshot the events the lasso captured AND the rest of
+            // ContactStore so the picker has someone to send TO. We
+            // exclude the selection itself — sending markers to
+            // themselves makes no sense.
+            val selected = lassoSelection.markerIDs
+            soy.engindearing.omnitak.mobile.ui.components.ContactPickerDialog(
+                title = "Send ${lassoSelection.totalCount} item(s) to…",
+                candidates = contacts.values.toList(),
+                excludeUids = selected,
+                onDismiss = { contactPickerOpen = false },
+                onConfirm = { destUids ->
+                    contactPickerOpen = false
+                    if (destUids.isEmpty()) {
+                        toast("No recipients selected")
+                        return@ContactPickerDialog
+                    }
+                    val selectedEvents = selected.mapNotNull { contacts[it] }
+                    scope.launch {
+                        var sent = 0
+                        selectedEvents.forEach { e ->
+                            val xml = soy.engindearing.omnitak.mobile.domain.CotBuilders
+                                .rebuildEvent(e, destUids.toList())
+                            if (runCatching { app.serverManager.sendCoT(xml) }
+                                    .getOrDefault(false)
+                            ) sent++
+                        }
+                        toast("Sent $sent/${selectedEvents.size} → ${destUids.size} recipient(s)")
+                    }
                 },
             )
         }

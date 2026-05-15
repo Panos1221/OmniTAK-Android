@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  FileProvider paths for the lasso exporters (issue #16) and any
+  future "save then share" flow. Currently exposes the app's
+  externalCacheDir/exports subdirectory so .kml / .zip files dropped
+  by LassoExporters can be handed off to the system share sheet via
+  Intent.EXTRA_STREAM URIs.
+
+  Keep paths conservative — we only ever want to expose explicit
+  export outputs, never the whole app sandbox.
+-->
+<paths>
+    <external-cache-path
+        name="exports"
+        path="exports/" />
+    <cache-path
+        name="cache_exports"
+        path="exports/" />
+</paths>
