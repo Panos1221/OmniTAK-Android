@@ -147,6 +147,33 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
     val snackbar = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
 
+    // Issue #16 — Lasso freehand multi-select.
+    // The MapLibreMap reference is captured via TacticalMap.onMapReady
+    // so the lasso overlay can project screen pixels to LatLng on
+    // drag end. lassoMode is flipped on by the Tools popup → service
+    // event; it flips back automatically when LassoOverlay reports
+    // the gesture completed (commits selection on the service).
+    var lassoMode by remember { mutableStateOf(false) }
+    var mapboxMap by remember { mutableStateOf<org.maplibre.android.maps.MapLibreMap?>(null) }
+    val lassoService = remember { soy.engindearing.omnitak.mobile.domain.LassoSelectionService.shared }
+    val lassoSelection by lassoService.current.collectAsState()
+    var lassoActionsOpen by remember { mutableStateOf(false) }
+    // Observe activation requests via a generation counter — every
+    // increment means "user picked Lasso Select again." We track the
+    // last value we honored so we only flip lassoMode on a fresh
+    // edge. StateFlow keeps the latest value alive across MapScreen
+    // recompositions, so an emission that lands before the collector
+    // subscribed still gets applied as soon as we observe it.
+    val activationGen by lassoService.activationGeneration.collectAsState()
+    var lastHonoredGen by remember { mutableStateOf(activationGen) }
+    LaunchedEffect(activationGen) {
+        if (activationGen != lastHonoredGen) {
+            lastHonoredGen = activationGen
+            // Skip the initial "0" baseline — only react to real increments.
+            if (activationGen > 0L) lassoMode = true
+        }
+    }
+
     fun toast(msg: String) {
         scope.launch { snackbar.showSnackbar(msg, withDismissAction = true) }
     }
@@ -170,6 +197,7 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
             onCameraIdle = { target, zoom ->
                 app.mapCameraStore.update(target.latitude, target.longitude, zoom)
             },
+            onMapReady = { map -> mapboxMap = map },
             // GAP-101 / GAP-107 — react to the basemap selection from Settings.
             // WMTS_CUSTOM uses the operator-pasted XYZ tile URL.
             styleJson = styleJsonForProvider(userPrefs.mapProvider, userPrefs.customTileUrl),
@@ -222,6 +250,81 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
             followMeActive = followMeActive,
             useMilStdSelfSymbol = userPrefs.useMilStdSelfSymbol,
         )
+
+        // Issue #16 — lasso freehand multi-select overlay. Renders
+        // ABOVE the map so the dashed orange path stays on top of
+        // marker layers (the Android equivalent of the iOS
+        // CAShapeLayer fix). Inert when `active = false` — pan/zoom
+        // continue to land on TacticalMap.
+        soy.engindearing.omnitak.mobile.ui.components.LassoOverlay(
+            active = lassoMode,
+            mapboxMap = mapboxMap,
+            markers = (contacts.values).map { c ->
+                soy.engindearing.omnitak.mobile.domain.LassoMarker(
+                    id = c.uid,
+                    coordinate = soy.engindearing.omnitak.mobile.domain.LassoLatLng(
+                        latitude = c.lat,
+                        longitude = c.lon,
+                    ),
+                )
+            },
+            // Drawings are deferred to a follow-up pass — Android
+            // drawing model has its own coord shapes we'd need to
+            // adapt. Markers cover the K9Blue SAR ask for v1.
+            drawings = emptyList(),
+            onCompleted = { lassoMode = false },
+            onCancelled = { lassoMode = false },
+        )
+
+        // Issue #16 — selection pill. Surfaces "N selected" whenever
+        // there's an active lasso selection. Tap → action sheet.
+        if (lassoSelection.totalCount > 0) {
+            androidx.compose.foundation.layout.Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(top = 90.dp, end = 16.dp),
+                contentAlignment = Alignment.TopEnd,
+            ) {
+                soy.engindearing.omnitak.mobile.ui.components.LassoSelectionPill(
+                    count = lassoSelection.totalCount,
+                    onShowActions = { lassoActionsOpen = true },
+                )
+            }
+        }
+        if (lassoActionsOpen) {
+            soy.engindearing.omnitak.mobile.ui.components.LassoActionsSheet(
+                selectionCount = lassoSelection.totalCount,
+                onDismiss = { lassoActionsOpen = false },
+                onAddToDataPackage = {
+                    lassoActionsOpen = false
+                    toast("Add to Data Package — wiring next build (${lassoSelection.totalCount} staged)")
+                },
+                onExportKML = {
+                    lassoActionsOpen = false
+                    toast("Export as KML — coming next build (${lassoSelection.totalCount} staged)")
+                },
+                onSendToContacts = {
+                    lassoActionsOpen = false
+                    toast("Send to Contacts — picker UX next build (${lassoSelection.totalCount} staged)")
+                },
+                onBulkDelete = {
+                    val n = lassoSelection.totalCount
+                    // Walk each selected marker UID through the
+                    // contact store. drawingIDs are no-op on Android
+                    // for now (no drawing-selection wiring yet).
+                    lassoSelection.markerIDs.forEach { uid ->
+                        app.contactStore.remove(uid)
+                    }
+                    lassoService.clear()
+                    lassoActionsOpen = false
+                    toast("Deleted $n item(s)")
+                },
+                onClear = {
+                    lassoService.clear()
+                    lassoActionsOpen = false
+                },
+            )
+        }
 
         Column(
             modifier = Modifier

@@ -68,6 +68,10 @@ fun TacticalMap(
      *  tinted disc. Sourced from [soy.engindearing.omnitak.mobile.data.UserPrefs.useMilStdSelfSymbol]. */
     useMilStdSelfSymbol: Boolean = true,
     onCameraIdle: ((LatLng, Double) -> Unit)? = null,
+    /** Fired once the MapLibre map is ready. Issue #16 — lasso uses
+     *  this to grab the [MapLibreMap] reference for screen↔geo
+     *  projection during freehand selection. */
+    onMapReady: ((org.maplibre.android.maps.MapLibreMap) -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -82,12 +86,17 @@ fun TacticalMap(
     val currentGridCenter by rememberUpdatedState(gridCenter)
     val currentAircraft by rememberUpdatedState(aircraft)
     val currentCameraIdle by rememberUpdatedState(onCameraIdle)
+    val currentMapReady by rememberUpdatedState(onMapReady)
 
     val mapView = remember {
         MapLibre.getInstance(context)
         MapView(context).apply {
             onCreate(null)
             getMapAsync { map ->
+                // Issue #16 — hand the map reference up to the caller
+                // so things like the lasso overlay can call
+                // map.projection.fromScreenLocation during drags.
+                currentMapReady?.invoke(map)
                 map.cameraPosition = CameraPosition.Builder()
                     .target(initialCenter)
                     .zoom(initialZoom)

@@ -1,0 +1,135 @@
+package soy.engindearing.omnitak.mobile.ui.components
+
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.filled.Apps
+import androidx.compose.material.icons.filled.Build
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.Text
+import androidx.compose.material3.rememberModalBottomSheetState
+import androidx.compose.runtime.Composable
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+
+/**
+ * Tools tab popup — mirrors the iOS ToolsLauncherSheet. A short
+ * Material 3 ModalBottomSheet anchored at the bottom edge so the
+ * underlying map (or whichever tab the user was on) stays visible
+ * behind it. Two rows:
+ *
+ *   1. **Lasso Select** — marquee entry per K9Blue SAR feedback.
+ *      Tap routes to the map and starts freehand multi-select mode.
+ *   2. **Full Tools…** — placeholder for the full tools grid that
+ *      will mirror the iOS ATAKToolsView once we wire the Android
+ *      equivalent. Tapping it surfaces a snackbar via the parent.
+ *
+ * The sheet's container color matches the LiquidGlassNavBar tactical
+ * dark surface so the popup reads as part of the same chrome family.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun ToolsLauncherSheet(
+    onLasso: () -> Unit,
+    onFullTools: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val sheet = rememberModalBottomSheetState()
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheet,
+        containerColor = Color(0xFF0F1115),
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(bottom = 24.dp),
+        ) {
+            ToolsRow(
+                icon = { Icon(Icons.Filled.Build, contentDescription = null, tint = Color(0xFFFF9500)) },
+                title = "Lasso Select",
+                subtitle = "Long-press + drag on the map to multi-select features",
+                onClick = onLasso,
+            )
+
+            HorizontalDivider(
+                modifier = Modifier.padding(start = 76.dp),
+                color = Color.White.copy(alpha = 0.08f),
+            )
+
+            ToolsRow(
+                icon = { Icon(Icons.Filled.Apps, contentDescription = null, tint = Color.White.copy(alpha = 0.55f)) },
+                title = "Full Tools…",
+                subtitle = "Drawing, Measure, CASEVAC, Routes, and more",
+                onClick = onFullTools,
+            )
+        }
+    }
+}
+
+@Composable
+private fun ToolsRow(
+    icon: @Composable () -> Unit,
+    title: String,
+    subtitle: String,
+    onClick: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(horizontal = 20.dp, vertical = 14.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(0.dp),
+    ) {
+        Box(
+            modifier = Modifier
+                .size(36.dp)
+                .clip(RoundedCornerShape(10.dp))
+                .background(Color.White.copy(alpha = 0.06f)),
+            contentAlignment = Alignment.Center,
+        ) {
+            icon()
+        }
+        Spacer(Modifier.width(14.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                title,
+                color = Color.White,
+                fontSize = 17.sp,
+                style = MaterialTheme.typography.titleMedium,
+            )
+            Spacer(Modifier.size(2.dp))
+            Text(
+                subtitle,
+                color = Color.White.copy(alpha = 0.6f),
+                fontSize = 13.sp,
+                style = MaterialTheme.typography.bodySmall,
+            )
+        }
+        Icon(
+            Icons.AutoMirrored.Filled.KeyboardArrowRight,
+            contentDescription = null,
+            tint = Color.White.copy(alpha = 0.4f),
+        )
+    }
+}
