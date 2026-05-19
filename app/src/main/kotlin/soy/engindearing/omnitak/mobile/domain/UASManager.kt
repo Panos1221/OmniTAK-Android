@@ -1,7 +1,9 @@
 package soy.engindearing.omnitak.mobile.domain
 
 import android.util.Log
+import io.dronefleet.mavlink.common.FollowTarget
 import io.dronefleet.mavlink.common.MavCmd
+import io.dronefleet.mavlink.minimal.MavAutopilot
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -13,6 +15,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import soy.engindearing.omnitak.mobile.data.SelfFix
 import soy.engindearing.omnitak.mobile.data.uas.AltFrame
 import soy.engindearing.omnitak.mobile.data.uas.CruiseAltitude
 import soy.engindearing.omnitak.mobile.data.uas.DroneState
@@ -40,6 +43,10 @@ import soy.engindearing.omnitak.mobile.data.uas.WaypointMission
 class UASManager(
     private val sendCoT: suspend (String) -> Boolean,
     private val terrain: TerrainSampler = TerrainSampler(),
+    /** Operator's own position — used by Follow-Me to tell the drone
+     *  where to track. Defaults to "no fix" so Follow-Me cleanly errors
+     *  out in tests that don't wire a real LocationProvider. */
+    private val operatorFix: () -> SelfFix? = { null },
 ) {
     private val mavlink = MavlinkConnection()
     val state: StateFlow<DroneState> = mavlink.state
@@ -74,6 +81,10 @@ class UASManager(
     private var scope: CoroutineScope? = null
     private var cotPumpJob: Job? = null
     private var missionExecWatcherJob: Job? = null
+    private var followMeJob: Job? = null
+
+    private val _followMeActive = MutableStateFlow(false)
+    val followMeActive: StateFlow<Boolean> = _followMeActive.asStateFlow()
 
     private var droneUid: String = CotBuilders.newUid()
     private var droneCallsign: String = "OmniTAK-UAS"
@@ -112,9 +123,12 @@ class UASManager(
     fun disconnect() {
         cotPumpJob?.cancel()
         missionExecWatcherJob?.cancel()
+        followMeJob?.cancel()
         scope?.cancel()
         cotPumpJob = null
         missionExecWatcherJob = null
+        followMeJob = null
+        _followMeActive.value = false
         scope = null
         mavlink.disconnect()
     }
@@ -146,7 +160,100 @@ class UASManager(
 
     /** Return To Launch. Drone climbs to RTL altitude, returns to home, lands. */
     suspend fun returnToLaunch() {
+        // Don't keep streaming Follow-Me after the operator hits RTL —
+        // the drone should head home, not chase the operator further.
+        if (_followMeActive.value) stopFollowMe()
         mavlink.sendCommand(MavCmd.MAV_CMD_NAV_RETURN_TO_LAUNCH)
+    }
+
+    // ------------------------------------------------------------- Follow-Me
+
+    sealed interface FollowMeResult {
+        object Started : FollowMeResult
+        object NoGpsFix : FollowMeResult
+        object NotConnected : FollowMeResult
+        data class AutopilotNotSupported(val autopilot: String?) : FollowMeResult
+    }
+
+    /**
+     * Engage Follow-Me: drone tracks the operator's GPS at the cruise
+     * altitude offset. Streams MAVLink FOLLOW_TARGET (#144) at 1 Hz so
+     * the autopilot keeps a fresh position fix on us.
+     *
+     * Today: PX4 only. The autopilot switches to AUTO.FOLLOW_TARGET
+     * (main=4, sub=8) and uses FOLLOW_TARGET.alt + the FLW_TGT_HT param
+     * to set follow height. We add the operator's [CruiseAltitude]
+     * (treated as meters above operator) onto the position we send, so
+     * the drone flies at operator_alt + cruise_meters (give or take
+     * PX4's default FLW_TGT_HT of ~8 m — negligible vs typical cruise).
+     *
+     * ArduPilot Copter has a FOLLOW mode (custom_mode=23) but uses a
+     * different position source (GCS heartbeat / FOLL_OFS params) —
+     * fast-follow.
+     */
+    suspend fun startFollowMe(): FollowMeResult {
+        val st = state.value
+        if (!st.isConnected()) return FollowMeResult.NotConnected
+        if (operatorFix() == null) return FollowMeResult.NoGpsFix
+        if (st.autopilot != MavAutopilot.MAV_AUTOPILOT_PX4.name) {
+            return FollowMeResult.AutopilotNotSupported(st.autopilot)
+        }
+
+        // 1. SET_MODE → AUTO.FOLLOW_TARGET (PX4: main=4, sub=8).
+        mavlink.sendCommand(
+            MavCmd.MAV_CMD_DO_SET_MODE,
+            p1 = 1f /* MAV_MODE_FLAG_CUSTOM_MODE_ENABLED */,
+            p2 = 4f /* PX4 main: AUTO */,
+            p3 = 8f /* PX4 sub: FOLLOW_TARGET */,
+        )
+
+        // 2. Spin the 1 Hz streamer.
+        followMeJob?.cancel()
+        followMeJob = scope?.launch {
+            while (isActive) {
+                val fix = operatorFix()
+                if (fix != null) sendFollowTarget(fix)
+                delay(1_000)
+            }
+        }
+        _followMeActive.value = true
+        Log.i(TAG, "Follow-Me ENGAGED (PX4 AUTO.FOLLOW_TARGET, cruise=${_cruiseAlt.value.meters}m ${_cruiseAlt.value.frame})")
+        return FollowMeResult.Started
+    }
+
+    /** Disengage Follow-Me. Stops the streamer and parks the drone in
+     *  AUTO.LOITER so it just hovers in place instead of falling out of
+     *  the sky waiting for the next FOLLOW_TARGET. */
+    suspend fun stopFollowMe() {
+        followMeJob?.cancel()
+        followMeJob = null
+        _followMeActive.value = false
+        if (state.value.isConnected()) {
+            // PX4 AUTO.LOITER = main 4, sub 3.
+            mavlink.sendCommand(
+                MavCmd.MAV_CMD_DO_SET_MODE,
+                p1 = 1f, p2 = 4f, p3 = 3f,
+            )
+        }
+        Log.i(TAG, "Follow-Me DISENGAGED")
+    }
+
+    private suspend fun sendFollowTarget(fix: SelfFix) {
+        val cruise = _cruiseAlt.value
+        // Operator is at fix.altitudeM MSL; offset by cruise (treated
+        // as meters above operator regardless of frame in this context
+        // — the operator's HUD reads "follow X m above me").
+        val targetAltMsl = fix.altitudeM + cruise.meters
+        val msg = FollowTarget.builder()
+            .timestamp(java.math.BigInteger.valueOf(System.currentTimeMillis()))
+            .estCapabilities(1) // bit 0 = position
+            .lat((fix.lat * 1e7).toInt())
+            .lon((fix.lon * 1e7).toInt())
+            .alt(targetAltMsl.toFloat())
+            .customState(java.math.BigInteger.ZERO)
+            .build()
+        runCatching { mavlink.send(msg) }
+            .onFailure { Log.w(TAG, "FOLLOW_TARGET send failed: ${it.message}") }
     }
 
     /**
@@ -235,6 +342,19 @@ class UASManager(
         }
         missionStore.setPhase(MissionPhase.UPLOADED)
         if (autoStart) {
+            // Apply mission-wide cruise speed if any waypoint overrode
+            // it — first override wins. Mid-mission speed changes need
+            // interleaved DO_CHANGE_SPEED items (fast-follow).
+            val speedOverride = waypoints.firstNotNullOfOrNull { it.speedMps }
+            if (speedOverride != null) {
+                mavlink.sendCommand(
+                    MavCmd.MAV_CMD_DO_CHANGE_SPEED,
+                    p1 = 1f /* ground speed */,
+                    p2 = speedOverride,
+                    p3 = -1f /* throttle = no change */,
+                    p4 = 0f,
+                )
+            }
             mavlink.sendCommand(MavCmd.MAV_CMD_MISSION_START)
             missionStore.setPhase(MissionPhase.STARTED)
         }

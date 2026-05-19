@@ -222,6 +222,7 @@ class OmniTAKApp : Application() {
     val uasManager: soy.engindearing.omnitak.mobile.domain.UASManager by lazy {
         soy.engindearing.omnitak.mobile.domain.UASManager(
             sendCoT = { xml -> serverManager.sendCoT(xml) },
+            operatorFix = { locationProvider.fix.value },
         )
     }
 

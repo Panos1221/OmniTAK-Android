@@ -333,10 +333,13 @@ class MavlinkConnection {
 
     // ---------------------------------------------------------- mission protocol
 
-    /** Send raw payload to the connected drone (caller built the struct).
-     *  Always runs on Dispatchers.IO so callers can invoke from any
-     *  context (Main / Compose scope / etc.) without
-     *  NetworkOnMainThreadException. */
+    /** Send any MAVLink payload to the connected drone (caller built
+     *  the struct). Used by mission upload, Follow-Me streaming, and
+     *  any other path that pushes non-COMMAND_LONG messages. Always
+     *  runs on Dispatchers.IO so callers can invoke from Main /
+     *  Compose without NetworkOnMainThreadException. */
+    suspend fun send(payload: Any) = sendRaw(payload)
+
     private suspend fun sendRaw(payload: Any) = withContext(Dispatchers.IO) {
         when (transport) {
             Transport.UDP -> {

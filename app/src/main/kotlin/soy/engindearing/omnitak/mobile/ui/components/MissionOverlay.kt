@@ -2,6 +2,7 @@ package soy.engindearing.omnitak.mobile.ui.components
 
 import android.graphics.PointF
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.offset
@@ -46,6 +47,7 @@ import soy.engindearing.omnitak.mobile.data.uas.WaypointMission
 fun MissionOverlay(
     mission: WaypointMission,
     mapboxMap: MapLibreMap?,
+    onWaypointClick: (Int) -> Unit = {},
 ) {
     val map = mapboxMap
     if (mission.isEmpty || map == null) return
@@ -81,28 +83,67 @@ fun MissionOverlay(
             }
         }
 
-        // 2. Numbered pins.
+        // 2. Numbered pins. Tap a pin → edit sheet for that waypoint.
+        //    Pin is 36dp clickable area so the tap target meets Material
+        //    minimums even though the visual is 28dp.
         screenPts.forEachIndexed { idx, pt ->
             val xDp = with(density) { pt.x.toDp() }
             val yDp = with(density) { pt.y.toDp() }
             val reached = idx <= mission.currentSeq && mission.phase == MissionPhase.STARTED
+            val wp = mission.waypoints[idx]
+            val hasOverride = wp.altMslMeters > 0.0 || wp.speedMps != null
             Box(
                 modifier = Modifier
-                    .offset(x = xDp - 14.dp, y = yDp - 14.dp)
-                    .size(28.dp)
+                    .offset(x = xDp - 18.dp, y = yDp - 18.dp)
+                    .size(36.dp)
                     .clip(CircleShape)
-                    .background(
-                        if (reached) Color(0xFFFFC107) else Color(0xFF00E5FF)
-                    ),
+                    .clickable { onWaypointClick(idx) },
                 contentAlignment = Alignment.Center,
             ) {
-                Text(
-                    text = "${idx + 1}",
-                    color = Color.Black,
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 13.sp,
-                    fontFamily = FontFamily.Monospace,
-                )
+                Box(
+                    modifier = Modifier
+                        .size(28.dp)
+                        .clip(CircleShape)
+                        // Slightly different fill when overridden so the
+                        // operator can tell at a glance which waypoints
+                        // have non-default alt/speed.
+                        .background(
+                            when {
+                                reached -> Color(0xFFFFC107)
+                                hasOverride -> Color(0xFFB388FF) // lavender
+                                else -> Color(0xFF00E5FF)
+                            }
+                        ),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        text = "${idx + 1}",
+                        color = Color.Black,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 13.sp,
+                        fontFamily = FontFamily.Monospace,
+                    )
+                }
+            }
+            // Altitude badge under the pin when overridden.
+            if (hasOverride) {
+                val altLabel = if (wp.altMslMeters > 0.0) "${wp.altMslMeters.toInt()}m" else "spd"
+                Box(
+                    modifier = Modifier
+                        .offset(x = xDp - 20.dp, y = yDp + 18.dp)
+                        .size(width = 40.dp, height = 16.dp)
+                        .clip(androidx.compose.foundation.shape.RoundedCornerShape(8.dp))
+                        .background(Color.Black.copy(alpha = 0.75f)),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        text = altLabel,
+                        color = Color(0xFFB388FF),
+                        fontSize = 10.sp,
+                        fontFamily = FontFamily.Monospace,
+                        fontWeight = FontWeight.Bold,
+                    )
+                }
             }
         }
     }

@@ -137,6 +137,11 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
     // banner's Done button and entered via Tools → "Add UAS Waypoints".
     var missionMode by remember { mutableStateOf(false) }
     val mission by app.uasManager.mission.collectAsState()
+    // Index of the waypoint currently being edited (tap a pin to open
+    // the WaypointEditSheet). null = no sheet. Lives at function scope
+    // because both onMapSingleTap (hit-test) and the sheet itself need
+    // to see/mutate it.
+    var editingWaypointIndex by remember { mutableStateOf<Int?>(null) }
     var measurementPoints by remember { mutableStateOf<List<LatLng>>(emptyList()) }
     var drawingKind by remember { mutableStateOf<DrawingKind?>(null) }
     var drawingPoints by remember { mutableStateOf<List<LatLng>>(emptyList()) }
@@ -234,7 +239,25 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
                 editingMarker = event
                 markerSheetLatLng = LatLng(event.lat, event.lon)
             },
-            onMapSingleTap = { latLng ->
+            onMapSingleTap = onMapSingleTap@ { latLng ->
+                // Hit-test existing mission waypoints first so a tap on
+                // a pin opens its edit sheet instead of adding a new
+                // waypoint on top of it. ~80 m radius covers both
+                // missionMode (adding) and view-only modes — pins are
+                // 28dp visual, but operator GPS-tap accuracy isn't
+                // pixel-perfect on a moving thumb.
+                val waypoints = app.uasManager.mission.value.waypoints
+                val hitIdx = waypoints.indexOfFirst { wp ->
+                    val dLat = wp.latDeg - latLng.latitude
+                    val dLon = wp.lonDeg - latLng.longitude
+                    val metersPerDegLat = 111_320.0
+                    val metersPerDegLon = 111_320.0 * kotlin.math.cos(Math.toRadians(latLng.latitude))
+                    kotlin.math.hypot(dLat * metersPerDegLat, dLon * metersPerDegLon) < 80.0
+                }
+                if (hitIdx >= 0) {
+                    editingWaypointIndex = hitIdx
+                    return@onMapSingleTap true
+                }
                 when {
                     missionMode -> {
                         app.uasManager.missionStore.addWaypoint(latLng.latitude, latLng.longitude)
@@ -313,10 +336,27 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
         soy.engindearing.omnitak.mobile.ui.components.MissionOverlay(
             mission = mission,
             mapboxMap = mapboxMap,
+            onWaypointClick = { idx -> editingWaypointIndex = idx },
         )
+        editingWaypointIndex?.let { idx ->
+            mission.waypoints.getOrNull(idx)?.let { wp ->
+                val homeMsl = droneState.altMslMeters ?: 0.0
+                val cruise = app.uasManager.cruiseAlt.value
+                val cruiseMsl = cruise.toMsl(homeMsl)
+                soy.engindearing.omnitak.mobile.ui.components.WaypointEditSheet(
+                    index = idx,
+                    waypoint = wp,
+                    cruiseHintMsl = cruiseMsl,
+                    onApply = { updated -> app.uasManager.missionStore.updateWaypoint(idx, updated) },
+                    onDelete = { app.uasManager.missionStore.removeWaypoint(idx) },
+                    onDismiss = { editingWaypointIndex = null },
+                )
+            }
+        }
 
-        // -------- UAS cruise altitude pill (top-right, when UAS connected) --------
+        // -------- UAS HUD: cruise altitude pill + Follow-Me toggle --------
         val cruiseAlt by app.uasManager.cruiseAlt.collectAsState()
+        val followActive by app.uasManager.followMeActive.collectAsState()
         var altSheetOpen by remember { mutableStateOf(false) }
         if (droneState.isConnected()) {
             androidx.compose.foundation.layout.Box(
@@ -325,10 +365,39 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
                     .padding(top = 90.dp, end = 12.dp),
                 contentAlignment = Alignment.TopEnd,
             ) {
-                soy.engindearing.omnitak.mobile.ui.components.UasAltitudePill(
-                    cruise = cruiseAlt,
-                    onClick = { altSheetOpen = true },
-                )
+                androidx.compose.foundation.layout.Column(
+                    horizontalAlignment = Alignment.End,
+                    verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(6.dp),
+                ) {
+                    soy.engindearing.omnitak.mobile.ui.components.UasAltitudePill(
+                        cruise = cruiseAlt,
+                        onClick = { altSheetOpen = true },
+                    )
+                    soy.engindearing.omnitak.mobile.ui.components.UasFollowMePill(
+                        active = followActive,
+                        onToggle = {
+                            scope.launch {
+                                if (followActive) {
+                                    app.uasManager.stopFollowMe()
+                                    toast("Follow-Me OFF — drone parked in LOITER")
+                                } else {
+                                    val r = app.uasManager.startFollowMe()
+                                    val msg = when (r) {
+                                        soy.engindearing.omnitak.mobile.domain.UASManager.FollowMeResult.Started ->
+                                            "Following you at ${cruiseAlt.meters.toInt()} m above"
+                                        soy.engindearing.omnitak.mobile.domain.UASManager.FollowMeResult.NoGpsFix ->
+                                            "Need your GPS fix first — open the map a moment"
+                                        soy.engindearing.omnitak.mobile.domain.UASManager.FollowMeResult.NotConnected ->
+                                            "UAS link down"
+                                        is soy.engindearing.omnitak.mobile.domain.UASManager.FollowMeResult.AutopilotNotSupported ->
+                                            "Follow-Me requires PX4 (autopilot=${r.autopilot ?: "unknown"})"
+                                    }
+                                    toast(msg)
+                                }
+                            }
+                        },
+                    )
+                }
             }
         }
         if (altSheetOpen) {
