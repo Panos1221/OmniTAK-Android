@@ -6,6 +6,15 @@ import io.dronefleet.mavlink.MavlinkMessage
 import io.dronefleet.mavlink.common.CommandLong
 import io.dronefleet.mavlink.common.GlobalPositionInt
 import io.dronefleet.mavlink.common.MavCmd
+import io.dronefleet.mavlink.common.MavFrame
+import io.dronefleet.mavlink.common.MavMissionResult
+import io.dronefleet.mavlink.common.MavMissionType
+import io.dronefleet.mavlink.common.MissionAck
+import io.dronefleet.mavlink.common.MissionClearAll
+import io.dronefleet.mavlink.common.MissionCount
+import io.dronefleet.mavlink.common.MissionItemInt
+import io.dronefleet.mavlink.common.MissionItemReached
+import io.dronefleet.mavlink.common.MissionRequestInt
 import io.dronefleet.mavlink.common.Statustext
 import io.dronefleet.mavlink.common.SysStatus
 import io.dronefleet.mavlink.minimal.Heartbeat
@@ -13,6 +22,11 @@ import io.dronefleet.mavlink.minimal.MavAutopilot
 import io.dronefleet.mavlink.minimal.MavModeFlag
 import io.dronefleet.mavlink.minimal.MavState
 import io.dronefleet.mavlink.minimal.MavType
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -55,6 +69,19 @@ class MavlinkConnection {
 
     private val _state = MutableStateFlow(DroneState())
     val state: StateFlow<DroneState> = _state.asStateFlow()
+
+    /** Stream of mission-protocol messages from the drone (REQUEST_INT, ACK)
+     *  + execution updates (MISSION_ITEM_REACHED). [uploadMission] consumes
+     *  it during the handshake; the UI's [UASManager] mission watcher
+     *  observes it for live progress. */
+    private val _missionEvents = MutableSharedFlow<MissionEvent>(extraBufferCapacity = 16)
+    val missionEvents: SharedFlow<MissionEvent> = _missionEvents.asSharedFlow()
+
+    sealed interface MissionEvent {
+        data class RequestInt(val seq: Int) : MissionEvent
+        data class Ack(val result: MavMissionResult?) : MissionEvent
+        data class ItemReached(val seq: Int) : MissionEvent
+    }
 
     private var socket: DatagramSocket? = null
     private var droneAddress: InetAddress? = null
@@ -241,8 +268,105 @@ class MavlinkConnection {
                 val line = body.text().trim(' ', ' ')
                 st.copy(recentStatusText = (st.recentStatusText + line).takeLast(8))
             }
+            is MissionRequestInt -> _missionEvents.tryEmit(MissionEvent.RequestInt(body.seq()))
+            is MissionAck -> _missionEvents.tryEmit(MissionEvent.Ack(body.type().entry()))
+            is MissionItemReached -> _missionEvents.tryEmit(MissionEvent.ItemReached(body.seq()))
             else -> { /* fast-follow: GPS_RAW_INT, BATTERY_STATUS, EXTENDED_SYS_STATE */ }
         }
+    }
+
+    // ---------------------------------------------------------- mission protocol
+
+    /** Send raw payload to the connected drone (caller built the struct).
+     *  Always runs on Dispatchers.IO so callers can invoke from any
+     *  context (Main / Compose scope / etc.) without
+     *  NetworkOnMainThreadException. */
+    private suspend fun sendRaw(payload: Any) = withContext(Dispatchers.IO) {
+        val sock = socket ?: return@withContext
+        val addr = droneAddress ?: return@withContext
+        val buf = serialize(payload)
+        try {
+            sock.send(DatagramPacket(buf, buf.size, addr, dronePort))
+        } catch (t: Throwable) {
+            Log.w(TAG, "sendRaw failed: ${t.message}")
+        }
+    }
+
+    /**
+     * Upload [waypoints] using the MAVLink mission protocol (RAS-A IOP
+     * §Mission Protocol). Returns true on ACCEPTED, false on any
+     * NACK / timeout. Caller (UASManager) is responsible for issuing
+     * MAV_CMD_MISSION_START separately to begin execution.
+     *
+     * Protocol:
+     *  1. MISSION_CLEAR_ALL — wipe whatever was on the drone before.
+     *  2. MISSION_COUNT(n) — announce upcoming items.
+     *  3. Drone replies MISSION_REQUEST_INT(seq); we reply MISSION_ITEM_INT.
+     *  4. Drone sends MISSION_ACK(MAV_MISSION_ACCEPTED) on success.
+     */
+    suspend fun uploadMission(
+        waypoints: List<Waypoint>,
+        perItemTimeoutMs: Long = 3_000,
+        ackTimeoutMs: Long = 5_000,
+    ): Boolean {
+        if (waypoints.isEmpty()) return false
+        val targetSys = _state.value.systemId ?: 1
+        val targetComp = _state.value.componentId ?: 1
+        val missionType = MavMissionType.MAV_MISSION_TYPE_MISSION
+
+        // 1. Clear prior mission.
+        sendRaw(
+            MissionClearAll.builder()
+                .targetSystem(targetSys).targetComponent(targetComp)
+                .missionType(missionType).build()
+        )
+        // 2. Announce count.
+        sendRaw(
+            MissionCount.builder()
+                .targetSystem(targetSys).targetComponent(targetComp)
+                .count(waypoints.size).missionType(missionType).build()
+        )
+        Log.i(TAG, "mission upload: ${waypoints.size} waypoint(s) → sys=$targetSys")
+
+        // 3. Serve REQUEST_INT until ACCEPTED / NACK / timeout.
+        return withTimeoutOrNull(ackTimeoutMs) {
+            var accepted = false
+            try {
+                _missionEvents.collect { ev ->
+                    when (ev) {
+                        is MissionEvent.RequestInt -> {
+                            val seq = ev.seq
+                            if (seq !in waypoints.indices) {
+                                Log.w(TAG, "drone requested out-of-range seq=$seq, abort")
+                                throw kotlinx.coroutines.CancellationException("seq-out-of-range")
+                            }
+                            val wp = waypoints[seq]
+                            val item = MissionItemInt.builder()
+                                .targetSystem(targetSys).targetComponent(targetComp)
+                                .seq(seq)
+                                .frame(MavFrame.MAV_FRAME_GLOBAL)
+                                .command(MavCmd.MAV_CMD_NAV_WAYPOINT)
+                                .current(if (seq == 0) 1 else 0)
+                                .autocontinue(1)
+                                .param1(0f).param2(2f).param3(0f).param4(Float.NaN)
+                                .x((wp.latDeg * 1e7).toInt())
+                                .y((wp.lonDeg * 1e7).toInt())
+                                .z(wp.altMslMeters.toFloat())
+                                .missionType(missionType).build()
+                            sendRaw(item)
+                        }
+                        is MissionEvent.Ack -> {
+                            accepted = ev.result == MavMissionResult.MAV_MISSION_ACCEPTED
+                            throw kotlinx.coroutines.CancellationException("ack")
+                        }
+                        else -> { /* ignore execution events during upload */ }
+                    }
+                }
+            } catch (_: kotlinx.coroutines.CancellationException) {
+                // expected stop signal
+            }
+            accepted
+        } ?: false
     }
 
     private fun decodeMode(hb: Heartbeat): String {

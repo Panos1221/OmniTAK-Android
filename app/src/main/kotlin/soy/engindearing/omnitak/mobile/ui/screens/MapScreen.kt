@@ -8,6 +8,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Brush
 import androidx.compose.material.icons.filled.Chat
+import androidx.compose.material.icons.filled.AddLocation
 import androidx.compose.material.icons.filled.FlightTakeoff
 import androidx.compose.material.icons.filled.Explore
 import androidx.compose.material.icons.filled.Flight
@@ -131,6 +132,11 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
     var zoomInTick by remember { mutableStateOf(0) }
     var zoomOutTick by remember { mutableStateOf(0) }
     var measurementActive by remember { mutableStateOf(false) }
+    // UAS waypoint-add mode — when true, taps on the map drop mission
+    // waypoints instead of any other action. Toggled from the mission
+    // banner's Done button and entered via Tools → "Add UAS Waypoints".
+    var missionMode by remember { mutableStateOf(false) }
+    val mission by app.uasManager.mission.collectAsState()
     var measurementPoints by remember { mutableStateOf<List<LatLng>>(emptyList()) }
     var drawingKind by remember { mutableStateOf<DrawingKind?>(null) }
     var drawingPoints by remember { mutableStateOf<List<LatLng>>(emptyList()) }
@@ -230,6 +236,10 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
             },
             onMapSingleTap = { latLng ->
                 when {
+                    missionMode -> {
+                        app.uasManager.missionStore.addWaypoint(latLng.latitude, latLng.longitude)
+                        true
+                    }
                     measurementActive -> {
                         measurementPoints = measurementPoints + latLng
                         true
@@ -299,6 +309,31 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
             drone = droneForMap,
             mapboxMap = mapboxMap,
         )
+
+        soy.engindearing.omnitak.mobile.ui.components.MissionOverlay(
+            mission = mission,
+            mapboxMap = mapboxMap,
+        )
+
+        if (missionMode || mission.waypoints.isNotEmpty()) {
+            androidx.compose.foundation.layout.Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(top = 90.dp),
+                contentAlignment = Alignment.TopCenter,
+            ) {
+                soy.engindearing.omnitak.mobile.ui.components.MissionBanner(
+                    missionMode = missionMode,
+                    mission = mission,
+                    onUploadAndStart = {
+                        scope.launch { app.uasManager.uploadAndStartMission() }
+                    },
+                    onUndo = { app.uasManager.missionStore.undoWaypoint() },
+                    onCancel = { app.uasManager.cancelMission() },
+                    onExitMissionMode = { missionMode = false },
+                )
+            }
+        }
 
         soy.engindearing.omnitak.mobile.ui.components.LassoOverlay(
             active = lassoMode,
@@ -639,6 +674,7 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
                 add(RadialAction("copy", Icons.Filled.LocationOn, "Copy Coords"))
                 if (uasConnected) {
                     add(RadialAction("uas_fly_here", Icons.Filled.FlightTakeoff, "Fly UAS Here"))
+                    add(RadialAction("uas_waypoint", Icons.Filled.AddLocation, "UAS Waypoint"))
                 }
                 add(RadialAction("center", Icons.Filled.Explore, "Center"))
                 add(RadialAction("add", Icons.Filled.Add, "Add"))
@@ -658,6 +694,13 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
                             app.uasManager.flyTo(ll.latitude, ll.longitude)
                         }
                         toast("UAS → ${"%.5f, %.5f".format(ll.latitude, ll.longitude)}")
+                    }
+                    "uas_waypoint" -> if (ll != null) {
+                        // Seed the mission with this waypoint AND enter
+                        // missionMode so further taps keep dropping pins.
+                        app.uasManager.missionStore.addWaypoint(ll.latitude, ll.longitude)
+                        missionMode = true
+                        toast("WP${mission.waypoints.size + 1} dropped — tap more or hit Upload")
                     }
                     else -> {
                         // Respect the operator's coordinate-format pref (Lat/Lon,

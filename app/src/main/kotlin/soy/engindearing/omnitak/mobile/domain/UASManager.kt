@@ -13,6 +13,9 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import soy.engindearing.omnitak.mobile.data.uas.DroneState
 import soy.engindearing.omnitak.mobile.data.uas.MavlinkConnection
+import soy.engindearing.omnitak.mobile.data.uas.MissionPhase
+import soy.engindearing.omnitak.mobile.data.uas.MissionStore
+import soy.engindearing.omnitak.mobile.data.uas.WaypointMission
 
 /**
  * Glue between the raw [MavlinkConnection] (UDP + framing) and the rest
@@ -35,8 +38,14 @@ class UASManager(
     private val mavlink = MavlinkConnection()
     val state: StateFlow<DroneState> = mavlink.state
 
+    /** Mission the operator is drawing / has uploaded. Single store —
+     *  multi-mission queueing is a fast-follow if it ever becomes a thing. */
+    val missionStore = MissionStore()
+    val mission: StateFlow<WaypointMission> = missionStore.state
+
     private var scope: CoroutineScope? = null
     private var cotPumpJob: Job? = null
+    private var missionExecWatcherJob: Job? = null
 
     private var droneUid: String = CotBuilders.newUid()
     private var droneCallsign: String = "OmniTAK-UAS"
@@ -67,13 +76,16 @@ class UASManager(
         val s = CoroutineScope(SupervisorJob() + Dispatchers.IO)
         scope = s
         cotPumpJob = s.launch { cotPumpLoop() }
+        missionExecWatcherJob = s.launch { missionExecWatcher() }
         Log.i(TAG, "UAS connect uid=$droneUid callsign=$droneCallsign target=$host:$port")
     }
 
     fun disconnect() {
         cotPumpJob?.cancel()
+        missionExecWatcherJob?.cancel()
         scope?.cancel()
         cotPumpJob = null
+        missionExecWatcherJob = null
         scope = null
         mavlink.disconnect()
     }
@@ -139,6 +151,54 @@ class UASManager(
             p6 = lonDeg.toFloat(),
             p7 = alt,
         )
+    }
+
+    // ------------------------------------------------------- mission upload
+
+    /**
+     * Push the current [MissionStore] waypoints to the drone using the
+     * MAVLink mission upload handshake, then optionally start execution.
+     *
+     * The [MissionStore.state] drives the UI (banner phase, current leg
+     * highlight), so we update the store at each protocol stage rather
+     * than returning a status.
+     */
+    suspend fun uploadAndStartMission(autoStart: Boolean = true) {
+        val draft = missionStore.state.value
+        if (draft.waypoints.isEmpty()) return
+        missionStore.setPhase(MissionPhase.UPLOADING)
+        // Default mission altitude: keep waypoints at the drone's current
+        // MSL altitude if they didn't specify (the draw flow doesn't yet
+        // prompt for per-waypoint altitude — fast-follow).
+        val currentAlt = state.value.altMslMeters ?: 0.0
+        val waypoints = draft.waypoints.map {
+            if (it.altMslMeters == 0.0) it.copy(altMslMeters = currentAlt) else it
+        }
+        val accepted = mavlink.uploadMission(waypoints)
+        if (!accepted) {
+            missionStore.setPhase(MissionPhase.FAILED, "drone rejected mission upload")
+            return
+        }
+        missionStore.setPhase(MissionPhase.UPLOADED)
+        if (autoStart) {
+            mavlink.sendCommand(MavCmd.MAV_CMD_MISSION_START)
+            missionStore.setPhase(MissionPhase.STARTED)
+        }
+    }
+
+    /** Cancel a draft / uploaded mission. Doesn't tell the drone — RTL
+     *  is the operator's separate decision and that wire takes a
+     *  different MAVLink path. */
+    fun cancelMission() {
+        missionStore.clear()
+    }
+
+    private suspend fun missionExecWatcher() {
+        mavlink.missionEvents.collect { ev ->
+            if (ev is MavlinkConnection.MissionEvent.ItemReached) {
+                missionStore.setCurrentSeq(ev.seq)
+            }
+        }
     }
 
     // ---------------------------------------------------------- internals
