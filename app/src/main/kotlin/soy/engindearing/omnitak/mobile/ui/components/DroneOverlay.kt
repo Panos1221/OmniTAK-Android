@@ -1,6 +1,7 @@
 package soy.engindearing.omnitak.mobile.ui.components
 
 import android.graphics.PointF
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
@@ -8,6 +9,10 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -93,6 +98,44 @@ fun DroneOverlay(
                 .clip(CircleShape)
                 .background(Color(0xFF00E5FF)),
         )
+        // Heading chevron — small black triangle pointing forward.
+        // Skip when heading is unknown (drone disarmed / no fix yet).
+        drone.headingDeg?.let { hdg ->
+            val hdgRad = Math.toRadians(hdg).toFloat()
+            val cosH = kotlin.math.cos(hdgRad.toDouble()).toFloat()
+            val sinH = kotlin.math.sin(hdgRad.toDouble()).toFloat()
+            Canvas(
+                modifier = Modifier
+                    .offset(x = xDp - 18.dp, y = yDp - 18.dp)
+                    .size(36.dp),
+            ) {
+                val cx = size.width / 2f
+                val cy = size.height / 2f
+                // Chevron coordinates in marker-local frame (north-up).
+                // Apex at (0, -14) i.e. forward, base at (-6, -4) / (6, -4).
+                fun rot(x: Float, y: Float): Offset {
+                    // y axis on screen grows downward; bearing 0° = north = -y.
+                    val nx = sinH * x + cosH * y
+                    val ny = -cosH * x + sinH * y
+                    return Offset(cx + nx, cy + ny)
+                }
+                val tip = rot(0f, -14f)
+                val left = rot(-6f, -4f)
+                val right = rot(6f, -4f)
+                val path = Path().apply {
+                    moveTo(tip.x, tip.y)
+                    lineTo(left.x, left.y)
+                    lineTo(right.x, right.y)
+                    close()
+                }
+                drawPath(path, color = Color(0xFF003D44))
+                drawPath(
+                    path,
+                    color = Color.White,
+                    style = Stroke(width = 1.5f, cap = StrokeCap.Round),
+                )
+            }
+        }
         // Callsign + altitude pill below the marker.
         val label = buildString {
             append("UAS")

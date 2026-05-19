@@ -387,6 +387,14 @@ class MavlinkConnection {
      *  Compose without NetworkOnMainThreadException. */
     suspend fun send(payload: Any) = sendRaw(payload)
 
+    /** Mutate the public [state] from outside the read loop. Used by
+     *  manager-level watchers (e.g. battery threshold synthesizer) to
+     *  inject derived data the wire wouldn't otherwise produce. Keeps
+     *  the UI's StateFlow as the single source of truth. */
+    fun injectStateUpdate(transform: (DroneState) -> DroneState) {
+        _state.update(transform)
+    }
+
     private suspend fun sendRaw(payload: Any) = withContext(Dispatchers.IO) {
         when (transport) {
             Transport.UDP -> {

@@ -83,6 +83,7 @@ class UASManager(
     private var missionExecWatcherJob: Job? = null
     private var followMeJob: Job? = null
     private var terrainSamplerJob: Job? = null
+    private var batteryWatcherJob: Job? = null
 
     /** What the drone is currently tracking. null = idle. (Named
      *  FollowSubject to avoid colliding with MAVLink's FOLLOW_TARGET
@@ -136,6 +137,7 @@ class UASManager(
         cotPumpJob = s.launch { cotPumpLoop() }
         missionExecWatcherJob = s.launch { missionExecWatcher() }
         terrainSamplerJob = s.launch { terrainSamplerLoop() }
+        batteryWatcherJob = s.launch { batteryWatcherLoop() }
         Log.i(TAG, "UAS connect uid=$droneUid callsign=$droneCallsign transport=$transport target=$host:$port")
     }
 
@@ -144,11 +146,13 @@ class UASManager(
         missionExecWatcherJob?.cancel()
         followMeJob?.cancel()
         terrainSamplerJob?.cancel()
+        batteryWatcherJob?.cancel()
         scope?.cancel()
         cotPumpJob = null
         missionExecWatcherJob = null
         followMeJob = null
         terrainSamplerJob = null
+        batteryWatcherJob = null
         _followMeActive.value = false
         _terrainBelowDroneMsl.value = null
         scope = null
@@ -437,6 +441,40 @@ class UASManager(
      *  every 5 s. Drives the HUD's "above terrain" readout. Cheap because
      *  the sampler caches tiles after the first hit and the drone usually
      *  stays in the same z=12 tile for an entire flight (~5 km × 5 km). */
+    /** Synthesize battery alerts from the SYS_STATUS percent stream:
+     *  ≤25 % → WARNING "Recommend RTL", ≤15 % → CRITICAL "RTL NOW".
+     *  Fires once per threshold cross to avoid spamming the banner. */
+    private suspend fun batteryWatcherLoop() {
+        var lastBucket = 100
+        while (scope?.isActive == true) {
+            val pct = state.value.batteryPct
+            if (pct != null) {
+                val bucket = when {
+                    pct <= 15 -> 15
+                    pct <= 25 -> 25
+                    else -> 100
+                }
+                if (bucket < lastBucket) {
+                    // Inject a synthetic alert via DroneState.latestAlert
+                    // so the existing UasAlertBanner picks it up — keeps
+                    // the rendering path uniform.
+                    val now = System.currentTimeMillis()
+                    val alert = when (bucket) {
+                        15 -> Triple(2 /* CRITICAL */, "RTL NOW — battery $pct%", now)
+                        25 -> Triple(4 /* WARNING */, "Recommend RTL — battery $pct%", now)
+                        else -> null
+                    }
+                    if (alert != null) {
+                        mavlink.injectStateUpdate { st -> st.copy(latestAlert = alert) }
+                        Log.w(TAG, "Battery alert: ${alert.second}")
+                    }
+                }
+                lastBucket = bucket
+            }
+            delay(5_000)
+        }
+    }
+
     private suspend fun terrainSamplerLoop() {
         while (scope?.isActive == true) {
             val st = state.value

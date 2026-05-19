@@ -391,6 +391,31 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
                         operator = operatorFix,
                         terrainBelowDroneMsl = terrainBelowDrone,
                     )
+                    var autoFollow by remember { mutableStateOf(false) }
+                    // Auto-follow loop — re-pans camera to drone every 2s
+                    // while toggle is on. 2s is the sweet spot: long enough
+                    // that operator-initiated map drags aren't instantly
+                    // yanked back; short enough that drone stays visible.
+                    androidx.compose.runtime.LaunchedEffect(autoFollow, droneState.latDeg, droneState.lonDeg) {
+                        if (!autoFollow) return@LaunchedEffect
+                        while (autoFollow) {
+                            val lat = droneState.latDeg
+                            val lon = droneState.lonDeg
+                            val m = mapboxMap
+                            if (lat != null && lon != null && m != null) {
+                                val pos = m.cameraPosition
+                                m.cameraPosition = org.maplibre.android.camera.CameraPosition.Builder()
+                                    .target(LatLng(lat, lon))
+                                    .zoom(pos.zoom)
+                                    .build()
+                            }
+                            kotlinx.coroutines.delay(2_000)
+                        }
+                    }
+                    soy.engindearing.omnitak.mobile.ui.components.UasAutoFollowPill(
+                        active = autoFollow,
+                        onToggle = { autoFollow = !autoFollow },
+                    )
                     soy.engindearing.omnitak.mobile.ui.components.UasFollowMePill(
                         active = followActive,
                         onToggle = {
