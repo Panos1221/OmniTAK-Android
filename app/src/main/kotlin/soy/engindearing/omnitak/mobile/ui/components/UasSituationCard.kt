@@ -75,8 +75,22 @@ fun UasSituationCard(
         text to color
     }
 
+    // GPS — "3D · 12 sat · HDOP 0.8". Coloured by quality bracket.
+    val gpsLine: Pair<String, Color>? = drone.gpsFix?.let { fix ->
+        val parts = mutableListOf(fix)
+        drone.gpsSatellites?.let { parts.add("$it sat") }
+        drone.gpsHdop?.let { parts.add("HDOP %.1f".format(it)) }
+        val color = when {
+            fix.contains("NO_FIX") -> Color(0xFFFF3B30)
+            (drone.gpsHdop ?: 0.0) > 2.0 -> Color(0xFFFFC107)
+            (drone.gpsSatellites ?: 99) < 6 -> Color(0xFFFFC107)
+            else -> Color.White
+        }
+        parts.joinToString(" · ") to color
+    }
+
     // Don't render an empty card.
-    if (distLine == null && terrainLine == null && batLine == null) return
+    if (distLine == null && terrainLine == null && batLine == null && gpsLine == null) return
 
     Box(
         modifier = modifier
@@ -88,6 +102,7 @@ fun UasSituationCard(
             distLine?.let { Line("DIST", it, Color.White) }
             terrainLine?.let { (text, c) -> Line("AGL", text, c) }
             batLine?.let { (text, c) -> Line("BAT", text, c) }
+            gpsLine?.let { (text, c) -> Line("GPS", text, c) }
         }
     }
 }

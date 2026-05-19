@@ -6,6 +6,7 @@ import io.dronefleet.mavlink.MavlinkMessage
 import io.dronefleet.mavlink.common.BatteryStatus
 import io.dronefleet.mavlink.common.CommandLong
 import io.dronefleet.mavlink.common.GlobalPositionInt
+import io.dronefleet.mavlink.common.GpsRawInt
 import io.dronefleet.mavlink.common.MavCmd
 import io.dronefleet.mavlink.common.MavFrame
 import io.dronefleet.mavlink.common.MavMissionResult
@@ -336,6 +337,15 @@ class MavlinkConnection {
                     batteryVoltage = body.voltageBattery() / 1000.0,
                 )
             }
+            is GpsRawInt -> _state.update { st ->
+                // eph is HDOP * 100 (UINT16_MAX = unknown).
+                val hdop = body.eph().takeIf { it in 1..50_000 }?.let { it / 100.0 }
+                st.copy(
+                    gpsFix = body.fixType().entry()?.name?.removePrefix("GPS_FIX_TYPE_"),
+                    gpsSatellites = body.satellitesVisible().takeIf { it in 0..255 },
+                    gpsHdop = hdop,
+                )
+            }
             is BatteryStatus -> _state.update { st ->
                 // currentBattery is cA (10mA units). Negative = invalid.
                 val amps = body.currentBattery().takeIf { it >= 0 }?.let { it / 100.0 }
@@ -349,7 +359,17 @@ class MavlinkConnection {
             }
             is Statustext -> _state.update { st ->
                 val line = body.text().trim(' ', ' ')
-                st.copy(recentStatusText = (st.recentStatusText + line).takeLast(8))
+                // MAV_SEVERITY: 0=EMERGENCY, 1=ALERT, 2=CRITICAL, 3=ERROR,
+                // 4=WARNING, 5=NOTICE, 6=INFO, 7=DEBUG. Anything ≤4 is a
+                // real alert worth surfacing as a banner.
+                val sev = body.severity().entry()?.ordinal ?: 7
+                val alert = if (sev <= 4 && line.isNotBlank()) {
+                    Triple(sev, line, System.currentTimeMillis())
+                } else st.latestAlert
+                st.copy(
+                    recentStatusText = (st.recentStatusText + line).takeLast(8),
+                    latestAlert = alert,
+                )
             }
             is MissionRequestInt -> _missionEvents.tryEmit(MissionEvent.RequestInt(body.seq()))
             is MissionAck -> _missionEvents.tryEmit(MissionEvent.Ack(body.type().entry()))

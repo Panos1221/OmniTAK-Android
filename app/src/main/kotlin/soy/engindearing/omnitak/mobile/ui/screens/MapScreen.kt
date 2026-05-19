@@ -10,6 +10,7 @@ import androidx.compose.material.icons.filled.Brush
 import androidx.compose.material.icons.filled.Chat
 import androidx.compose.material.icons.filled.AddLocation
 import androidx.compose.material.icons.filled.FlightTakeoff
+import androidx.compose.material.icons.filled.RadioButtonUnchecked
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Explore
 import androidx.compose.material.icons.filled.Flight
@@ -425,6 +426,22 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
                 },
                 onDismiss = { altSheetOpen = false },
             )
+        }
+
+        // STATUSTEXT alert banner — top-center, auto-dismisses after 6s.
+        // Placed above the mission banner so a CRITICAL alert always
+        // wins the operator's attention even when a mission is queued.
+        if (droneState.latestAlert != null) {
+            androidx.compose.foundation.layout.Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(top = 64.dp),
+                contentAlignment = Alignment.TopCenter,
+            ) {
+                soy.engindearing.omnitak.mobile.ui.components.UasAlertBanner(
+                    alert = droneState.latestAlert,
+                )
+            }
         }
 
         if (missionMode || mission.waypoints.isNotEmpty()) {
@@ -843,6 +860,7 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
                     add(RadialAction("uas_fly_here", Icons.Filled.FlightTakeoff, "Fly UAS Here"))
                     add(RadialAction("uas_waypoint", Icons.Filled.AddLocation, "UAS Waypoint"))
                     add(RadialAction("uas_orbit", Icons.Filled.Refresh, "Orbit Here"))
+                    add(RadialAction("uas_circle", Icons.Filled.RadioButtonUnchecked, "Circle Mission"))
                 }
                 add(RadialAction("center", Icons.Filled.Explore, "Center"))
                 add(RadialAction("add", Icons.Filled.Add, "Add"))
@@ -892,6 +910,14 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
                         // Fast-follow: radius slider on the orbit action.
                         scope.launch { app.uasManager.orbitPoint(ll.latitude, ll.longitude) }
                         toast("Orbiting ${"%.4f, %.4f".format(ll.latitude, ll.longitude)} @ 50 m radius")
+                    }
+                    "uas_circle" -> if (ll != null) {
+                        // Persistent circle as a real mission upload —
+                        // survives mode changes / link blips.
+                        scope.launch {
+                            app.uasManager.uploadCircleMission(ll.latitude, ll.longitude)
+                        }
+                        toast("Circle mission uploading — 12 pts @ 50 m radius")
                     }
                     else -> {
                         // Respect the operator's coordinate-format pref (Lat/Lon,

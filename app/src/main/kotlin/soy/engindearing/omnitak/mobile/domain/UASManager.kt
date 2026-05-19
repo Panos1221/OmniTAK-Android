@@ -500,6 +500,45 @@ class UASManager(
      *  - p5/p6: lat/lon (deg as float)
      *  - p7: altitude (m MSL)
      */
+    /**
+     * Build a circle of [points] waypoints around ([centerLat], [centerLon])
+     * at [radiusMeters] and load them into [missionStore], then upload +
+     * start. Persistent vs [orbitPoint] (DO_ORBIT) which evaporates on
+     * the next mode change. Closes the loop by appending the first
+     * waypoint as the last so the drone keeps circling.
+     */
+    suspend fun uploadCircleMission(
+        centerLat: Double,
+        centerLon: Double,
+        radiusMeters: Float = 50f,
+        points: Int = 12,
+    ) {
+        val safePoints = points.coerceIn(3, 36)
+        val metersPerDegLat = 111_320.0
+        val metersPerDegLon = 111_320.0 * kotlin.math.cos(Math.toRadians(centerLat))
+        val cruiseMsl = _cruiseAlt.value.toMsl(state.value.altMslMeters ?: 0.0)
+        val wps = (0 until safePoints).map { i ->
+            val theta = 2.0 * Math.PI * i / safePoints
+            val north = radiusMeters * kotlin.math.cos(theta)
+            val east = radiusMeters * kotlin.math.sin(theta)
+            soy.engindearing.omnitak.mobile.data.uas.Waypoint(
+                latDeg = centerLat + north / metersPerDegLat,
+                lonDeg = centerLon + east / metersPerDegLon,
+                altMslMeters = cruiseMsl,
+            )
+        } + listOfNotNull(
+            // Close the loop — last waypoint = first, so the drone arrives
+            // back at WP1 and the autopilot's repeat behaviour kicks in
+            // (PX4 loops AUTO.MISSION when current_seq overruns count).
+            null
+        )
+        // Replace any draft mission.
+        missionStore.clear()
+        wps.forEach { missionStore.addWaypoint(it.latDeg, it.lonDeg, it.altMslMeters) }
+        uploadAndStartMission(autoStart = true)
+        Log.i(TAG, "Circle mission: $safePoints pts radius=${radiusMeters}m alt=${cruiseMsl.toInt()}m MSL")
+    }
+
     suspend fun orbitPoint(latDeg: Double, lonDeg: Double, radiusMeters: Float = 50f) {
         val cruise = _cruiseAlt.value
         val homeMsl = state.value.altMslMeters ?: 0.0

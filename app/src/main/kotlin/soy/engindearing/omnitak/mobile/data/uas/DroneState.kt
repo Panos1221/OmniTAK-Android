@@ -45,9 +45,16 @@ data class DroneState(
     // From GPS_RAW_INT
     val gpsFix: String? = null,           // NO_FIX / FIX_2D / FIX_3D / DGPS / RTK_FLOAT / RTK_FIXED
     val gpsSatellites: Int? = null,
+    /** Horizontal dilution of precision — lower is better. PX4 / ArduPilot
+     *  pre-arm typically wants HDOP &lt; 1.5; tactical fixed-wing flight
+     *  &lt; 2.0 is acceptable. */
+    val gpsHdop: Double? = null,
 
     // From STATUSTEXT — last N messages for the UI log strip
     val recentStatusText: List<String> = emptyList(),
+    /** Latest WARNING-or-worse STATUSTEXT, surfaced as a banner. Cleared
+     *  by the UI after display. (severity, text, timeMs) */
+    val latestAlert: Triple<Int, String, Long>? = null,
 
     /** Ring buffer of recent positions, oldest → newest. Used to render
      *  the drone's trail on the map. Capped at ~30 entries. */
