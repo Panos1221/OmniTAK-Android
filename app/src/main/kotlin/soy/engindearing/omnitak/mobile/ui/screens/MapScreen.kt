@@ -339,6 +339,12 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
             mapboxMap = mapboxMap,
         )
 
+        soy.engindearing.omnitak.mobile.ui.components.HomePositionOverlay(
+            homeLatDeg = droneState.homeLatDeg,
+            homeLonDeg = droneState.homeLonDeg,
+            mapboxMap = mapboxMap,
+        )
+
         soy.engindearing.omnitak.mobile.ui.components.DroneOverlay(
             drone = droneForMap,
             mapboxMap = mapboxMap,

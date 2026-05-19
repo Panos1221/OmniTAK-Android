@@ -59,6 +59,19 @@ data class DroneState(
     /** Ring buffer of recent positions, oldest → newest. Used to render
      *  the drone's trail on the map. Capped at ~30 entries. */
     val trail: List<TrailPoint> = emptyList(),
+
+    // From HOME_POSITION
+    val homeLatDeg: Double? = null,
+    val homeLonDeg: Double? = null,
+    val homeAltMsl: Double? = null,
+
+    // From VFR_HUD
+    val airspeedMps: Double? = null,
+    val throttlePct: Int? = null,
+
+    /** Wall-clock ms when [armed] first flipped to true on this session.
+     *  Used for the "FLT 03:24" elapsed timer in the HUD. */
+    val armedAtMs: Long? = null,
 ) {
     /** True if we've had a HEARTBEAT in the last 5 s — RAS-A IOP §HEARTBEAT timeout. */
     fun isConnected(nowMs: Long = System.currentTimeMillis()): Boolean =

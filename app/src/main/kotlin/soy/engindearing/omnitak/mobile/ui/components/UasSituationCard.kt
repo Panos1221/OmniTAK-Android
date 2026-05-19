@@ -75,6 +75,21 @@ fun UasSituationCard(
         text to color
     }
 
+    // SPD — airspeed (preferred, from VFR_HUD) else ground speed.
+    // Always rendered when armed so hovering reads "0.0 m/s" rather than
+    // hiding the row — operator wants to see "drone is stationary" too.
+    val spdLine: String? = when {
+        drone.airspeedMps != null -> "%.1f m/s air".format(drone.airspeedMps)
+        drone.groundSpeedMps != null -> "%.1f m/s gnd".format(drone.groundSpeedMps)
+        else -> null
+    }
+
+    // FLT — elapsed flight time (since armed-true).
+    val fltLine: String? = drone.armedAtMs?.let { start ->
+        val secs = ((System.currentTimeMillis() - start) / 1000L).coerceAtLeast(0L)
+        "%d:%02d".format(secs / 60, secs % 60)
+    }
+
     // GPS — "3D · 12 sat · HDOP 0.8". Coloured by quality bracket.
     val gpsLine: Pair<String, Color>? = drone.gpsFix?.let { fix ->
         val parts = mutableListOf(fix)
@@ -101,6 +116,8 @@ fun UasSituationCard(
         Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
             distLine?.let { Line("DIST", it, Color.White) }
             terrainLine?.let { (text, c) -> Line("AGL", text, c) }
+            spdLine?.let { Line("SPD", it, Color.White) }
+            fltLine?.let { Line("FLT", it, Color.White) }
             batLine?.let { (text, c) -> Line("BAT", text, c) }
             gpsLine?.let { (text, c) -> Line("GPS", text, c) }
         }

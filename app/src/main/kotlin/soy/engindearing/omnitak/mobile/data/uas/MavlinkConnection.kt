@@ -7,6 +7,8 @@ import io.dronefleet.mavlink.common.BatteryStatus
 import io.dronefleet.mavlink.common.CommandLong
 import io.dronefleet.mavlink.common.GlobalPositionInt
 import io.dronefleet.mavlink.common.GpsRawInt
+import io.dronefleet.mavlink.common.HomePosition
+import io.dronefleet.mavlink.common.VfrHud
 import io.dronefleet.mavlink.common.MavCmd
 import io.dronefleet.mavlink.common.MavFrame
 import io.dronefleet.mavlink.common.MavMissionResult
@@ -294,14 +296,24 @@ class MavlinkConnection {
         val comp = msg.originComponentId
         when (val body = msg.payload) {
             is Heartbeat -> _state.update { st ->
+                val nowArmed = body.baseMode().flagsEnabled(MavModeFlag.MAV_MODE_FLAG_SAFETY_ARMED)
+                val now = System.currentTimeMillis()
                 st.copy(
                     systemId = sys,
                     componentId = comp,
                     autopilot = body.autopilot().entry()?.name,
                     vehicleType = body.type().entry()?.name,
                     flightMode = decodeMode(body),
-                    armed = body.baseMode().flagsEnabled(MavModeFlag.MAV_MODE_FLAG_SAFETY_ARMED),
-                    lastHeartbeat = System.currentTimeMillis(),
+                    armed = nowArmed,
+                    // First time armed flips true: stamp armedAtMs so the
+                    // HUD's flight-time counter starts. Cleared on disarm
+                    // so the next takeoff starts a fresh count.
+                    armedAtMs = when {
+                        nowArmed && st.armed != true -> now
+                        !nowArmed -> null
+                        else -> st.armedAtMs
+                    },
+                    lastHeartbeat = now,
                 )
             }
             is GlobalPositionInt -> _state.update { st ->
@@ -344,6 +356,19 @@ class MavlinkConnection {
                     gpsFix = body.fixType().entry()?.name?.removePrefix("GPS_FIX_TYPE_"),
                     gpsSatellites = body.satellitesVisible().takeIf { it in 0..255 },
                     gpsHdop = hdop,
+                )
+            }
+            is HomePosition -> _state.update { st ->
+                st.copy(
+                    homeLatDeg = body.latitude() / 1e7,
+                    homeLonDeg = body.longitude() / 1e7,
+                    homeAltMsl = body.altitude() / 1000.0,
+                )
+            }
+            is VfrHud -> _state.update { st ->
+                st.copy(
+                    airspeedMps = body.airspeed().toDouble().takeIf { it >= 0 },
+                    throttlePct = body.throttle().takeIf { it in 0..100 },
                 )
             }
             is BatteryStatus -> _state.update { st ->
