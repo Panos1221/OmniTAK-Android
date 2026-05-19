@@ -1,0 +1,111 @@
+package soy.engindearing.omnitak.mobile.ui.components
+
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import soy.engindearing.omnitak.mobile.data.GeoMath
+import soy.engindearing.omnitak.mobile.data.SelfFix
+import soy.engindearing.omnitak.mobile.data.uas.DroneState
+
+/**
+ * Compact "situational" HUD card — three lines of operator-relevant
+ * derived telemetry that the autopilot doesn't directly emit:
+ *  - **Distance + bearing from operator** (haversine vs LocationProvider fix)
+ *  - **Above terrain (AGL via TAK DEM)** — collision-relevant alt the drone
+ *    can't compute from home-relative `relative_alt`
+ *  - **Battery** — % readout (time-remaining when BATTERY_STATUS lands;
+ *    today just % until we wire that message)
+ *
+ * Lives under the cruise / Follow Me pills in the top-right HUD column.
+ * Renders only when there's enough data — silent if drone has no fix
+ * or operator has no GPS yet.
+ */
+@Composable
+fun UasSituationCard(
+    drone: DroneState,
+    operator: SelfFix?,
+    terrainBelowDroneMsl: Double?,
+    modifier: Modifier = Modifier,
+) {
+    if (drone.latDeg == null || drone.lonDeg == null) return
+
+    val distLine: String? = operator?.let { op ->
+        val m = GeoMath.haversineMeters(op.lat, op.lon, drone.latDeg, drone.lonDeg)
+        val bearing = GeoMath.bearingDegrees(op.lat, op.lon, drone.latDeg, drone.lonDeg)
+        "${GeoMath.formatDistance(m)} @ ${GeoMath.formatBearing(bearing)}"
+    }
+
+    val terrainLine: Pair<String, Color>? = terrainBelowDroneMsl?.let { terr ->
+        drone.altMslMeters?.let { msl ->
+            val agl = msl - terr
+            val color = when {
+                agl < 5  -> Color(0xFFFF3B30)   // crash territory
+                agl < 20 -> Color(0xFFFFC107)   // very low
+                else     -> Color.White
+            }
+            "%.0f m AGL".format(agl) to color
+        }
+    }
+
+    val batLine: Pair<String, Color>? = drone.batteryPct?.let { pct ->
+        val color = when {
+            pct < 15 -> Color(0xFFFF3B30)
+            pct < 30 -> Color(0xFFFFC107)
+            else     -> Color.White
+        }
+        "$pct%" to color
+    }
+
+    // Don't render an empty card.
+    if (distLine == null && terrainLine == null && batLine == null) return
+
+    Box(
+        modifier = modifier
+            .clip(RoundedCornerShape(12.dp))
+            .background(Color.Black.copy(alpha = 0.78f))
+            .padding(horizontal = 12.dp, vertical = 8.dp),
+    ) {
+        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            distLine?.let { Line("DIST", it, Color.White) }
+            terrainLine?.let { (text, c) -> Line("AGL", text, c) }
+            batLine?.let { (text, c) -> Line("BAT", text, c) }
+        }
+    }
+}
+
+@Composable
+private fun Line(label: String, value: String, valueColor: Color) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Text(
+            text = label,
+            color = Color(0xFF00E5FF),
+            fontFamily = FontFamily.Monospace,
+            style = MaterialTheme.typography.labelSmall,
+            modifier = Modifier.padding(end = 2.dp),
+        )
+        Text(
+            text = value,
+            color = valueColor,
+            fontFamily = FontFamily.Monospace,
+            fontWeight = FontWeight.SemiBold,
+            style = MaterialTheme.typography.labelLarge,
+        )
+    }
+}

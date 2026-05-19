@@ -10,6 +10,7 @@ import androidx.compose.material.icons.filled.Brush
 import androidx.compose.material.icons.filled.Chat
 import androidx.compose.material.icons.filled.AddLocation
 import androidx.compose.material.icons.filled.FlightTakeoff
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Explore
 import androidx.compose.material.icons.filled.Flight
 import androidx.compose.material.icons.filled.Groups
@@ -365,6 +366,8 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
                     .padding(top = 90.dp, end = 12.dp),
                 contentAlignment = Alignment.TopEnd,
             ) {
+                val operatorFix by app.locationProvider.fix.collectAsState()
+                val terrainBelowDrone by app.uasManager.terrainBelowDroneMsl.collectAsState()
                 androidx.compose.foundation.layout.Column(
                     horizontalAlignment = Alignment.End,
                     verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(6.dp),
@@ -372,6 +375,11 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
                     soy.engindearing.omnitak.mobile.ui.components.UasAltitudePill(
                         cruise = cruiseAlt,
                         onClick = { altSheetOpen = true },
+                    )
+                    soy.engindearing.omnitak.mobile.ui.components.UasSituationCard(
+                        drone = droneState,
+                        operator = operatorFix,
+                        terrainBelowDroneMsl = terrainBelowDrone,
                     )
                     soy.engindearing.omnitak.mobile.ui.components.UasFollowMePill(
                         active = followActive,
@@ -426,6 +434,41 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
                     onUndo = { app.uasManager.missionStore.undoWaypoint() },
                     onCancel = { app.uasManager.cancelMission() },
                     onExitMissionMode = { missionMode = false },
+                )
+            }
+        }
+
+        // -------- In-flight control bar (armed only) — bottom-center --------
+        if (droneState.isConnected() && droneState.armed == true) {
+            androidx.compose.foundation.layout.Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(bottom = 24.dp),
+                contentAlignment = Alignment.BottomCenter,
+            ) {
+                soy.engindearing.omnitak.mobile.ui.components.UasControlBar(
+                    drone = droneState,
+                    mission = mission,
+                    onLand = {
+                        scope.launch { app.uasManager.landHere() }
+                        toast("LAND HERE — drone descending at current position")
+                    },
+                    onPause = {
+                        scope.launch { app.uasManager.pauseMission() }
+                        toast("Mission PAUSED — hovering in place")
+                    },
+                    onResume = {
+                        scope.launch { app.uasManager.resumeMission() }
+                        toast("Mission RESUMED")
+                    },
+                    onRtl = {
+                        scope.launch { app.uasManager.returnToLaunch() }
+                        toast("RTL — returning to launch")
+                    },
+                    onEmergencyStop = {
+                        scope.launch { app.uasManager.emergencyStop() }
+                        toast("EMERGENCY STOP — motors cut")
+                    },
                 )
             }
         }
@@ -770,6 +813,7 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
                 if (uasConnected) {
                     add(RadialAction("uas_fly_here", Icons.Filled.FlightTakeoff, "Fly UAS Here"))
                     add(RadialAction("uas_waypoint", Icons.Filled.AddLocation, "UAS Waypoint"))
+                    add(RadialAction("uas_orbit", Icons.Filled.Refresh, "Orbit Here"))
                 }
                 add(RadialAction("center", Icons.Filled.Explore, "Center"))
                 add(RadialAction("add", Icons.Filled.Add, "Add"))
@@ -813,6 +857,12 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
                         app.uasManager.missionStore.addWaypoint(ll.latitude, ll.longitude)
                         missionMode = true
                         toast("WP${mission.waypoints.size + 1} dropped — tap more or hit Upload")
+                    }
+                    "uas_orbit" -> if (ll != null) {
+                        // MAV_CMD_DO_ORBIT at cruise altitude, default 50 m radius.
+                        // Fast-follow: radius slider on the orbit action.
+                        scope.launch { app.uasManager.orbitPoint(ll.latitude, ll.longitude) }
+                        toast("Orbiting ${"%.4f, %.4f".format(ll.latitude, ll.longitude)} @ 50 m radius")
                     }
                     else -> {
                         // Respect the operator's coordinate-format pref (Lat/Lon,
@@ -866,6 +916,32 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
                 {
                     app.contactStore.remove(it.uid)
                     toast("Deleted marker “${it.callsign ?: it.uid}”")
+                    markerSheetLatLng = null
+                    editingMarker = null
+                }
+            },
+            onPursueWithUas = editingMarker?.takeIf { droneState.isConnected() }?.let { mk ->
+                {
+                    val uid = mk.uid
+                    val callsign = mk.callsign ?: uid.takeLast(6)
+                    scope.launch {
+                        val r = app.uasManager.startPursueContact(uid, callsign) {
+                            // Re-read each tick so we track the contact as it moves.
+                            val live = app.contactStore.contacts.value[uid] ?: return@startPursueContact null
+                            live.lat to live.lon
+                        }
+                        val msg = when (r) {
+                            soy.engindearing.omnitak.mobile.domain.UASManager.FollowMeResult.Started ->
+                                "Pursuing “$callsign” at ${app.uasManager.cruiseAlt.value.meters.toInt()} m above terrain"
+                            soy.engindearing.omnitak.mobile.domain.UASManager.FollowMeResult.NoGpsFix ->
+                                "Contact has no position fix"
+                            soy.engindearing.omnitak.mobile.domain.UASManager.FollowMeResult.NotConnected ->
+                                "UAS link down"
+                            is soy.engindearing.omnitak.mobile.domain.UASManager.FollowMeResult.AutopilotNotSupported ->
+                                "Pursue requires PX4 (autopilot=${r.autopilot ?: "unknown"})"
+                        }
+                        toast(msg)
+                    }
                     markerSheetLatLng = null
                     editingMarker = null
                 }

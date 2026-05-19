@@ -69,6 +69,10 @@ fun MarkerEditSheet(
     editing: Boolean = false,
     onSave: (MarkerEditResult) -> Unit,
     onDelete: (() -> Unit)? = null,
+    /** When non-null, renders a "Pursue with UAS" button — Map screen
+     *  supplies this only when (a) the marker is an existing contact
+     *  (editing=true), and (b) a UAS is currently connected. */
+    onPursueWithUas: (() -> Unit)? = null,
     onDismiss: () -> Unit,
 ) {
     if (!visible) return
@@ -183,6 +187,14 @@ fun MarkerEditSheet(
                             contentColor = soy.engindearing.omnitak.mobile.ui.theme.HostileRed,
                         ),
                     ) { Text("Delete") }
+                }
+                if (onPursueWithUas != null) {
+                    TextButton(
+                        onClick = onPursueWithUas,
+                        colors = ButtonDefaults.textButtonColors(
+                            contentColor = androidx.compose.ui.graphics.Color(0xFF00E5FF),
+                        ),
+                    ) { Text("Pursue with UAS") }
                 }
                 Spacer(Modifier.weight(1f))
                 TextButton(onClick = onDismiss) { Text("Cancel") }

@@ -82,9 +82,27 @@ class UASManager(
     private var cotPumpJob: Job? = null
     private var missionExecWatcherJob: Job? = null
     private var followMeJob: Job? = null
+    private var terrainSamplerJob: Job? = null
 
+    /** What the drone is currently tracking. null = idle. (Named
+     *  FollowSubject to avoid colliding with MAVLink's FOLLOW_TARGET
+     *  message class.) */
+    sealed interface FollowSubject {
+        object Operator : FollowSubject
+        data class Contact(val uid: String, val callsign: String) : FollowSubject
+    }
+    private val _followingWhat = MutableStateFlow<FollowSubject?>(null)
+    val followingWhat: StateFlow<FollowSubject?> = _followingWhat.asStateFlow()
+    /** Convenience derived flow for the UAS HUD pill. */
     private val _followMeActive = MutableStateFlow(false)
     val followMeActive: StateFlow<Boolean> = _followMeActive.asStateFlow()
+
+    /** Terrain elevation (MSL meters) directly under the drone's current
+     *  position. Drives the AGL-above-terrain HUD readout. Sampled every
+     *  5 s — fine for ground-speed UAS work, and we cache tiles so the
+     *  CDN cost stays effectively zero. */
+    private val _terrainBelowDroneMsl = MutableStateFlow<Double?>(null)
+    val terrainBelowDroneMsl: StateFlow<Double?> = _terrainBelowDroneMsl.asStateFlow()
 
     private var droneUid: String = CotBuilders.newUid()
     private var droneCallsign: String = "OmniTAK-UAS"
@@ -117,6 +135,7 @@ class UASManager(
         scope = s
         cotPumpJob = s.launch { cotPumpLoop() }
         missionExecWatcherJob = s.launch { missionExecWatcher() }
+        terrainSamplerJob = s.launch { terrainSamplerLoop() }
         Log.i(TAG, "UAS connect uid=$droneUid callsign=$droneCallsign transport=$transport target=$host:$port")
     }
 
@@ -124,11 +143,14 @@ class UASManager(
         cotPumpJob?.cancel()
         missionExecWatcherJob?.cancel()
         followMeJob?.cancel()
+        terrainSamplerJob?.cancel()
         scope?.cancel()
         cotPumpJob = null
         missionExecWatcherJob = null
         followMeJob = null
+        terrainSamplerJob = null
         _followMeActive.value = false
+        _terrainBelowDroneMsl.value = null
         scope = null
         mavlink.disconnect()
     }
@@ -192,42 +214,72 @@ class UASManager(
      * fast-follow.
      */
     suspend fun startFollowMe(): FollowMeResult {
+        if (operatorFix() == null) return FollowMeResult.NoGpsFix
+        return startFollow(FollowSubject.Operator) {
+            operatorFix()?.let { it.lat to it.lon }
+        }
+    }
+
+    /**
+     * Pursue a CoT contact — drone tracks the contact's position
+     * exactly like Follow-Me but with the contact as the source.
+     * [positionProvider] is called each tick to fetch the contact's
+     * current lat/lon (the manager doesn't own the contact store, so
+     * the UI passes it in as a closure over its live state).
+     *
+     * Returns the same [FollowMeResult] sealed type as Follow-Me —
+     * [FollowMeResult.NoGpsFix] now means "contact has no position yet".
+     */
+    suspend fun startPursueContact(
+        uid: String,
+        callsign: String,
+        positionProvider: () -> Pair<Double, Double>?,
+    ): FollowMeResult {
+        if (positionProvider() == null) return FollowMeResult.NoGpsFix
+        return startFollow(FollowSubject.Contact(uid, callsign), positionProvider)
+    }
+
+    /** Shared follow/pursue startup — handles autopilot check, mode
+     *  switch, and the 1 Hz FOLLOW_TARGET streamer. */
+    private suspend fun startFollow(
+        target: FollowSubject,
+        positionProvider: () -> Pair<Double, Double>?,
+    ): FollowMeResult {
         val st = state.value
         if (!st.isConnected()) return FollowMeResult.NotConnected
-        if (operatorFix() == null) return FollowMeResult.NoGpsFix
         if (st.autopilot != MavAutopilot.MAV_AUTOPILOT_PX4.name) {
             return FollowMeResult.AutopilotNotSupported(st.autopilot)
         }
 
-        // 1. SET_MODE → AUTO.FOLLOW_TARGET (PX4: main=4, sub=8).
+        // 1. SET_MODE → AUTO.FOLLOW_TARGET (PX4 main=4, sub=8).
         mavlink.sendCommand(
             MavCmd.MAV_CMD_DO_SET_MODE,
-            p1 = 1f /* MAV_MODE_FLAG_CUSTOM_MODE_ENABLED */,
-            p2 = 4f /* PX4 main: AUTO */,
-            p3 = 8f /* PX4 sub: FOLLOW_TARGET */,
+            p1 = 1f, p2 = 4f, p3 = 8f,
         )
 
-        // 2. Spin the 1 Hz streamer.
+        // 2. Spin the 1 Hz streamer. Cancel any prior follow target so
+        //    we never have two streams racing each other.
         followMeJob?.cancel()
         followMeJob = scope?.launch {
             while (isActive) {
-                val fix = operatorFix()
-                if (fix != null) sendFollowTarget(fix)
+                val pos = positionProvider()
+                if (pos != null) sendFollowTargetMsg(pos.first, pos.second)
                 delay(1_000)
             }
         }
+        _followingWhat.value = target
         _followMeActive.value = true
-        Log.i(TAG, "Follow-Me ENGAGED (PX4 AUTO.FOLLOW_TARGET, cruise=${_cruiseAlt.value.meters}m ${_cruiseAlt.value.frame})")
+        Log.i(TAG, "FOLLOW engaged: target=$target cruise=${_cruiseAlt.value.meters}m ${_cruiseAlt.value.frame}")
         return FollowMeResult.Started
     }
 
-    /** Disengage Follow-Me. Stops the streamer and parks the drone in
-     *  AUTO.LOITER so it just hovers in place instead of falling out of
-     *  the sky waiting for the next FOLLOW_TARGET. */
+    /** Disengage whatever follow/pursue is active. Stops the streamer
+     *  and parks the drone in AUTO.LOITER. */
     suspend fun stopFollowMe() {
         followMeJob?.cancel()
         followMeJob = null
         _followMeActive.value = false
+        _followingWhat.value = null
         if (state.value.isConnected()) {
             // PX4 AUTO.LOITER = main 4, sub 3.
             mavlink.sendCommand(
@@ -235,21 +287,27 @@ class UASManager(
                 p1 = 1f, p2 = 4f, p3 = 3f,
             )
         }
-        Log.i(TAG, "Follow-Me DISENGAGED")
+        Log.i(TAG, "FOLLOW disengaged")
     }
 
-    private suspend fun sendFollowTarget(fix: SelfFix) {
-        val cruise = _cruiseAlt.value
-        // Operator is at fix.altitudeM MSL; offset by cruise (treated
-        // as meters above operator regardless of frame in this context
-        // — the operator's HUD reads "follow X m above me").
-        val targetAltMsl = fix.altitudeM + cruise.meters
+    /** Build + send one FOLLOW_TARGET message at [latDeg]/[lonDeg].
+     *  Altitude rule: prefer terrain elevation at the target plus cruise
+     *  (so the drone holds AGL above the target's actual ground level);
+     *  fall back to operator-altitude + cruise when terrain isn't
+     *  available. Result is a consistent above-the-thing-you're-tracking
+     *  flight height regardless of whether the target is the operator
+     *  or a contact on a hill across town. */
+    private suspend fun sendFollowTargetMsg(latDeg: Double, lonDeg: Double) {
+        val cruise = _cruiseAlt.value.meters
+        val terrainMsl = runCatching { terrain.sampleMeters(latDeg, lonDeg) }.getOrNull()
+        val baseMsl = terrainMsl ?: operatorFix()?.altitudeM ?: 0.0
+        val altMsl = baseMsl + cruise
         val msg = FollowTarget.builder()
             .timestamp(java.math.BigInteger.valueOf(System.currentTimeMillis()))
             .estCapabilities(1) // bit 0 = position
-            .lat((fix.lat * 1e7).toInt())
-            .lon((fix.lon * 1e7).toInt())
-            .alt(targetAltMsl.toFloat())
+            .lat((latDeg * 1e7).toInt())
+            .lon((lonDeg * 1e7).toInt())
+            .alt(altMsl.toFloat())
             .customState(java.math.BigInteger.ZERO)
             .build()
         runCatching { mavlink.send(msg) }
@@ -373,6 +431,97 @@ class UASManager(
                 missionStore.setCurrentSeq(ev.seq)
             }
         }
+    }
+
+    /** Background loop: sample TAK Terrain at the drone's current lat/lon
+     *  every 5 s. Drives the HUD's "above terrain" readout. Cheap because
+     *  the sampler caches tiles after the first hit and the drone usually
+     *  stays in the same z=12 tile for an entire flight (~5 km × 5 km). */
+    private suspend fun terrainSamplerLoop() {
+        while (scope?.isActive == true) {
+            val st = state.value
+            if (st.hasFix()) {
+                val t = runCatching { terrain.sampleMeters(st.latDeg!!, st.lonDeg!!) }.getOrNull()
+                _terrainBelowDroneMsl.value = t
+            }
+            delay(5_000)
+        }
+    }
+
+    // ------------------------------------------------------- safety + control
+
+    /** Land at the drone's current position (NOT home — for that, use RTL).
+     *  Standard "set me down here" operator action when the drone is over
+     *  a safe spot. */
+    suspend fun landHere() {
+        if (_followMeActive.value) stopFollowMe()
+        mavlink.sendCommand(MavCmd.MAV_CMD_NAV_LAND)
+    }
+
+    /** Pause an executing mission — switch the drone to AUTO.LOITER so it
+     *  hovers in place. Operator resumes via [resumeMission]. PX4-specific
+     *  sub-mode encoding (ArduPilot uses BRAKE / GUIDED hold). */
+    suspend fun pauseMission() {
+        if (state.value.autopilot == MavAutopilot.MAV_AUTOPILOT_PX4.name) {
+            // PX4 AUTO.LOITER = main 4, sub 3.
+            mavlink.sendCommand(MavCmd.MAV_CMD_DO_SET_MODE, p1 = 1f, p2 = 4f, p3 = 3f)
+        } else {
+            mavlink.sendCommand(MavCmd.MAV_CMD_DO_PAUSE_CONTINUE, p1 = 0f /* pause */)
+        }
+    }
+
+    /** Resume a paused mission. */
+    suspend fun resumeMission() {
+        if (state.value.autopilot == MavAutopilot.MAV_AUTOPILOT_PX4.name) {
+            // PX4 AUTO.MISSION = main 4, sub 4.
+            mavlink.sendCommand(MavCmd.MAV_CMD_DO_SET_MODE, p1 = 1f, p2 = 4f, p3 = 4f)
+        } else {
+            mavlink.sendCommand(MavCmd.MAV_CMD_DO_PAUSE_CONTINUE, p1 = 1f /* continue */)
+        }
+    }
+
+    /**
+     * EMERGENCY: cut motors immediately. The drone WILL fall out of the
+     * sky. Only call after a confirm dialog — this is the "I'd rather
+     * the drone crash than hurt someone on the ground" lever (e.g., a
+     * fly-away into a crowd). MAV_CMD_DO_FLIGHTTERMINATION param1=1.
+     */
+    /**
+     * Orbit a point: drone circles [latDeg]/[lonDeg] at [radiusMeters]
+     * at the cruise altitude. PX4 supports MAV_CMD_DO_ORBIT directly;
+     * ArduPilot Copter handles it via NAV_LOITER_TURNS in a mission
+     * upload, which is heavier — for day-one we just fire DO_ORBIT and
+     * report what the autopilot ACKs.
+     *
+     * Param mapping per MAVLink common:
+     *  - p1: radius (m) — positive = CW from above, negative = CCW
+     *  - p2: velocity (m/s, NaN = default)
+     *  - p3: yaw behaviour (0 = uncontrolled, 1 = face center, NaN = default)
+     *  - p5/p6: lat/lon (deg as float)
+     *  - p7: altitude (m MSL)
+     */
+    suspend fun orbitPoint(latDeg: Double, lonDeg: Double, radiusMeters: Float = 50f) {
+        val cruise = _cruiseAlt.value
+        val homeMsl = state.value.altMslMeters ?: 0.0
+        val altMsl = cruise.toMsl(homeMsl)
+        mavlink.sendCommand(
+            MavCmd.MAV_CMD_DO_ORBIT,
+            p1 = radiusMeters,
+            p2 = Float.NaN,
+            p3 = 1f /* face center */,
+            p5 = latDeg.toFloat(),
+            p6 = lonDeg.toFloat(),
+            p7 = altMsl.toFloat(),
+        )
+    }
+
+    suspend fun emergencyStop() {
+        // Stop any background streamers first so they don't keep trying
+        // to push commands at a now-falling vehicle.
+        followMeJob?.cancel()
+        _followMeActive.value = false
+        mavlink.sendCommand(MavCmd.MAV_CMD_DO_FLIGHTTERMINATION, p1 = 1f)
+        Log.w(TAG, "EMERGENCY STOP — flight termination sent")
     }
 
     // ---------------------------------------------------------- internals
