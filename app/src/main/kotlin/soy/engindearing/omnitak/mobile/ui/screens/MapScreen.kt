@@ -139,7 +139,12 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
     // waypoints instead of any other action. Toggled from the mission
     // banner's Done button and entered via Tools → "Add UAS Waypoints".
     var missionMode by remember { mutableStateOf(false) }
-    val mission by app.uasManager.mission.collectAsState()
+    // Multi-drone: bind HUD/commands to the active drone. When operator
+    // switches active via the Drones picker, this re-emits and all the
+    // inner collectAsState subscriptions tear down + re-bind to the
+    // new manager. Inactive drones stay running in the registry.
+    val uas by app.uasRegistry.active.collectAsState()
+    val mission by uas.mission.collectAsState()
     // Index of the waypoint currently being edited (tap a pin to open
     // the WaypointEditSheet). null = no sheet. Lives at function scope
     // because both onMapSingleTap (hit-test) and the sheet itself need
@@ -173,7 +178,7 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
     // lost in the generic aircraft circle. We still expose the drone
     // through the regular aircraft list for the historical hooks
     // (lasso, etc.) but the dedicated layer is what the operator sees.
-    val droneState by app.uasManager.state.collectAsState()
+    val droneState by uas.state.collectAsState()
     val aircraft = rawAircraft
     // Pass the drone separately to TacticalMap → DroneLayer renders it
     // as a distinct cyan ring + callsign label, above the aircraft circle.
@@ -255,7 +260,7 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
                 // missionMode (adding) and view-only modes — pins are
                 // 28dp visual, but operator GPS-tap accuracy isn't
                 // pixel-perfect on a moving thumb.
-                val waypoints = app.uasManager.mission.value.waypoints
+                val waypoints = uas.mission.value.waypoints
                 val hitIdx = waypoints.indexOfFirst { wp ->
                     val dLat = wp.latDeg - latLng.latitude
                     val dLon = wp.lonDeg - latLng.longitude
@@ -269,7 +274,7 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
                 }
                 when {
                     missionMode -> {
-                        app.uasManager.missionStore.addWaypoint(latLng.latitude, latLng.longitude)
+                        uas.missionStore.addWaypoint(latLng.latitude, latLng.longitude)
                         true
                     }
                     measurementActive -> {
@@ -364,7 +369,7 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
         )
 
         // Soft geofence ring around HOME (drone-set takeoff point).
-        val geofenceM by app.uasManager.geofenceMeters.collectAsState()
+        val geofenceM by uas.geofenceMeters.collectAsState()
         soy.engindearing.omnitak.mobile.ui.components.GeofenceOverlay(
             centerLatDeg = droneState.homeLatDeg,
             centerLonDeg = droneState.homeLonDeg,
@@ -377,6 +382,16 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
             mapboxMap = mapboxMap,
         )
 
+        // Multi-drone: render markers for every other connected drone
+        // (smaller, dimmer than the active marker so operator can't
+        // confuse them with the command target).
+        val allDrones by app.uasRegistry.drones.collectAsState()
+        soy.engindearing.omnitak.mobile.ui.components.InactiveDronesOverlay(
+            drones = allDrones,
+            activeManager = uas,
+            mapboxMap = mapboxMap,
+        )
+
         soy.engindearing.omnitak.mobile.ui.components.MissionOverlay(
             mission = mission,
             mapboxMap = mapboxMap,
@@ -385,22 +400,22 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
         editingWaypointIndex?.let { idx ->
             mission.waypoints.getOrNull(idx)?.let { wp ->
                 val homeMsl = droneState.altMslMeters ?: 0.0
-                val cruise = app.uasManager.cruiseAlt.value
+                val cruise = uas.cruiseAlt.value
                 val cruiseMsl = cruise.toMsl(homeMsl)
                 soy.engindearing.omnitak.mobile.ui.components.WaypointEditSheet(
                     index = idx,
                     waypoint = wp,
                     cruiseHintMsl = cruiseMsl,
-                    onApply = { updated -> app.uasManager.missionStore.updateWaypoint(idx, updated) },
-                    onDelete = { app.uasManager.missionStore.removeWaypoint(idx) },
+                    onApply = { updated -> uas.missionStore.updateWaypoint(idx, updated) },
+                    onDelete = { uas.missionStore.removeWaypoint(idx) },
                     onDismiss = { editingWaypointIndex = null },
                 )
             }
         }
 
         // -------- UAS HUD: cruise altitude pill + Follow-Me toggle --------
-        val cruiseAlt by app.uasManager.cruiseAlt.collectAsState()
-        val followActive by app.uasManager.followMeActive.collectAsState()
+        val cruiseAlt by uas.cruiseAlt.collectAsState()
+        val followActive by uas.followMeActive.collectAsState()
         var altSheetOpen by remember { mutableStateOf(false) }
         if (droneState.isConnected()) {
             androidx.compose.foundation.layout.Box(
@@ -410,11 +425,29 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
                 contentAlignment = Alignment.TopEnd,
             ) {
                 val operatorFix by app.locationProvider.fix.collectAsState()
-                val terrainBelowDrone by app.uasManager.terrainBelowDroneMsl.collectAsState()
+                val terrainBelowDrone by uas.terrainBelowDroneMsl.collectAsState()
                 androidx.compose.foundation.layout.Column(
                     horizontalAlignment = Alignment.End,
                     verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(6.dp),
                 ) {
+                    // Drones picker — visible whenever ≥1 drone is in
+                    // the registry, regardless of which is active.
+                    var dronesSheetOpen by remember { mutableStateOf(false) }
+                    val activeEntry = allDrones.firstOrNull { it.manager === uas }
+                    soy.engindearing.omnitak.mobile.ui.components.UasDronesPill(
+                        droneCount = allDrones.size,
+                        activeCallsign = activeEntry?.callsign,
+                        onClick = { dronesSheetOpen = true },
+                    )
+                    if (dronesSheetOpen) {
+                        soy.engindearing.omnitak.mobile.ui.components.UasDronesPickerSheet(
+                            drones = allDrones,
+                            activeManager = uas,
+                            onPick = { id -> app.uasRegistry.setActive(id) },
+                            onDisconnect = { id -> app.uasRegistry.disconnect(id) },
+                            onDismiss = { dronesSheetOpen = false },
+                        )
+                    }
                     // Pre-flight readiness — only shown when disarmed.
                     // Component handles the auto-hide on armed=true.
                     soy.engindearing.omnitak.mobile.ui.components.UasPreflightCard(
@@ -459,10 +492,10 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
                         onToggle = {
                             scope.launch {
                                 if (followActive) {
-                                    app.uasManager.stopFollowMe()
+                                    uas.stopFollowMe()
                                     toast("Follow-Me OFF — drone parked in LOITER")
                                 } else {
-                                    val r = app.uasManager.startFollowMe()
+                                    val r = uas.startFollowMe()
                                     val msg = when (r) {
                                         soy.engindearing.omnitak.mobile.domain.UASManager.FollowMeResult.Started ->
                                             "Following you at ${cruiseAlt.meters.toInt()} m above"
@@ -485,7 +518,7 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
             soy.engindearing.omnitak.mobile.ui.components.UasAltitudeSheet(
                 current = cruiseAlt,
                 onApply = { newCruise ->
-                    app.uasManager.setCruiseAltitude(newCruise.meters, newCruise.frame)
+                    uas.setCruiseAltitude(newCruise.meters, newCruise.frame)
                 },
                 onDismiss = { altSheetOpen = false },
             )
@@ -518,15 +551,15 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
                     missionMode = missionMode,
                     mission = mission,
                     onUploadAndStart = {
-                        scope.launch { app.uasManager.uploadAndStartMission() }
+                        scope.launch { uas.uploadAndStartMission() }
                     },
-                    onUndo = { app.uasManager.missionStore.undoWaypoint() },
-                    onCancel = { app.uasManager.cancelMission() },
+                    onUndo = { uas.missionStore.undoWaypoint() },
+                    onCancel = { uas.cancelMission() },
                     onExitMissionMode = { missionMode = false },
                     onRehearse = {
                         rehearsalRunning = true
                         scope.launch {
-                            rehearsalResult = app.uasManager.rehearseCurrentMission()
+                            rehearsalResult = uas.rehearseCurrentMission()
                             rehearsalRunning = false
                         }
                     },
@@ -541,12 +574,12 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
                 running = rehearsalRunning,
                 onUploadAnyway = {
                     rehearsalResult = null
-                    scope.launch { app.uasManager.uploadAndStartMission() }
+                    scope.launch { uas.uploadAndStartMission() }
                     toast("Mission uploading (rehearsal warning overridden)")
                 },
                 onUploadAndStart = {
                     rehearsalResult = null
-                    scope.launch { app.uasManager.uploadAndStartMission() }
+                    scope.launch { uas.uploadAndStartMission() }
                     toast("Mission uploading")
                 },
                 onDismiss = { rehearsalResult = null },
@@ -554,7 +587,7 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
         }
 
         // -------- Live video PIP — bottom-right when RTSP URL set + connected --------
-        val rtspUrl by app.uasManager.rtspUrl.collectAsState()
+        val rtspUrl by uas.rtspUrl.collectAsState()
         var videoVisible by remember { mutableStateOf(true) }
         if (droneState.isConnected() && rtspUrl.isNotBlank() && videoVisible) {
             androidx.compose.foundation.layout.Box(
@@ -567,21 +600,21 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
                     rtspUrl = rtspUrl,
                     onDismiss = { videoVisible = false },
                     onPhoto = {
-                        scope.launch { app.uasManager.takePhoto() }
+                        scope.launch { uas.takePhoto() }
                         toast("📷 Photo captured")
                     },
                     onToggleRecord = { rec ->
                         scope.launch {
-                            if (rec) app.uasManager.startVideoRecording()
-                            else app.uasManager.stopVideoRecording()
+                            if (rec) uas.startVideoRecording()
+                            else uas.stopVideoRecording()
                         }
                         toast(if (rec) "🔴 Video REC" else "⏹ Video stopped")
                     },
                     onGimbalForward = {
-                        scope.launch { app.uasManager.setGimbalPitch(0f) }
+                        scope.launch { uas.setGimbalPitch(0f) }
                     },
                     onGimbalNadir = {
-                        scope.launch { app.uasManager.setGimbalPitch(-90f) }
+                        scope.launch { uas.setGimbalPitch(-90f) }
                     },
                 )
             }
@@ -599,23 +632,23 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
                     drone = droneState,
                     mission = mission,
                     onLand = {
-                        scope.launch { app.uasManager.landHere() }
+                        scope.launch { uas.landHere() }
                         toast("LAND HERE — drone descending at current position")
                     },
                     onPause = {
-                        scope.launch { app.uasManager.pauseMission() }
+                        scope.launch { uas.pauseMission() }
                         toast("Mission PAUSED — hovering in place")
                     },
                     onResume = {
-                        scope.launch { app.uasManager.resumeMission() }
+                        scope.launch { uas.resumeMission() }
                         toast("Mission RESUMED")
                     },
                     onRtl = {
-                        scope.launch { app.uasManager.returnToLaunch() }
+                        scope.launch { uas.returnToLaunch() }
                         toast("RTL — returning to launch")
                     },
                     onEmergencyStop = {
-                        scope.launch { app.uasManager.emergencyStop() }
+                        scope.launch { uas.emergencyStop() }
                         toast("EMERGENCY STOP — motors cut")
                     },
                 )
@@ -1003,7 +1036,7 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
                         // commands include the exact clearance number
                         // so the operator knows what to change.
                         scope.launch {
-                            val result = app.uasManager.flyTo(ll.latitude, ll.longitude)
+                            val result = uas.flyTo(ll.latitude, ll.longitude)
                             val msg = when (result) {
                                 is soy.engindearing.omnitak.mobile.domain.UASManager.FlyHereResult.Sent ->
                                     if (result.clearance != null)
@@ -1027,21 +1060,21 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
                     "uas_waypoint" -> if (ll != null) {
                         // Seed the mission with this waypoint AND enter
                         // missionMode so further taps keep dropping pins.
-                        app.uasManager.missionStore.addWaypoint(ll.latitude, ll.longitude)
+                        uas.missionStore.addWaypoint(ll.latitude, ll.longitude)
                         missionMode = true
                         toast("WP${mission.waypoints.size + 1} dropped — tap more or hit Upload")
                     }
                     "uas_orbit" -> if (ll != null) {
                         // MAV_CMD_DO_ORBIT at cruise altitude, default 50 m radius.
                         // Fast-follow: radius slider on the orbit action.
-                        scope.launch { app.uasManager.orbitPoint(ll.latitude, ll.longitude) }
+                        scope.launch { uas.orbitPoint(ll.latitude, ll.longitude) }
                         toast("Orbiting ${"%.4f, %.4f".format(ll.latitude, ll.longitude)} @ 50 m radius")
                     }
                     "uas_circle" -> if (ll != null) {
                         // Persistent circle as a real mission upload —
                         // survives mode changes / link blips.
                         scope.launch {
-                            app.uasManager.uploadCircleMission(ll.latitude, ll.longitude)
+                            uas.uploadCircleMission(ll.latitude, ll.longitude)
                         }
                         toast("Circle mission uploading — 12 pts @ 50 m radius")
                     }
@@ -1049,7 +1082,7 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
                         // Lawnmower over a 200 m × 200 m box centred on the
                         // tapped point. Fast-follow: box-size slider.
                         scope.launch {
-                            app.uasManager.uploadSurveyMission(ll.latitude, ll.longitude)
+                            uas.uploadSurveyMission(ll.latitude, ll.longitude)
                         }
                         toast("Survey mission uploading — 200 m box, 30 m spacing")
                     }
@@ -1114,14 +1147,14 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
                     val uid = mk.uid
                     val callsign = mk.callsign ?: uid.takeLast(6)
                     scope.launch {
-                        val r = app.uasManager.startPursueContact(uid, callsign) {
+                        val r = uas.startPursueContact(uid, callsign) {
                             // Re-read each tick so we track the contact as it moves.
                             val live = app.contactStore.contacts.value[uid] ?: return@startPursueContact null
                             live.lat to live.lon
                         }
                         val msg = when (r) {
                             soy.engindearing.omnitak.mobile.domain.UASManager.FollowMeResult.Started ->
-                                "Pursuing “$callsign” at ${app.uasManager.cruiseAlt.value.meters.toInt()} m above terrain"
+                                "Pursuing “$callsign” at ${uas.cruiseAlt.value.meters.toInt()} m above terrain"
                             soy.engindearing.omnitak.mobile.domain.UASManager.FollowMeResult.NoGpsFix ->
                                 "Contact has no position fix"
                             soy.engindearing.omnitak.mobile.domain.UASManager.FollowMeResult.NotConnected ->

@@ -70,7 +70,11 @@ import soy.engindearing.omnitak.mobile.ui.theme.TacticalSurface
 fun UASScreen(onDone: () -> Unit) {
     val context = LocalContext.current
     val app = context.applicationContext as OmniTAKApp
-    val uas = app.uasManager
+    // Multi-drone: bind to the registry's *active* drone so this screen
+    // always reflects the current command target. Connecting a new
+    // drone adds it to the registry and promotes it to active.
+    val uas by app.uasRegistry.active.collectAsState()
+    val connectedDrones by app.uasRegistry.drones.collectAsState()
     val scope = rememberCoroutineScope()
 
     val state by uas.state.collectAsState()
@@ -118,7 +122,13 @@ fun UASScreen(onDone: () -> Unit) {
                     Button(
                         onClick = {
                             val port = portText.toIntOrNull() ?: 14550
-                            uas.connect(host.trim(), port, callsign.trim(), transport = transport)
+                            // Multi-drone: each connection registers
+                            // with a unique drone id derived from
+                            // host:port:callsign. Re-connecting same
+                            // (host,port,callsign) replaces the prior
+                            // session instead of creating a duplicate.
+                            val droneId = "${host.trim()}:$port/${callsign.trim()}"
+                            app.uasRegistry.connect(droneId, host.trim(), port, callsign.trim(), transport = transport)
                         },
                         enabled = host.isNotBlank(),
                         modifier = Modifier.fillMaxWidth(),
@@ -129,7 +139,7 @@ fun UASScreen(onDone: () -> Unit) {
                     ) { Text("Connect") }
                 } else {
                     OutlinedButton(
-                        onClick = { uas.disconnect() },
+                        onClick = { app.uasRegistry.disconnectActive() },
                         modifier = Modifier.fillMaxWidth(),
                     ) { Text("Disconnect", color = HostileRed) }
                 }
