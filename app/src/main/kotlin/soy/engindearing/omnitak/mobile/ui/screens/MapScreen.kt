@@ -496,6 +496,23 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
             }
         }
 
+        // -------- Live video PIP — bottom-right when RTSP URL set + connected --------
+        val rtspUrl by app.uasManager.rtspUrl.collectAsState()
+        var videoVisible by remember { mutableStateOf(true) }
+        if (droneState.isConnected() && rtspUrl.isNotBlank() && videoVisible) {
+            androidx.compose.foundation.layout.Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(end = 12.dp, bottom = 90.dp),
+                contentAlignment = Alignment.BottomEnd,
+            ) {
+                soy.engindearing.omnitak.mobile.ui.components.UasVideoPip(
+                    rtspUrl = rtspUrl,
+                    onDismiss = { videoVisible = false },
+                )
+            }
+        }
+
         // -------- In-flight control bar (armed only) — bottom-center --------
         if (droneState.isConnected() && droneState.armed == true) {
             androidx.compose.foundation.layout.Box(

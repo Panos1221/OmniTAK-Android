@@ -98,6 +98,12 @@ class UASManager(
     private val _followMeActive = MutableStateFlow(false)
     val followMeActive: StateFlow<Boolean> = _followMeActive.asStateFlow()
 
+    /** Operator-supplied RTSP URL for the drone's camera. Blank = no
+     *  video PIP rendered. Set from UAS Quick Connect screen. */
+    private val _rtspUrl = MutableStateFlow("")
+    val rtspUrl: StateFlow<String> = _rtspUrl.asStateFlow()
+    fun setRtspUrl(url: String) { _rtspUrl.value = url.trim() }
+
     /** Terrain elevation (MSL meters) directly under the drone's current
      *  position. Drives the AGL-above-terrain HUD readout. Sampled every
      *  5 s — fine for ground-speed UAS work, and we cache tiles so the

@@ -81,6 +81,9 @@ fun UASScreen(onDone: () -> Unit) {
     var portText by remember { mutableStateOf("14550") }
     var callsign by remember { mutableStateOf("OmniTAK-UAS") }
 
+    val currentRtsp by uas.rtspUrl.collectAsState()
+    var rtspText by remember(currentRtsp) { mutableStateOf(currentRtsp) }
+
     Scaffold(
         containerColor = TacticalBackground,
         topBar = {
@@ -196,6 +199,31 @@ fun UASScreen(onDone: () -> Unit) {
                     singleLine = true,
                     modifier = Modifier.weight(2f),
                 )
+            }
+
+            HorizontalDivider(color = TacticalSurface)
+
+            // -------- Live video (optional) --------
+            TextField(
+                value = rtspText,
+                onValueChange = { rtspText = it.trim(); uas.setRtspUrl(rtspText) },
+                label = { Text("Video URL (RTSP)") },
+                placeholder = { Text("rtsp://10.0.2.2:8555/test  •  blank to hide") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(onClick = {
+                    rtspText = "rtsp://10.0.2.2:8555/test"
+                    uas.setRtspUrl(rtspText)
+                }) { Text("Use SITL test stream") }
+                if (rtspText.isNotBlank()) {
+                    OutlinedButton(onClick = {
+                        rtspText = ""
+                        uas.setRtspUrl("")
+                    }) { Text("Clear", color = HostileRed) }
+                }
             }
 
             HorizontalDivider(color = TacticalSurface)
