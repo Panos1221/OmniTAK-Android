@@ -3,6 +3,7 @@ package soy.engindearing.omnitak.mobile.data.uas
 import android.util.Log
 import io.dronefleet.mavlink.MavlinkConnection as DroneFleetConnection
 import io.dronefleet.mavlink.MavlinkMessage
+import io.dronefleet.mavlink.common.BatteryStatus
 import io.dronefleet.mavlink.common.CommandLong
 import io.dronefleet.mavlink.common.GlobalPositionInt
 import io.dronefleet.mavlink.common.MavCmd
@@ -303,21 +304,47 @@ class MavlinkConnection {
                 )
             }
             is GlobalPositionInt -> _state.update { st ->
+                val now = System.currentTimeMillis()
+                val lat = body.lat() / 1e7
+                val lon = body.lon() / 1e7
+                // Append to trail iff the position has actually moved
+                // (avoids burying the buffer in identical fixes when
+                // the drone is on the ground). Cap at TRAIL_MAX.
+                val newTrail = run {
+                    val last = st.trail.lastOrNull()
+                    val moved = last == null ||
+                        kotlin.math.abs(last.latDeg - lat) > 1e-6 ||
+                        kotlin.math.abs(last.lonDeg - lon) > 1e-6
+                    if (moved) (st.trail + TrailPoint(lat, lon, now)).takeLast(TRAIL_MAX)
+                    else st.trail
+                }
                 st.copy(
-                    latDeg = body.lat() / 1e7,
-                    lonDeg = body.lon() / 1e7,
+                    latDeg = lat,
+                    lonDeg = lon,
                     altMslMeters = body.alt() / 1000.0,
                     altAglMeters = body.relativeAlt() / 1000.0,
                     headingDeg = body.hdg() / 100.0,
                     groundSpeedMps = kotlin.math.hypot(body.vx() / 100.0, body.vy() / 100.0),
                     verticalSpeedMps = -body.vz() / 100.0,
-                    lastPosition = System.currentTimeMillis(),
+                    lastPosition = now,
+                    trail = newTrail,
                 )
             }
             is SysStatus -> _state.update { st ->
                 st.copy(
                     batteryPct = body.batteryRemaining().takeIf { it in 0..100 },
                     batteryVoltage = body.voltageBattery() / 1000.0,
+                )
+            }
+            is BatteryStatus -> _state.update { st ->
+                // currentBattery is cA (10mA units). Negative = invalid.
+                val amps = body.currentBattery().takeIf { it >= 0 }?.let { it / 100.0 }
+                // timeRemaining is seconds. 0 = autopilot has no estimate
+                // (typical for SITL); positive = real estimate.
+                val sec = body.timeRemaining().takeIf { it > 0 }
+                st.copy(
+                    batteryCurrentAmps = amps,
+                    batteryTimeRemainingSec = sec,
                 )
             }
             is Statustext -> _state.update { st ->
@@ -526,5 +553,9 @@ class MavlinkConnection {
     companion object {
         private const val TAG = "Mavlink"
         const val DEFAULT_DRONE_PORT = 14550
+        /** Trail buffer cap — ~30 s at typical 1 Hz CoT cadence. Long
+         *  enough to give visual context of the drone's recent flight,
+         *  short enough not to clutter the map on long missions. */
+        private const val TRAIL_MAX = 30
     }
 }

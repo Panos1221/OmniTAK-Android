@@ -36,6 +36,11 @@ data class DroneState(
     // From SYS_STATUS / BATTERY_STATUS
     val batteryPct: Int? = null,
     val batteryVoltage: Double? = null,
+    /** From BATTERY_STATUS — seconds until the autopilot expects the
+     *  battery to be empty at current draw. null when no estimate. */
+    val batteryTimeRemainingSec: Int? = null,
+    /** Current draw, amps. null until BATTERY_STATUS arrives. */
+    val batteryCurrentAmps: Double? = null,
 
     // From GPS_RAW_INT
     val gpsFix: String? = null,           // NO_FIX / FIX_2D / FIX_3D / DGPS / RTK_FLOAT / RTK_FIXED
@@ -43,6 +48,10 @@ data class DroneState(
 
     // From STATUSTEXT — last N messages for the UI log strip
     val recentStatusText: List<String> = emptyList(),
+
+    /** Ring buffer of recent positions, oldest → newest. Used to render
+     *  the drone's trail on the map. Capped at ~30 entries. */
+    val trail: List<TrailPoint> = emptyList(),
 ) {
     /** True if we've had a HEARTBEAT in the last 5 s — RAS-A IOP §HEARTBEAT timeout. */
     fun isConnected(nowMs: Long = System.currentTimeMillis()): Boolean =
@@ -51,3 +60,11 @@ data class DroneState(
     /** True if we have any usable position fix to emit as CoT. */
     fun hasFix(): Boolean = latDeg != null && lonDeg != null
 }
+
+/** One sample on the drone's trail — lat/lon + when, so old samples can
+ *  fade or be culled. */
+data class TrailPoint(
+    val latDeg: Double,
+    val lonDeg: Double,
+    val timeMs: Long,
+)

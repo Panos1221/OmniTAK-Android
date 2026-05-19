@@ -329,6 +329,15 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
             }
         }
 
+        // Link line operator → drone + drone trail. Rendered BEFORE the
+        // drone overlay so the cyan marker lands on top of its own tail.
+        val opFix by app.locationProvider.fix.collectAsState()
+        soy.engindearing.omnitak.mobile.ui.components.UasLinkAndTrail(
+            drone = droneState,
+            operator = opFix,
+            mapboxMap = mapboxMap,
+        )
+
         soy.engindearing.omnitak.mobile.ui.components.DroneOverlay(
             drone = droneForMap,
             mapboxMap = mapboxMap,
@@ -795,6 +804,26 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
                 enabled = locationGranted,
                 onClick = { recenterTick++ },
             )
+            // Recenter on the drone — only when UAS is connected with a
+            // fix. Tap to jump camera to drone's current position at the
+            // operator's current zoom (don't change zoom — pilot may have
+            // intentionally zoomed for context).
+            if (droneState.isConnected() && droneState.latDeg != null && droneState.lonDeg != null) {
+                MapControlFab(
+                    icon = Icons.Filled.FlightTakeoff,
+                    contentDescription = "Center on drone",
+                    tint = androidx.compose.ui.graphics.Color(0xFF00E5FF),
+                    onClick = {
+                        mapboxMap?.let { m ->
+                            val pos = m.cameraPosition
+                            m.cameraPosition = org.maplibre.android.camera.CameraPosition.Builder()
+                                .target(LatLng(droneState.latDeg!!, droneState.lonDeg!!))
+                                .zoom(pos.zoom.coerceAtLeast(15.0))
+                                .build()
+                        }
+                    },
+                )
+            }
         }
 
         // Surface a "Fly UAS here" action in the radial menu only when a

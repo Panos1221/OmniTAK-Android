@@ -67,7 +67,12 @@ fun UasSituationCard(
             pct < 30 -> Color(0xFFFFC107)
             else     -> Color.White
         }
-        "$pct%" to color
+        // Append "(N min)" when the autopilot has a real time-remaining
+        // estimate (BATTERY_STATUS.time_remaining > 0).
+        val text = drone.batteryTimeRemainingSec?.let { sec ->
+            "$pct% (${sec / 60} min)"
+        } ?: "$pct%"
+        text to color
     }
 
     // Don't render an empty card.
