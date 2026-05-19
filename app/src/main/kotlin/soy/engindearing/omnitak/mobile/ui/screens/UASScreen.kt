@@ -85,6 +85,8 @@ fun UASScreen(onDone: () -> Unit) {
     var rtspText by remember(currentRtsp) { mutableStateOf(currentRtsp) }
     val currentGeofence by uas.geofenceMeters.collectAsState()
     var geofenceText by remember(currentGeofence) { mutableStateOf(currentGeofence.toString()) }
+    val failsafes by uas.failsafeParams.collectAsState()
+    var failsafeSheetOpen by remember { mutableStateOf(false) }
 
     Scaffold(
         containerColor = TacticalBackground,
@@ -226,6 +228,26 @@ fun UASScreen(onDone: () -> Unit) {
                         uas.setRtspUrl("")
                     }) { Text("Clear", color = HostileRed) }
                 }
+            }
+
+            // -------- Failsafe inspection (read-only) --------
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(
+                    onClick = { failsafeSheetOpen = true },
+                    enabled = isConnected,
+                ) { Text("Failsafes (${failsafes.size} params)") }
+                if (isConnected) {
+                    OutlinedButton(onClick = { scope.launch { uas.requestFailsafes() } }) {
+                        Text("Re-fetch")
+                    }
+                }
+            }
+            if (failsafeSheetOpen) {
+                soy.engindearing.omnitak.mobile.ui.components.UasFailsafeSheet(
+                    params = failsafes,
+                    autopilot = state.autopilot,
+                    onDismiss = { failsafeSheetOpen = false },
+                )
             }
 
             // -------- Geofence radius (meters from home) --------

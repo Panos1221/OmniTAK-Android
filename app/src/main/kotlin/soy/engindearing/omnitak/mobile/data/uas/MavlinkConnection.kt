@@ -21,6 +21,7 @@ import io.dronefleet.mavlink.common.MissionCount
 import io.dronefleet.mavlink.common.MissionItemInt
 import io.dronefleet.mavlink.common.MissionItemReached
 import io.dronefleet.mavlink.common.MissionRequestInt
+import io.dronefleet.mavlink.common.ParamValue
 import io.dronefleet.mavlink.common.Statustext
 import io.dronefleet.mavlink.common.SysStatus
 import io.dronefleet.mavlink.minimal.Heartbeat
@@ -95,6 +96,11 @@ class MavlinkConnection {
         data class Ack(val result: MavMissionResult?) : MissionEvent
         data class ItemReached(val seq: Int) : MissionEvent
     }
+
+    /** PARAM_VALUE responses — UASManager listens to populate the
+     *  failsafe params map. */
+    private val _paramValues = MutableSharedFlow<Pair<String, Float>>(extraBufferCapacity = 32)
+    val paramValues: SharedFlow<Pair<String, Float>> = _paramValues.asSharedFlow()
 
     // Active transport state — exactly one of the two is non-null while
     // connected. We branch on transport in readLoop / sendRaw rather than
@@ -418,6 +424,7 @@ class MavlinkConnection {
                     latestAlert = alert,
                 )
             }
+            is ParamValue -> _paramValues.tryEmit(body.paramId().trim() to body.paramValue())
             is MissionRequestInt -> _missionEvents.tryEmit(MissionEvent.RequestInt(body.seq()))
             is MissionAck -> _missionEvents.tryEmit(MissionEvent.Ack(body.type().entry()))
             is MissionItemReached -> _missionEvents.tryEmit(MissionEvent.ItemReached(body.seq()))

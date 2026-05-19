@@ -340,6 +340,17 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
             mapboxMap = mapboxMap,
         )
 
+        // FAA UAS Facility Map overlay — rendered BELOW the drone /
+        // mission overlays so the polygons sit behind operator pins.
+        // Visible only when a UAS is connected (cuts the noise for
+        // non-drone operators).
+        soy.engindearing.omnitak.mobile.ui.components.FaaNfzOverlay(
+            visible = droneState.isConnected(),
+            centerLatDeg = (droneState.homeLatDeg ?: selfFix?.lat),
+            centerLonDeg = (droneState.homeLonDeg ?: selfFix?.lon),
+            mapboxMap = mapboxMap,
+        )
+
         soy.engindearing.omnitak.mobile.ui.components.HomePositionOverlay(
             homeLatDeg = droneState.homeLatDeg,
             homeLonDeg = droneState.homeLonDeg,

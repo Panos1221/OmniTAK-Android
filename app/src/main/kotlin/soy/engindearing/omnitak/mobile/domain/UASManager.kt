@@ -4,6 +4,7 @@ import android.util.Log
 import io.dronefleet.mavlink.common.FollowTarget
 import io.dronefleet.mavlink.common.GlobalPositionInt
 import io.dronefleet.mavlink.common.MavCmd
+import io.dronefleet.mavlink.common.ParamRequestRead
 import io.dronefleet.mavlink.minimal.MavAutopilot
 import io.dronefleet.mavlink.minimal.MavType
 import kotlinx.coroutines.CoroutineScope
@@ -15,6 +16,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import soy.engindearing.omnitak.mobile.data.SelfFix
@@ -116,6 +118,16 @@ class UASManager(
     val geofenceMeters: StateFlow<Int> = _geofenceMeters.asStateFlow()
     fun setGeofenceMeters(m: Int) { _geofenceMeters.value = m.coerceIn(0, 10_000) }
 
+    /** Autopilot-reported failsafe configuration — populated by
+     *  requestFailsafes() reading PARAM_VALUE responses. Keys are the
+     *  raw param IDs (e.g. "COM_LOW_BAT_ACT", "BATT_LOW_VOLT") so the
+     *  UI layer owns the interpretation per-autopilot. Empty map until
+     *  the autopilot responds (some firmware delays PARAM_VALUE until
+     *  after EKF init). */
+    private val _failsafeParams = MutableStateFlow<Map<String, Float>>(emptyMap())
+    val failsafeParams: StateFlow<Map<String, Float>> = _failsafeParams.asStateFlow()
+    private var failsafeWatcherJob: Job? = null
+
     /** Terrain elevation (MSL meters) directly under the drone's current
      *  position. Drives the AGL-above-terrain HUD readout. Sampled every
      *  5 s — fine for ground-speed UAS work, and we cache tiles so the
@@ -156,6 +168,7 @@ class UASManager(
         missionExecWatcherJob = s.launch { missionExecWatcher() }
         terrainSamplerJob = s.launch { terrainSamplerLoop() }
         batteryWatcherJob = s.launch { batteryWatcherLoop() }
+        failsafeWatcherJob = s.launch { failsafeWatcherLoop() }
         Log.i(TAG, "UAS connect uid=$droneUid callsign=$droneCallsign transport=$transport target=$host:$port")
     }
 
@@ -165,14 +178,17 @@ class UASManager(
         followMeJob?.cancel()
         terrainSamplerJob?.cancel()
         batteryWatcherJob?.cancel()
+        failsafeWatcherJob?.cancel()
         scope?.cancel()
         cotPumpJob = null
         missionExecWatcherJob = null
         followMeJob = null
         terrainSamplerJob = null
         batteryWatcherJob = null
+        failsafeWatcherJob = null
         _followMeActive.value = false
         _terrainBelowDroneMsl.value = null
+        _failsafeParams.value = emptyMap()
         scope = null
         mavlink.disconnect()
     }
@@ -554,6 +570,54 @@ class UASManager(
                 lastBucket = bucket
             }
             delay(5_000)
+        }
+    }
+
+    /**
+     * Read the autopilot's failsafe configuration. Sends one
+     * PARAM_REQUEST_READ per known param, then collects PARAM_VALUE
+     * responses indefinitely (some firmware echoes them lazily). The
+     * UI surfaces values from [failsafeParams].
+     *
+     * Param IDs vary across autopilots — we request the union; the
+     * autopilot ignores ones it doesn't know.
+     */
+    suspend fun requestFailsafes() {
+        val targetSys = state.value.systemId ?: 1
+        val targetComp = state.value.componentId ?: 1
+        // 5 chars per loss is meaningful — PX4 uses COM_*, ArduPilot
+        // uses FS_*/BATT_*. Request both worlds; the autopilot drops
+        // unknowns silently.
+        val ids = listOf(
+            // PX4
+            "COM_RC_LOSS_T", "NAV_RCL_ACT", "COM_DL_LOSS_T", "NAV_DLL_ACT",
+            "COM_LOW_BAT_ACT", "BAT_LOW_THR", "BAT_CRIT_THR", "BAT_EMERGEN_THR",
+            "RTL_RETURN_ALT", "MIS_TAKEOFF_ALT",
+            // ArduPilot Copter
+            "FS_THR_ENABLE", "FS_GCS_ENABLE", "BATT_FS_LOW_ACT", "BATT_FS_CRT_ACT",
+            "BATT_LOW_VOLT", "BATT_CRT_VOLT", "RTL_ALT",
+        )
+        for (id in ids) {
+            val msg = ParamRequestRead.builder()
+                .targetSystem(targetSys)
+                .targetComponent(targetComp)
+                .paramId(id)
+                .paramIndex(-1)
+                .build()
+            runCatching { mavlink.send(msg) }
+                .onFailure { Log.w(TAG, "PARAM_REQUEST_READ $id failed: ${it.message}") }
+            delay(50) // throttle so we don't queue-overflow the link
+        }
+    }
+
+    private suspend fun failsafeWatcherLoop() {
+        // Wait a beat for the heartbeat to populate so target_system is
+        // right, then request once. Continuously collect PARAM_VALUE
+        // responses — autopilot may emit them lazily after EKF init.
+        delay(2_000)
+        runCatching { requestFailsafes() }
+        mavlink.paramValues.collect { (id, value) ->
+            _failsafeParams.update { it + (id to value) }
         }
     }
 
