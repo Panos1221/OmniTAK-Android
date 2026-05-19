@@ -539,6 +539,48 @@ class UASManager(
      *  - p7: altitude (m MSL)
      */
     /**
+     * Generate a parallel-line lawnmower survey covering a [boxMeters] ×
+     * [boxMeters] square centered on ([centerLat], [centerLon]), with
+     * [lineSpacingMeters] between sweep lines. Standard SAR / mapping
+     * pattern — drone flies E→W, N step, W→E, N step, …
+     *
+     * Defaults (200 m × 200 m at 30 m spacing → 7 lines, ~14 waypoints):
+     * sane for a single battery on a Phantom-class quad. Operator can
+     * grow the box by editing waypoints individually (the per-waypoint
+     * edit sheet) or by deleting/re-running.
+     */
+    suspend fun uploadSurveyMission(
+        centerLat: Double,
+        centerLon: Double,
+        boxMeters: Double = 200.0,
+        lineSpacingMeters: Double = 30.0,
+    ) {
+        val metersPerDegLat = 111_320.0
+        val metersPerDegLon = 111_320.0 * kotlin.math.cos(Math.toRadians(centerLat))
+        val cruiseMsl = _cruiseAlt.value.toMsl(state.value.altMslMeters ?: 0.0)
+        val half = boxMeters / 2.0
+        val numLines = (boxMeters / lineSpacingMeters).toInt().coerceAtLeast(2) + 1
+        val wps = mutableListOf<soy.engindearing.omnitak.mobile.data.uas.Waypoint>()
+        // Walk south→north; each line is east-or-west depending on parity.
+        for (i in 0 until numLines) {
+            val north = -half + i * lineSpacingMeters
+            val lat = centerLat + north / metersPerDegLat
+            val (westLon, eastLon) = Pair(
+                centerLon + (-half / metersPerDegLon),
+                centerLon + (half / metersPerDegLon),
+            )
+            val leftFirst = i % 2 == 0
+            val (a, b) = if (leftFirst) westLon to eastLon else eastLon to westLon
+            wps += soy.engindearing.omnitak.mobile.data.uas.Waypoint(lat, a, cruiseMsl)
+            wps += soy.engindearing.omnitak.mobile.data.uas.Waypoint(lat, b, cruiseMsl)
+        }
+        missionStore.clear()
+        wps.forEach { missionStore.addWaypoint(it.latDeg, it.lonDeg, it.altMslMeters) }
+        uploadAndStartMission(autoStart = true)
+        Log.i(TAG, "Survey mission: ${wps.size} pts, ${numLines} lines, box=${boxMeters}m spacing=${lineSpacingMeters}m")
+    }
+
+    /**
      * Build a circle of [points] waypoints around ([centerLat], [centerLon])
      * at [radiusMeters] and load them into [missionStore], then upload +
      * start. Persistent vs [orbitPoint] (DO_ORBIT) which evaporates on

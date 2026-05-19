@@ -10,6 +10,7 @@ import androidx.compose.material.icons.filled.Brush
 import androidx.compose.material.icons.filled.Chat
 import androidx.compose.material.icons.filled.AddLocation
 import androidx.compose.material.icons.filled.FlightTakeoff
+import androidx.compose.material.icons.filled.GridOn
 import androidx.compose.material.icons.filled.RadioButtonUnchecked
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Explore
@@ -892,6 +893,7 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
                     add(RadialAction("uas_waypoint", Icons.Filled.AddLocation, "UAS Waypoint"))
                     add(RadialAction("uas_orbit", Icons.Filled.Refresh, "Orbit Here"))
                     add(RadialAction("uas_circle", Icons.Filled.RadioButtonUnchecked, "Circle Mission"))
+                    add(RadialAction("uas_survey", Icons.Filled.GridOn, "Survey Area"))
                 }
                 add(RadialAction("center", Icons.Filled.Explore, "Center"))
                 add(RadialAction("add", Icons.Filled.Add, "Add"))
@@ -949,6 +951,14 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
                             app.uasManager.uploadCircleMission(ll.latitude, ll.longitude)
                         }
                         toast("Circle mission uploading — 12 pts @ 50 m radius")
+                    }
+                    "uas_survey" -> if (ll != null) {
+                        // Lawnmower over a 200 m × 200 m box centred on the
+                        // tapped point. Fast-follow: box-size slider.
+                        scope.launch {
+                            app.uasManager.uploadSurveyMission(ll.latitude, ll.longitude)
+                        }
+                        toast("Survey mission uploading — 200 m box, 30 m spacing")
                     }
                     else -> {
                         // Respect the operator's coordinate-format pref (Lat/Lon,
