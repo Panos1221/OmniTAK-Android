@@ -147,26 +147,17 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
     val adsbActive by adsbService.active.collectAsState()
     DisposableEffect(adsbService) { onDispose { adsbService.stop() } }
 
-    // Drone telemetry from UASManager — when a UAS is connected and has a
-    // fix, it rides on the same AircraftLayer as ADS-B traffic so it
-    // renders with heading rotation + callsign label for free.
+    // Drone telemetry from UASManager — the connected UAS gets its own
+    // DroneLayer (programmatic source/layer added at runtime), which
+    // pops visually above ADS-B traffic and self so the drone isn't
+    // lost in the generic aircraft circle. We still expose the drone
+    // through the regular aircraft list for the historical hooks
+    // (lasso, etc.) but the dedicated layer is what the operator sees.
     val droneState by app.uasManager.state.collectAsState()
-    val aircraft = remember(rawAircraft, droneState) {
-        if (!droneState.hasFix()) rawAircraft
-        else rawAircraft + soy.engindearing.omnitak.mobile.data.Aircraft(
-            icao24 = "UAS",
-            callsign = "UAS",
-            originCountry = droneState.autopilot?.removePrefix("MAV_AUTOPILOT_") ?: "",
-            lat = droneState.latDeg!!,
-            lon = droneState.lonDeg!!,
-            altitudeM = droneState.altMslMeters ?: 0.0,
-            velocityMs = droneState.groundSpeedMps ?: 0.0,
-            headingDeg = droneState.headingDeg ?: 0.0,
-            verticalRateMs = droneState.verticalSpeedMps ?: 0.0,
-            onGround = (droneState.armed != true),
-            lastUpdateEpoch = (droneState.lastPosition ?: System.currentTimeMillis()) / 1000,
-        )
-    }
+    val aircraft = rawAircraft
+    // Pass the drone separately to TacticalMap → DroneLayer renders it
+    // as a distinct cyan ring + callsign label, above the aircraft circle.
+    val droneForMap = if (droneState.hasFix()) droneState else null
     val drawings by app.drawingStore.drawings.collectAsState()
     val snackbar = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
@@ -303,6 +294,11 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
                 )
             }
         }
+
+        soy.engindearing.omnitak.mobile.ui.components.DroneOverlay(
+            drone = droneForMap,
+            mapboxMap = mapboxMap,
+        )
 
         soy.engindearing.omnitak.mobile.ui.components.LassoOverlay(
             active = lassoMode,
