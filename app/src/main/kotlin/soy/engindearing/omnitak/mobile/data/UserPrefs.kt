@@ -71,6 +71,10 @@ data class UserPrefs(
      *  appear on the map as unknown-air UAS contacts. Default off — opt-in
      *  because BLE scanning has a battery cost. */
     val remoteIdScanEnabled: Boolean = false,
+    /** 3D terrain map mode — tilts the camera and renders DEM relief
+     *  (AWS Terrarium tiles). Parity with the iOS Cesium 3D globe
+     *  toggle. Default off — 2D top-down is the tactical default. */
+    val map3dEnabled: Boolean = false,
 )
 
 class UserPrefsStore(private val context: Context) {
@@ -94,6 +98,7 @@ class UserPrefsStore(private val context: Context) {
     private val KEY_FOLLOW_ME = booleanPreferencesKey("follow_me_active")
     private val KEY_MIL_STD_SELF = booleanPreferencesKey("use_milstd_self_symbol")
     private val KEY_REMOTE_ID_SCAN = booleanPreferencesKey("remote_id_scan_enabled")
+    private val KEY_MAP_3D = booleanPreferencesKey("map_3d_enabled")
 
     val prefs: Flow<UserPrefs> = context.userPrefsDataStore.data.map { p -> readFrom(p) }
 
@@ -119,6 +124,7 @@ class UserPrefsStore(private val context: Context) {
             p[KEY_FOLLOW_ME] = next.followMeActive
             p[KEY_MIL_STD_SELF] = next.useMilStdSelfSymbol
             p[KEY_REMOTE_ID_SCAN] = next.remoteIdScanEnabled
+            p[KEY_MAP_3D] = next.map3dEnabled
         }
     }
 
@@ -156,5 +162,6 @@ class UserPrefsStore(private val context: Context) {
         followMeActive = p[KEY_FOLLOW_ME] ?: false,
         useMilStdSelfSymbol = p[KEY_MIL_STD_SELF] ?: true,
         remoteIdScanEnabled = p[KEY_REMOTE_ID_SCAN] ?: false,
+        map3dEnabled = p[KEY_MAP_3D] ?: false,
     )
 }

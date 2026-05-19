@@ -100,6 +100,7 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
     val contactsVisible = userPrefs.contactsVisible
     val callsignCardVisible = userPrefs.callsignCardVisible
     val followMeActive = userPrefs.followMeActive
+    val map3dEnabled = userPrefs.map3dEnabled
     val prefScope = rememberCoroutineScope()
     fun mutatePref(block: (soy.engindearing.omnitak.mobile.data.UserPrefs) -> soy.engindearing.omnitak.mobile.data.UserPrefs) {
         prefScope.launch { app.userPrefsStore.update(block) }
@@ -242,7 +243,8 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
             onMapReady = { map -> mapboxMap = map },
             // GAP-101 / GAP-107 — react to the basemap selection from Settings.
             // WMTS_CUSTOM uses the operator-pasted XYZ tile URL.
-            styleJson = styleJsonForProvider(userPrefs.mapProvider, userPrefs.customTileUrl),
+            styleJson = styleJsonForProvider(userPrefs.mapProvider, userPrefs.customTileUrl, terrain3d = map3dEnabled),
+            terrain3d = map3dEnabled,
             onMapLongPress = { latLng, offset ->
                 if (measurementActive) return@TacticalMap
                 radialLatLng = latLng
@@ -1248,6 +1250,7 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
                 contactsVisible = contactsVisible,
                 callsignCardVisible = callsignCardVisible,
                 meshNodesVisible = meshNodesVisible,
+                map3dEnabled = map3dEnabled,
                 onToggleGrid = { v -> mutatePref { it.copy(gridEnabled = v) } },
                 onToggleDrawings = { v -> mutatePref { it.copy(drawingsVisible = v) } },
                 onToggleAircraft = { v -> mutatePref { it.copy(aircraftVisible = v) } },
@@ -1256,6 +1259,7 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
                 onToggleMeshNodes = { v ->
                     scope.launch { app.userPrefsStore.setMeshNodesLayerVisible(v) }
                 },
+                onToggle3d = { v -> mutatePref { it.copy(map3dEnabled = v) } },
                 onDismiss = { layersSheetOpen = false },
             )
         }
