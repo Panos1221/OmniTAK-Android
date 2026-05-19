@@ -527,6 +527,25 @@ class UASManager(
         missionStore.clear()
     }
 
+    /**
+     * Run a pre-upload AGL clearance rehearsal against TAK Terrain.
+     * For each waypoint and sampled points along each leg, fetches
+     * bare-earth elevation and computes clearance. Returns a structured
+     * result the UI surfaces as a sheet.
+     *
+     * Fills in cruise altitude for any zero-altitude waypoints so the
+     * rehearsal matches what would actually be uploaded.
+     */
+    suspend fun rehearseCurrentMission(): MissionRehearsal.Result {
+        val draft = missionStore.state.value.waypoints
+        val homeMsl = state.value.altMslMeters ?: 0.0
+        val cruiseMsl = _cruiseAlt.value.toMsl(homeMsl)
+        val resolved = draft.map {
+            if (it.altMslMeters == 0.0) it.copy(altMslMeters = cruiseMsl) else it
+        }
+        return MissionRehearsal.run(resolved, terrain)
+    }
+
     private suspend fun missionExecWatcher() {
         mavlink.missionEvents.collect { ev ->
             if (ev is MavlinkConnection.MissionEvent.ItemReached) {

@@ -145,6 +145,12 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
     // because both onMapSingleTap (hit-test) and the sheet itself need
     // to see/mutate it.
     var editingWaypointIndex by remember { mutableStateOf<Int?>(null) }
+    // Mission rehearsal sheet state — held here so both the Rehearse
+    // button (MissionBanner) and the sheet itself can read/mutate.
+    var rehearsalResult by remember {
+        mutableStateOf<soy.engindearing.omnitak.mobile.domain.MissionRehearsal.Result?>(null)
+    }
+    var rehearsalRunning by remember { mutableStateOf(false) }
     var measurementPoints by remember { mutableStateOf<List<LatLng>>(emptyList()) }
     var drawingKind by remember { mutableStateOf<DrawingKind?>(null) }
     var drawingPoints by remember { mutableStateOf<List<LatLng>>(emptyList()) }
@@ -517,8 +523,34 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
                     onUndo = { app.uasManager.missionStore.undoWaypoint() },
                     onCancel = { app.uasManager.cancelMission() },
                     onExitMissionMode = { missionMode = false },
+                    onRehearse = {
+                        rehearsalRunning = true
+                        scope.launch {
+                            rehearsalResult = app.uasManager.rehearseCurrentMission()
+                            rehearsalRunning = false
+                        }
+                    },
                 )
             }
+        }
+
+        // Mission rehearsal sheet — opens on "Rehearse" button.
+        if (rehearsalResult != null || rehearsalRunning) {
+            soy.engindearing.omnitak.mobile.ui.components.MissionRehearsalSheet(
+                result = rehearsalResult,
+                running = rehearsalRunning,
+                onUploadAnyway = {
+                    rehearsalResult = null
+                    scope.launch { app.uasManager.uploadAndStartMission() }
+                    toast("Mission uploading (rehearsal warning overridden)")
+                },
+                onUploadAndStart = {
+                    rehearsalResult = null
+                    scope.launch { app.uasManager.uploadAndStartMission() }
+                    toast("Mission uploading")
+                },
+                onDismiss = { rehearsalResult = null },
+            )
         }
 
         // -------- Live video PIP — bottom-right when RTSP URL set + connected --------

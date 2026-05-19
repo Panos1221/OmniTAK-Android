@@ -39,6 +39,7 @@ fun MissionBanner(
     onUndo: () -> Unit,
     onCancel: () -> Unit,
     onExitMissionMode: () -> Unit,
+    onRehearse: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val visible = missionMode || mission.waypoints.isNotEmpty()
@@ -108,6 +109,11 @@ fun MissionBanner(
                         ),
                     ) { Text("Done") }
                 } else {
+                    OutlinedButton(
+                        onClick = onRehearse,
+                        enabled = canUpload,
+                        modifier = Modifier.weight(1f),
+                    ) { Text("Rehearse") }
                     Button(
                         onClick = onUploadAndStart,
                         enabled = canUpload,
