@@ -8,6 +8,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Brush
 import androidx.compose.material.icons.filled.Chat
+import androidx.compose.material.icons.filled.FlightTakeoff
 import androidx.compose.material.icons.filled.Explore
 import androidx.compose.material.icons.filled.Flight
 import androidx.compose.material.icons.filled.Groups
@@ -142,9 +143,30 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
     var panTarget by remember { mutableStateOf<LatLng?>(null) }
     var panTargetTick by remember { mutableStateOf(0) }
     val adsbService = remember { soy.engindearing.omnitak.mobile.data.AdsbService() }
-    val aircraft by adsbService.aircraft.collectAsState()
+    val rawAircraft by adsbService.aircraft.collectAsState()
     val adsbActive by adsbService.active.collectAsState()
     DisposableEffect(adsbService) { onDispose { adsbService.stop() } }
+
+    // Drone telemetry from UASManager — when a UAS is connected and has a
+    // fix, it rides on the same AircraftLayer as ADS-B traffic so it
+    // renders with heading rotation + callsign label for free.
+    val droneState by app.uasManager.state.collectAsState()
+    val aircraft = remember(rawAircraft, droneState) {
+        if (!droneState.hasFix()) rawAircraft
+        else rawAircraft + soy.engindearing.omnitak.mobile.data.Aircraft(
+            icao24 = "UAS",
+            callsign = "UAS",
+            originCountry = droneState.autopilot?.removePrefix("MAV_AUTOPILOT_") ?: "",
+            lat = droneState.latDeg!!,
+            lon = droneState.lonDeg!!,
+            altitudeM = droneState.altMslMeters ?: 0.0,
+            velocityMs = droneState.groundSpeedMps ?: 0.0,
+            headingDeg = droneState.headingDeg ?: 0.0,
+            verticalRateMs = droneState.verticalSpeedMps ?: 0.0,
+            onGround = (droneState.armed != true),
+            lastUpdateEpoch = (droneState.lastPosition ?: System.currentTimeMillis()) / 1000,
+        )
+    }
     val drawings by app.drawingStore.drawings.collectAsState()
     val snackbar = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
@@ -606,18 +628,25 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
             )
         }
 
+        // Surface a "Fly UAS here" action in the radial menu only when a
+        // drone is actually connected — keeps the menu clean for users
+        // who never touch a UAS.
+        val uasConnected = droneState.isConnected()
         RadialMenu(
             visible = radialAnchor != null,
             anchor = radialAnchor ?: Offset.Zero,
-            actions = listOf(
-                RadialAction("drop", Icons.Filled.Place, "Drop Marker"),
-                RadialAction("measure", Icons.Filled.Straighten, "Measure"),
-                RadialAction("nav", Icons.Filled.Navigation, "Navigate"),
-                RadialAction("layers", Icons.Filled.Layers, "Layers"),
-                RadialAction("copy", Icons.Filled.LocationOn, "Copy Coords"),
-                RadialAction("center", Icons.Filled.Explore, "Center"),
-                RadialAction("add", Icons.Filled.Add, "Add"),
-            ),
+            actions = buildList {
+                add(RadialAction("drop", Icons.Filled.Place, "Drop Marker"))
+                add(RadialAction("measure", Icons.Filled.Straighten, "Measure"))
+                add(RadialAction("nav", Icons.Filled.Navigation, "Navigate"))
+                add(RadialAction("layers", Icons.Filled.Layers, "Layers"))
+                add(RadialAction("copy", Icons.Filled.LocationOn, "Copy Coords"))
+                if (uasConnected) {
+                    add(RadialAction("uas_fly_here", Icons.Filled.FlightTakeoff, "Fly UAS Here"))
+                }
+                add(RadialAction("center", Icons.Filled.Explore, "Center"))
+                add(RadialAction("add", Icons.Filled.Add, "Add"))
+            },
             onSelect = { action ->
                 val ll = radialLatLng
                 radialAnchor = null
@@ -625,6 +654,15 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
                 when (action.id) {
                     "drop" -> if (ll != null) markerSheetLatLng = ll
                     "layers" -> layersSheetOpen = true
+                    "uas_fly_here" -> if (ll != null) {
+                        // MAV_CMD_DO_REPOSITION — drone flies to the tapped
+                        // coordinate at its current altitude. Standard
+                        // "guided mode" target update across PX4 and ArduPilot.
+                        scope.launch {
+                            app.uasManager.flyTo(ll.latitude, ll.longitude)
+                        }
+                        toast("UAS → ${"%.5f, %.5f".format(ll.latitude, ll.longitude)}")
+                    }
                     else -> {
                         // Respect the operator's coordinate-format pref (Lat/Lon,
                         // DMS, MGRS, UTM) so the "Add @ …" toast matches the

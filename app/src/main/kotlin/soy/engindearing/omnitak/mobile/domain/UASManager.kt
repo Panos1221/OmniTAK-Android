@@ -108,6 +108,39 @@ class UASManager(
         mavlink.sendCommand(MavCmd.MAV_CMD_NAV_RETURN_TO_LAUNCH)
     }
 
+    /**
+     * "Fly to here." Send MAV_CMD_DO_REPOSITION with the operator-tapped
+     * coordinate at the drone's current altitude.
+     *
+     * Works on both PX4 (any AUTO sub-mode honors DO_REPOSITION) and
+     * ArduPilot (Copter must be in GUIDED). Caller is responsible for
+     * making sure the drone is in a mode where DO_REPOSITION makes
+     * sense; if not, the drone responds with COMMAND_ACK = DENIED and
+     * we surface that via the STATUSTEXT path.
+     *
+     * Param mapping per the RAS-A IOP §Command Protocol / Mavlink common:
+     *  - p1: ground speed (m/s, -1 = use default)
+     *  - p2: bitmask (0 = position only)
+     *  - p3: reserved
+     *  - p4: yaw (NaN = keep current)
+     *  - p5: latitude (deg)
+     *  - p6: longitude (deg)
+     *  - p7: altitude (m, MSL — we re-use the drone's current MSL alt
+     *        to keep it at the same level it's flying at now)
+     */
+    suspend fun flyTo(latDeg: Double, lonDeg: Double, groundSpeed: Float = -1f) {
+        val alt = state.value.altMslMeters?.toFloat() ?: 0f
+        mavlink.sendCommand(
+            MavCmd.MAV_CMD_DO_REPOSITION,
+            p1 = groundSpeed,
+            p2 = 0f,
+            p4 = Float.NaN,
+            p5 = latDeg.toFloat(),
+            p6 = lonDeg.toFloat(),
+            p7 = alt,
+        )
+    }
+
     // ---------------------------------------------------------- internals
 
     private suspend fun cotPumpLoop() {
