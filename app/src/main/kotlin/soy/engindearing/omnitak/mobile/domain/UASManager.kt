@@ -2,8 +2,10 @@ package soy.engindearing.omnitak.mobile.domain
 
 import android.util.Log
 import io.dronefleet.mavlink.common.FollowTarget
+import io.dronefleet.mavlink.common.GlobalPositionInt
 import io.dronefleet.mavlink.common.MavCmd
 import io.dronefleet.mavlink.minimal.MavAutopilot
+import io.dronefleet.mavlink.minimal.MavType
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -73,6 +75,8 @@ class UASManager(
         data class Sent(val targetMsl: Double, val terrainMsl: Double?, val clearance: Double?) : FlyHereResult
         /** Blocked because the target altitude would clip the local terrain. */
         data class WouldHitTerrain(val targetMsl: Double, val terrainMsl: Double, val clearance: Double) : FlyHereResult
+        /** Blocked because the target is outside the operator's geofence. */
+        data class OutsideGeofence(val distanceFromHome: Double, val maxAllowed: Int) : FlyHereResult
         /** Connected but no GPS fix yet — can't compute MSL from AGL. */
         object NoGpsFix : FlyHereResult
         object NotConnected : FlyHereResult
@@ -103,6 +107,14 @@ class UASManager(
     private val _rtspUrl = MutableStateFlow("")
     val rtspUrl: StateFlow<String> = _rtspUrl.asStateFlow()
     fun setRtspUrl(url: String) { _rtspUrl.value = url.trim() }
+
+    /** Soft geofence radius (meters from home) — fly-here, pursue, and
+     *  missions reject targets outside this radius. 0 = disabled. Set
+     *  from UAS Quick Connect screen. Defaults to 500 m which clears
+     *  Part 107 + most BVLOS COA-free flight. */
+    private val _geofenceMeters = MutableStateFlow(500)
+    val geofenceMeters: StateFlow<Int> = _geofenceMeters.asStateFlow()
+    fun setGeofenceMeters(m: Int) { _geofenceMeters.value = m.coerceIn(0, 10_000) }
 
     /** Terrain elevation (MSL meters) directly under the drone's current
      *  position. Drives the AGL-above-terrain HUD readout. Sampled every
@@ -249,38 +261,88 @@ class UASManager(
         return startFollow(FollowSubject.Contact(uid, callsign), positionProvider)
     }
 
-    /** Shared follow/pursue startup — handles autopilot check, mode
-     *  switch, and the 1 Hz FOLLOW_TARGET streamer. */
+    /** Shared follow/pursue startup. Branches on autopilot type:
+     *  - PX4 → AUTO.FOLLOW_TARGET + FOLLOW_TARGET stream (msg #144)
+     *  - ArduPilot Copter → FOLLOW mode (custom=23) + GLOBAL_POSITION_INT
+     *    stream from sysid 255 (the canonical "target" the autopilot
+     *    listens to when FOLL_SYSID=0). Same effect at the operator
+     *    level — drone follows our position.
+     *  - Fixed-wing / other ArduPilot vehicles aren't supported (Plane
+     *    has FOLLOW mode but uses different param plumbing). */
     private suspend fun startFollow(
         target: FollowSubject,
         positionProvider: () -> Pair<Double, Double>?,
     ): FollowMeResult {
         val st = state.value
         if (!st.isConnected()) return FollowMeResult.NotConnected
-        if (st.autopilot != MavAutopilot.MAV_AUTOPILOT_PX4.name) {
+
+        val isPX4 = st.autopilot == MavAutopilot.MAV_AUTOPILOT_PX4.name
+        val isArduCopter = st.autopilot == MavAutopilot.MAV_AUTOPILOT_ARDUPILOTMEGA.name &&
+            // Copter, Hexa, Octo, Tri — same FOLLOW mode (23). Plane / Rover
+            // not supported here.
+            st.vehicleType in setOf(
+                MavType.MAV_TYPE_QUADROTOR.name,
+                MavType.MAV_TYPE_HEXAROTOR.name,
+                MavType.MAV_TYPE_OCTOROTOR.name,
+                MavType.MAV_TYPE_TRICOPTER.name,
+                MavType.MAV_TYPE_COAXIAL.name,
+                MavType.MAV_TYPE_HELICOPTER.name,
+            )
+        if (!isPX4 && !isArduCopter) {
             return FollowMeResult.AutopilotNotSupported(st.autopilot)
         }
 
-        // 1. SET_MODE → AUTO.FOLLOW_TARGET (PX4 main=4, sub=8).
-        mavlink.sendCommand(
-            MavCmd.MAV_CMD_DO_SET_MODE,
-            p1 = 1f, p2 = 4f, p3 = 8f,
-        )
+        // 1. Switch the drone to its FOLLOW mode.
+        if (isPX4) {
+            // PX4 AUTO.FOLLOW_TARGET = main 4, sub 8.
+            mavlink.sendCommand(MavCmd.MAV_CMD_DO_SET_MODE, p1 = 1f, p2 = 4f, p3 = 8f)
+        } else {
+            // ArduPilot Copter FOLLOW = custom_mode 23. ArduPilot ignores
+            // main/sub split — just shoves the value into p2 (the encoder
+            // builds custom_mode = p2 + p3<<24).
+            mavlink.sendCommand(MavCmd.MAV_CMD_DO_SET_MODE, p1 = 1f, p2 = 23f, p3 = 0f)
+        }
 
-        // 2. Spin the 1 Hz streamer. Cancel any prior follow target so
-        //    we never have two streams racing each other.
+        // 2. Spin the 1 Hz streamer. Cancel any prior so we never have
+        //    two streams racing.
         followMeJob?.cancel()
         followMeJob = scope?.launch {
             while (isActive) {
                 val pos = positionProvider()
-                if (pos != null) sendFollowTargetMsg(pos.first, pos.second)
+                if (pos != null) {
+                    if (isPX4) sendFollowTargetMsg(pos.first, pos.second)
+                    else sendArduCopterFollowPos(pos.first, pos.second)
+                }
                 delay(1_000)
             }
         }
         _followingWhat.value = target
         _followMeActive.value = true
-        Log.i(TAG, "FOLLOW engaged: target=$target cruise=${_cruiseAlt.value.meters}m ${_cruiseAlt.value.frame}")
+        Log.i(TAG, "FOLLOW engaged: target=$target autopilot=${if (isPX4) "PX4" else "ArduCopter"} cruise=${_cruiseAlt.value.meters}m ${_cruiseAlt.value.frame}")
         return FollowMeResult.Started
+    }
+
+    /** ArduPilot Copter FOLLOW: stream GLOBAL_POSITION_INT *as the
+     *  target* — the autopilot listens to sysid 255 (or whatever
+     *  FOLL_SYSID points at) and treats those packets as the position
+     *  to chase. Altitude rule matches the PX4 path. */
+    private suspend fun sendArduCopterFollowPos(latDeg: Double, lonDeg: Double) {
+        val cruise = _cruiseAlt.value.meters
+        val terrainMsl = runCatching { terrain.sampleMeters(latDeg, lonDeg) }.getOrNull()
+        val baseMsl = terrainMsl ?: operatorFix()?.altitudeM ?: 0.0
+        val altMsl = baseMsl + cruise
+        val msg = GlobalPositionInt.builder()
+            // ArduPilot doesn't care about exact value, just monotonicity.
+            .timeBootMs(System.currentTimeMillis() and 0xFFFFFFFFL)
+            .lat((latDeg * 1e7).toInt())
+            .lon((lonDeg * 1e7).toInt())
+            .alt((altMsl * 1000).toInt())
+            .relativeAlt((cruise * 1000).toInt())
+            .vx(0).vy(0).vz(0)
+            .hdg(0)
+            .build()
+        runCatching { mavlink.send(msg) }
+            .onFailure { Log.w(TAG, "ArduCopter follow GLOBAL_POSITION_INT send failed: ${it.message}") }
     }
 
     /** Disengage whatever follow/pursue is active. Stops the streamer
@@ -356,6 +418,20 @@ class UASManager(
         val st = state.value
         if (!st.isConnected()) return FlyHereResult.NotConnected
         val homeMsl = st.altMslMeters ?: return FlyHereResult.NoGpsFix
+
+        // Geofence check (relative to drone's HOME, not current pos —
+        // operator means "stay within radius of where I took off from").
+        val maxRange = _geofenceMeters.value
+        val homeLat = st.homeLatDeg ?: st.latDeg
+        val homeLon = st.homeLonDeg ?: st.lonDeg
+        if (maxRange > 0 && homeLat != null && homeLon != null) {
+            val dist = soy.engindearing.omnitak.mobile.data.GeoMath
+                .haversineMeters(homeLat, homeLon, latDeg, lonDeg)
+            if (dist > maxRange) {
+                Log.w(TAG, "flyTo BLOCKED: distance ${dist.toInt()}m > geofence ${maxRange}m")
+                return FlyHereResult.OutsideGeofence(dist, maxRange)
+            }
+        }
 
         // Operator's chosen altitude → an MSL value the autopilot accepts.
         val cruise = _cruiseAlt.value
@@ -637,6 +713,49 @@ class UASManager(
             p5 = latDeg.toFloat(),
             p6 = lonDeg.toFloat(),
             p7 = altMsl.toFloat(),
+        )
+    }
+
+    // ---------------------------------------------------- camera + gimbal
+
+    /** Capture one still image. [cameraId] 0 = "all cameras" per the
+     *  MAVLink common spec. */
+    suspend fun takePhoto(cameraId: Int = 0) {
+        mavlink.sendCommand(
+            MavCmd.MAV_CMD_IMAGE_START_CAPTURE,
+            p1 = cameraId.toFloat(),
+            p2 = 0f /* interval — 0 = single shot */,
+            p3 = 1f /* total images */,
+        )
+    }
+
+    /** Start video recording on [cameraId] (0 = all). [statusFreqHz] is
+     *  the rate at which the drone emits CAMERA_IMAGE_CAPTURED-style
+     *  status; 0 = autopilot default. */
+    suspend fun startVideoRecording(cameraId: Int = 0, statusFreqHz: Float = 0f) {
+        mavlink.sendCommand(
+            MavCmd.MAV_CMD_VIDEO_START_CAPTURE,
+            p1 = cameraId.toFloat(),
+            p2 = statusFreqHz,
+        )
+    }
+
+    suspend fun stopVideoRecording(cameraId: Int = 0) {
+        mavlink.sendCommand(
+            MavCmd.MAV_CMD_VIDEO_STOP_CAPTURE,
+            p1 = cameraId.toFloat(),
+        )
+    }
+
+    /** Point the gimbal to [pitchDeg] (0 = forward, -90 = nadir / straight
+     *  down). DO_MOUNT_CONTROL with stabilized targeting mode (4). */
+    suspend fun setGimbalPitch(pitchDeg: Float) {
+        mavlink.sendCommand(
+            MavCmd.MAV_CMD_DO_MOUNT_CONTROL,
+            p1 = pitchDeg,
+            p2 = 0f /* roll */,
+            p3 = 0f /* yaw */,
+            p7 = 4f /* MAV_MOUNT_MODE_MAVLINK_TARGETING */,
         )
     }
 

@@ -83,6 +83,8 @@ fun UASScreen(onDone: () -> Unit) {
 
     val currentRtsp by uas.rtspUrl.collectAsState()
     var rtspText by remember(currentRtsp) { mutableStateOf(currentRtsp) }
+    val currentGeofence by uas.geofenceMeters.collectAsState()
+    var geofenceText by remember(currentGeofence) { mutableStateOf(currentGeofence.toString()) }
 
     Scaffold(
         containerColor = TacticalBackground,
@@ -225,6 +227,20 @@ fun UASScreen(onDone: () -> Unit) {
                     }) { Text("Clear", color = HostileRed) }
                 }
             }
+
+            // -------- Geofence radius (meters from home) --------
+            TextField(
+                value = geofenceText,
+                onValueChange = { s ->
+                    geofenceText = s.filter { it.isDigit() }
+                    geofenceText.toIntOrNull()?.let { uas.setGeofenceMeters(it) }
+                },
+                label = { Text("Geofence radius (m from home)") },
+                placeholder = { Text("500  •  0 to disable") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+            )
 
             HorizontalDivider(color = TacticalSurface)
 

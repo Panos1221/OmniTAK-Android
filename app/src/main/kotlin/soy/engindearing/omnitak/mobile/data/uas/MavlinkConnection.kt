@@ -9,6 +9,8 @@ import io.dronefleet.mavlink.common.GlobalPositionInt
 import io.dronefleet.mavlink.common.GpsRawInt
 import io.dronefleet.mavlink.common.HomePosition
 import io.dronefleet.mavlink.common.VfrHud
+import io.dronefleet.mavlink.common.WindCov
+import io.dronefleet.mavlink.ardupilotmega.Wind as ArduWind
 import io.dronefleet.mavlink.common.MavCmd
 import io.dronefleet.mavlink.common.MavFrame
 import io.dronefleet.mavlink.common.MavMissionResult
@@ -369,6 +371,26 @@ class MavlinkConnection {
                 st.copy(
                     airspeedMps = body.airspeed().toDouble().takeIf { it >= 0 },
                     throttlePct = body.throttle().takeIf { it in 0..100 },
+                )
+            }
+            is WindCov -> _state.update { st ->
+                // PX4 NED frame: x = north, y = east, z = down (m/s).
+                // wind FROM bearing = atan2(y, x) + 180° (mod 360).
+                val x = body.windX().toDouble()
+                val y = body.windY().toDouble()
+                val speed = kotlin.math.hypot(x, y)
+                val fromDeg = (Math.toDegrees(kotlin.math.atan2(y, x)) + 180.0 + 360.0) % 360.0
+                st.copy(
+                    windFromDeg = fromDeg.takeIf { speed > 0.1 },
+                    windSpeedMps = speed,
+                )
+            }
+            is ArduWind -> _state.update { st ->
+                // ArduPilot's WIND already gives direction as "wind from"
+                // bearing in degrees + speed in m/s. No conversion needed.
+                st.copy(
+                    windFromDeg = body.direction().toDouble().takeIf { body.speed() > 0.1f },
+                    windSpeedMps = body.speed().toDouble().takeIf { it >= 0 },
                 )
             }
             is BatteryStatus -> _state.update { st ->

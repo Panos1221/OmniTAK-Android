@@ -69,6 +69,11 @@ data class DroneState(
     val airspeedMps: Double? = null,
     val throttlePct: Int? = null,
 
+    // From WIND (ArduPilot) or WIND_COV (PX4) — direction is degrees
+    // where wind is FROM (compass), speed is m/s horizontal.
+    val windFromDeg: Double? = null,
+    val windSpeedMps: Double? = null,
+
     /** Wall-clock ms when [armed] first flipped to true on this session.
      *  Used for the "FLT 03:24" elapsed timer in the HUD. */
     val armedAtMs: Long? = null,

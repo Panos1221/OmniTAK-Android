@@ -84,6 +84,19 @@ fun UasSituationCard(
         else -> null
     }
 
+    // WIND — direction wind is FROM + speed. Coloured yellow ≥10 m/s,
+    // red ≥15 m/s (typical Phantom-class max wind: 10 m/s; fixed-wing
+    // pushed past 15 m/s often gets blown off course).
+    val windLine: Pair<String, Color>? = drone.windSpeedMps?.let { sp ->
+        val color = when {
+            sp >= 15.0 -> Color(0xFFFF3B30)
+            sp >= 10.0 -> Color(0xFFFFC107)
+            else -> Color.White
+        }
+        val fromDir = drone.windFromDeg?.let { " from %03.0f°".format(it) } ?: ""
+        "%.1f m/s%s".format(sp, fromDir) to color
+    }
+
     // FLT — elapsed flight time (since armed-true).
     val fltLine: String? = drone.armedAtMs?.let { start ->
         val secs = ((System.currentTimeMillis() - start) / 1000L).coerceAtLeast(0L)
@@ -117,6 +130,7 @@ fun UasSituationCard(
             distLine?.let { Line("DIST", it, Color.White) }
             terrainLine?.let { (text, c) -> Line("AGL", text, c) }
             spdLine?.let { Line("SPD", it, Color.White) }
+            windLine?.let { (text, c) -> Line("WIND", text, c) }
             fltLine?.let { Line("FLT", it, Color.White) }
             batLine?.let { (text, c) -> Line("BAT", text, c) }
             gpsLine?.let { (text, c) -> Line("GPS", text, c) }

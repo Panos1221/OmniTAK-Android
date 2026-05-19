@@ -14,9 +14,14 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.CameraAlt
+import androidx.compose.material.icons.filled.CameraFront
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Fullscreen
 import androidx.compose.material.icons.filled.FullscreenExit
+import androidx.compose.material.icons.filled.PlayCircle
+import androidx.compose.material.icons.filled.StopCircle
+import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -70,6 +75,10 @@ import androidx.media3.ui.PlayerView
 fun UasVideoPip(
     rtspUrl: String,
     onDismiss: () -> Unit,
+    onPhoto: () -> Unit = {},
+    onToggleRecord: (Boolean) -> Unit = {},
+    onGimbalForward: () -> Unit = {},
+    onGimbalNadir: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     if (rtspUrl.isBlank()) return
@@ -111,6 +120,7 @@ fun UasVideoPip(
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
+    var recording by remember { mutableStateOf(false) }
     val widthDp = if (expanded) 320.dp else 160.dp
     Box(
         modifier = modifier
@@ -149,6 +159,17 @@ fun UasVideoPip(
             )
         }
 
+        // Recording dot indicator (top-left under LIVE) when recording.
+        if (recording) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.TopStart)
+                    .padding(top = 30.dp, start = 8.dp)
+                    .size(8.dp)
+                    .background(Color(0xFFFF3B30), shape = androidx.compose.foundation.shape.CircleShape),
+            )
+        }
+
         // Action row (top-right): expand/collapse, close.
         Row(
             modifier = Modifier.align(Alignment.TopEnd).padding(2.dp),
@@ -163,6 +184,44 @@ fun UasVideoPip(
             }
             IconButton(onClick = onDismiss, modifier = Modifier.size(28.dp)) {
                 Icon(Icons.Filled.Close, contentDescription = "Close", tint = Color.White)
+            }
+        }
+
+        // Camera / gimbal controls (bottom edge of PIP). Only show in
+        // expanded mode — the 160×90 compact size is too small for
+        // four reliable tap targets.
+        if (expanded) {
+            Row(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(4.dp)
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(Color.Black.copy(alpha = 0.6f))
+                    .padding(horizontal = 4.dp),
+                horizontalArrangement = Arrangement.spacedBy(0.dp),
+            ) {
+                IconButton(onClick = onPhoto, modifier = Modifier.size(32.dp)) {
+                    Icon(Icons.Filled.CameraAlt, contentDescription = "Capture photo", tint = Color.White)
+                }
+                IconButton(
+                    onClick = {
+                        recording = !recording
+                        onToggleRecord(recording)
+                    },
+                    modifier = Modifier.size(32.dp),
+                ) {
+                    Icon(
+                        if (recording) Icons.Filled.StopCircle else Icons.Filled.Videocam,
+                        contentDescription = if (recording) "Stop recording" else "Start recording",
+                        tint = if (recording) Color(0xFFFF3B30) else Color.White,
+                    )
+                }
+                IconButton(onClick = onGimbalForward, modifier = Modifier.size(32.dp)) {
+                    Icon(Icons.Filled.CameraFront, contentDescription = "Gimbal forward (0°)", tint = Color.White)
+                }
+                IconButton(onClick = onGimbalNadir, modifier = Modifier.size(32.dp)) {
+                    Icon(Icons.Filled.PlayCircle, contentDescription = "Gimbal nadir (-90°)", tint = Color.White)
+                }
             }
         }
     }

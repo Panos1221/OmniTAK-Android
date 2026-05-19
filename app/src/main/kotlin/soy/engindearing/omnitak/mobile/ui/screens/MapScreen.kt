@@ -346,6 +346,15 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
             mapboxMap = mapboxMap,
         )
 
+        // Soft geofence ring around HOME (drone-set takeoff point).
+        val geofenceM by app.uasManager.geofenceMeters.collectAsState()
+        soy.engindearing.omnitak.mobile.ui.components.GeofenceOverlay(
+            centerLatDeg = droneState.homeLatDeg,
+            centerLonDeg = droneState.homeLonDeg,
+            radiusMeters = geofenceM,
+            mapboxMap = mapboxMap,
+        )
+
         soy.engindearing.omnitak.mobile.ui.components.DroneOverlay(
             drone = droneForMap,
             mapboxMap = mapboxMap,
@@ -389,6 +398,11 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
                     horizontalAlignment = Alignment.End,
                     verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(6.dp),
                 ) {
+                    // Pre-flight readiness — only shown when disarmed.
+                    // Component handles the auto-hide on armed=true.
+                    soy.engindearing.omnitak.mobile.ui.components.UasPreflightCard(
+                        drone = droneState,
+                    )
                     soy.engindearing.omnitak.mobile.ui.components.UasAltitudePill(
                         cruise = cruiseAlt,
                         onClick = { altSheetOpen = true },
@@ -509,6 +523,23 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
                 soy.engindearing.omnitak.mobile.ui.components.UasVideoPip(
                     rtspUrl = rtspUrl,
                     onDismiss = { videoVisible = false },
+                    onPhoto = {
+                        scope.launch { app.uasManager.takePhoto() }
+                        toast("📷 Photo captured")
+                    },
+                    onToggleRecord = { rec ->
+                        scope.launch {
+                            if (rec) app.uasManager.startVideoRecording()
+                            else app.uasManager.stopVideoRecording()
+                        }
+                        toast(if (rec) "🔴 Video REC" else "⏹ Video stopped")
+                    },
+                    onGimbalForward = {
+                        scope.launch { app.uasManager.setGimbalPitch(0f) }
+                    },
+                    onGimbalNadir = {
+                        scope.launch { app.uasManager.setGimbalPitch(-90f) }
+                    },
                 )
             }
         }
@@ -940,6 +971,8 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
                                 is soy.engindearing.omnitak.mobile.domain.UASManager.FlyHereResult.WouldHitTerrain ->
                                     "BLOCKED: target ${result.targetMsl.toInt()}m would clip terrain at " +
                                         "${result.terrainMsl.toInt()}m (clearance ${result.clearance.toInt()}m). Raise cruise alt."
+                                is soy.engindearing.omnitak.mobile.domain.UASManager.FlyHereResult.OutsideGeofence ->
+                                    "BLOCKED: ${result.distanceFromHome.toInt()} m from home — exceeds ${result.maxAllowed} m geofence"
                                 soy.engindearing.omnitak.mobile.domain.UASManager.FlyHereResult.NoGpsFix ->
                                     "UAS has no GPS fix yet — wait for telemetry"
                                 soy.engindearing.omnitak.mobile.domain.UASManager.FlyHereResult.NotConnected ->
