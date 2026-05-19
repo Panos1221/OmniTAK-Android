@@ -315,6 +315,32 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
             mapboxMap = mapboxMap,
         )
 
+        // -------- UAS cruise altitude pill (top-right, when UAS connected) --------
+        val cruiseAlt by app.uasManager.cruiseAlt.collectAsState()
+        var altSheetOpen by remember { mutableStateOf(false) }
+        if (droneState.isConnected()) {
+            androidx.compose.foundation.layout.Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(top = 90.dp, end = 12.dp),
+                contentAlignment = Alignment.TopEnd,
+            ) {
+                soy.engindearing.omnitak.mobile.ui.components.UasAltitudePill(
+                    cruise = cruiseAlt,
+                    onClick = { altSheetOpen = true },
+                )
+            }
+        }
+        if (altSheetOpen) {
+            soy.engindearing.omnitak.mobile.ui.components.UasAltitudeSheet(
+                current = cruiseAlt,
+                onApply = { newCruise ->
+                    app.uasManager.setCruiseAltitude(newCruise.meters, newCruise.frame)
+                },
+                onDismiss = { altSheetOpen = false },
+            )
+        }
+
         if (missionMode || mission.waypoints.isNotEmpty()) {
             androidx.compose.foundation.layout.Box(
                 modifier = Modifier
@@ -687,13 +713,30 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
                     "drop" -> if (ll != null) markerSheetLatLng = ll
                     "layers" -> layersSheetOpen = true
                     "uas_fly_here" -> if (ll != null) {
-                        // MAV_CMD_DO_REPOSITION — drone flies to the tapped
-                        // coordinate at its current altitude. Standard
-                        // "guided mode" target update across PX4 and ArduPilot.
+                        // MAV_CMD_DO_REPOSITION at the operator's cruise
+                        // altitude, after a TAK Terrain safety check.
+                        // Result is surfaced as a toast — blocked
+                        // commands include the exact clearance number
+                        // so the operator knows what to change.
                         scope.launch {
-                            app.uasManager.flyTo(ll.latitude, ll.longitude)
+                            val result = app.uasManager.flyTo(ll.latitude, ll.longitude)
+                            val msg = when (result) {
+                                is soy.engindearing.omnitak.mobile.domain.UASManager.FlyHereResult.Sent ->
+                                    if (result.clearance != null)
+                                        "UAS → ${"%.4f, %.4f".format(ll.latitude, ll.longitude)} " +
+                                            "(${result.targetMsl.toInt()}m MSL, ${result.clearance.toInt()}m AGL)"
+                                    else
+                                        "UAS → ${"%.4f, %.4f".format(ll.latitude, ll.longitude)} (${result.targetMsl.toInt()}m MSL)"
+                                is soy.engindearing.omnitak.mobile.domain.UASManager.FlyHereResult.WouldHitTerrain ->
+                                    "BLOCKED: target ${result.targetMsl.toInt()}m would clip terrain at " +
+                                        "${result.terrainMsl.toInt()}m (clearance ${result.clearance.toInt()}m). Raise cruise alt."
+                                soy.engindearing.omnitak.mobile.domain.UASManager.FlyHereResult.NoGpsFix ->
+                                    "UAS has no GPS fix yet — wait for telemetry"
+                                soy.engindearing.omnitak.mobile.domain.UASManager.FlyHereResult.NotConnected ->
+                                    "UAS link down — reconnect first"
+                            }
+                            toast(msg)
                         }
-                        toast("UAS → ${"%.5f, %.5f".format(ll.latitude, ll.longitude)}")
                     }
                     "uas_waypoint" -> if (ll != null) {
                         // Seed the mission with this waypoint AND enter

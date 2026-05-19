@@ -23,6 +23,8 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -49,6 +51,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
 import soy.engindearing.omnitak.mobile.OmniTAKApp
+import soy.engindearing.omnitak.mobile.data.uas.MavlinkConnection
 import soy.engindearing.omnitak.mobile.ui.theme.HostileRed
 import soy.engindearing.omnitak.mobile.ui.theme.NeutralYellow
 import soy.engindearing.omnitak.mobile.ui.theme.TacticalAccent
@@ -73,6 +76,7 @@ fun UASScreen(onDone: () -> Unit) {
     val state by uas.state.collectAsState()
     val isConnected = state.isConnected()
 
+    var transport by remember { mutableStateOf(MavlinkConnection.Transport.UDP) }
     var host by remember { mutableStateOf("10.0.2.2") } // emulator-to-host SITL default
     var portText by remember { mutableStateOf("14550") }
     var callsign by remember { mutableStateOf("OmniTAK-UAS") }
@@ -107,7 +111,7 @@ fun UASScreen(onDone: () -> Unit) {
                     Button(
                         onClick = {
                             val port = portText.toIntOrNull() ?: 14550
-                            uas.connect(host.trim(), port, callsign.trim())
+                            uas.connect(host.trim(), port, callsign.trim(), transport = transport)
                         },
                         enabled = host.isNotBlank(),
                         modifier = Modifier.fillMaxWidth(),
@@ -134,10 +138,38 @@ fun UASScreen(onDone: () -> Unit) {
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             Text(
-                "Connect a MAVLink UAS over UDP. Day-one supports PX4 / ArduPilot per the RAS-A v1.2 IOP. Your CoT marker flows to every other operator on the active TAK server.",
+                "Connect a MAVLink UAS. Day-one supports PX4 / ArduPilot per the RAS-A v1.2 IOP. Your CoT marker flows to every other operator on the active TAK server.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f),
             )
+
+            // Transport selector. UDP is the field default (vehicle Wi-Fi).
+            // TCP is for SSH-tunneled SITL or any net where UDP is blocked
+            // (consumer routers often filter inter-VLAN UDP).
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text("Transport", style = MaterialTheme.typography.labelLarge,
+                     color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f))
+                MavlinkConnection.Transport.entries.forEach { t ->
+                    FilterChip(
+                        selected = transport == t,
+                        onClick = {
+                            transport = t
+                            // Helpful default ports: UDP=14550, TCP=14555.
+                            // Operator can override.
+                            portText = if (t == MavlinkConnection.Transport.UDP) "14550" else "14555"
+                        },
+                        label = { Text(t.name) },
+                        colors = FilterChipDefaults.filterChipColors(
+                            selectedContainerColor = TacticalAccent,
+                            selectedLabelColor = TacticalBackground,
+                        ),
+                    )
+                }
+            }
 
             TextField(
                 value = host,
@@ -152,7 +184,7 @@ fun UASScreen(onDone: () -> Unit) {
                 TextField(
                     value = portText,
                     onValueChange = { portText = it.filter(Char::isDigit) },
-                    label = { Text("UDP port") },
+                    label = { Text(if (transport == MavlinkConnection.Transport.TCP) "TCP port" else "UDP port") },
                     singleLine = true,
                     modifier = Modifier.weight(1f),
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),

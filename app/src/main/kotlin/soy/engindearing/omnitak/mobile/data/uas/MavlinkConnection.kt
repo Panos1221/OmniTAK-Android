@@ -22,7 +22,6 @@ import io.dronefleet.mavlink.minimal.MavAutopilot
 import io.dronefleet.mavlink.minimal.MavModeFlag
 import io.dronefleet.mavlink.minimal.MavState
 import io.dronefleet.mavlink.minimal.MavType
-import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
@@ -42,16 +41,26 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
+import java.io.InputStream
+import java.io.OutputStream
 import java.net.DatagramPacket
 import java.net.DatagramSocket
 import java.net.InetAddress
+import java.net.InetSocketAddress
+import java.net.Socket
 
 /**
- * UDP MAVLink 2 client for a single connected UAS, per the RAS-A
- * MAVLink Control Link Interoperability Profile v1.2 (the DoD spec the
- * official ATAK UAS Tool 13.0 implements).
+ * MAVLink 2 client for a single connected UAS, per the RAS-A MAVLink
+ * Control Link Interoperability Profile v1.2 (the DoD spec the official
+ * ATAK UAS Tool 13.0 implements).
  *
- * Transport: UDP unicast, well-known port 14550 (RAS-A IOP §Networking).
+ * Transports:
+ *  - **UDP** (default, RAS-A IOP §Networking) — vehicle Wi-Fi / SITL.
+ *  - **TCP** — useful for SSH-tunneled SITL on a lab server or any
+ *    network where UDP is filtered (consumer routers often block
+ *    inter-VLAN UDP; we hit this dev-side talking to the Ubuntu
+ *    trainer's PX4 SITL).
+ *
  * Framing: MAVLink 2 (0xFD magic, CRC-MCRF4XX) — io.dronefleet.mavlink
  * handles the parsing/serialization; we own the socket and the loop.
  *
@@ -67,13 +76,11 @@ import java.net.InetAddress
  */
 class MavlinkConnection {
 
+    enum class Transport { UDP, TCP }
+
     private val _state = MutableStateFlow(DroneState())
     val state: StateFlow<DroneState> = _state.asStateFlow()
 
-    /** Stream of mission-protocol messages from the drone (REQUEST_INT, ACK)
-     *  + execution updates (MISSION_ITEM_REACHED). [uploadMission] consumes
-     *  it during the handshake; the UI's [UASManager] mission watcher
-     *  observes it for live progress. */
     private val _missionEvents = MutableSharedFlow<MissionEvent>(extraBufferCapacity = 16)
     val missionEvents: SharedFlow<MissionEvent> = _missionEvents.asSharedFlow()
 
@@ -83,9 +90,21 @@ class MavlinkConnection {
         data class ItemReached(val seq: Int) : MissionEvent
     }
 
-    private var socket: DatagramSocket? = null
-    private var droneAddress: InetAddress? = null
-    private var dronePort: Int = DEFAULT_DRONE_PORT
+    // Active transport state — exactly one of the two is non-null while
+    // connected. We branch on transport in readLoop / sendRaw rather than
+    // unifying behind a stream wrapper because Datagram and Socket have
+    // fundamentally different semantics (packet vs stream).
+    private var transport: Transport? = null
+    private var udpSocket: DatagramSocket? = null
+    private var udpAddress: InetAddress? = null
+    private var udpPort: Int = DEFAULT_DRONE_PORT
+    private var tcpSocket: Socket? = null
+    private var tcpIn: InputStream? = null
+    private var tcpOut: OutputStream? = null
+    /** Single long-lived dronefleet Connection for TCP — handles framing
+     *  across stream boundaries (TCP doesn't preserve message edges). */
+    private var tcpConn: DroneFleetConnection? = null
+
     private var scope: CoroutineScope? = null
     private var readJob: Job? = null
     private var heartbeatJob: Job? = null
@@ -94,27 +113,60 @@ class MavlinkConnection {
     private val gcsSystemId = 255
     private val gcsComponentId = 190 // MAV_COMP_ID_MISSIONPLANNER
 
-    /**
-     * Open a UDP socket and start the read + heartbeat loops.
-     * [host]/[port] is where the drone (or SITL) is listening. Default is
-     * the SITL convention `127.0.0.1:14550`.
-     */
-    fun connect(host: String, port: Int = DEFAULT_DRONE_PORT) {
-        disconnect() // idempotent
-        droneAddress = InetAddress.getByName(host)
-        dronePort = port
+    /** UDP convenience overload (backwards-compatible). */
+    fun connect(host: String, port: Int = DEFAULT_DRONE_PORT) =
+        connect(Transport.UDP, host, port)
 
-        val sock = DatagramSocket().apply {
-            soTimeout = 1_000 // so the read loop can check cancellation
-        }
-        socket = sock
+    /**
+     * Open the link and start the read + heartbeat loops.
+     * [host]/[port] is where the drone (or SITL) is listening.
+     */
+    fun connect(transport: Transport, host: String, port: Int = DEFAULT_DRONE_PORT) {
+        disconnect() // idempotent
+        this.transport = transport
 
         val s = CoroutineScope(SupervisorJob() + Dispatchers.IO)
         scope = s
 
-        readJob = s.launch { readLoop(sock) }
-        heartbeatJob = s.launch { heartbeatLoop(sock) }
-        Log.i(TAG, "MAVLink UDP open → $host:$port (GCS sysid=$gcsSystemId)")
+        when (transport) {
+            Transport.UDP -> {
+                udpAddress = InetAddress.getByName(host)
+                udpPort = port
+                udpSocket = DatagramSocket().apply { soTimeout = 1_000 }
+                Log.i(TAG, "MAVLink UDP open → $host:$port (GCS sysid=$gcsSystemId)")
+            }
+            Transport.TCP -> {
+                // Run the connect in the IO scope so we don't block the
+                // caller (Compose Main) — the read loop waits for the
+                // socket to come up.
+                s.launch { openTcp(host, port) }
+            }
+        }
+
+        readJob = s.launch { readLoop() }
+        heartbeatJob = s.launch { heartbeatLoop() }
+    }
+
+    private suspend fun openTcp(host: String, port: Int) = withContext(Dispatchers.IO) {
+        try {
+            val sock = Socket()
+            sock.tcpNoDelay = true
+            sock.connect(InetSocketAddress(host, port), 5_000)
+            tcpSocket = sock
+            tcpIn = sock.getInputStream()
+            tcpOut = sock.getOutputStream()
+            tcpConn = DroneFleetConnection.create(tcpIn!!, tcpOut!!)
+            Log.i(TAG, "MAVLink TCP open → $host:$port (GCS sysid=$gcsSystemId)")
+        } catch (t: Throwable) {
+            Log.w(TAG, "TCP connect failed: ${t.message}")
+            // Surface to UI as a status line so the operator knows.
+            _state.update { st ->
+                st.copy(
+                    recentStatusText = (st.recentStatusText + "TCP connect failed: ${t.message}")
+                        .takeLast(8)
+                )
+            }
+        }
     }
 
     fun disconnect() {
@@ -124,8 +176,16 @@ class MavlinkConnection {
         readJob = null
         heartbeatJob = null
         scope = null
-        socket?.close()
-        socket = null
+
+        try { udpSocket?.close() } catch (_: Throwable) {}
+        try { tcpSocket?.close() } catch (_: Throwable) {}
+        udpSocket = null
+        tcpSocket = null
+        tcpIn = null
+        tcpOut = null
+        tcpConn = null
+        transport = null
+
         // Reset the StateFlow so the UI's isConnected() flips to false
         // immediately. Without this, lastHeartbeat is still recent and
         // the UI's CONNECTED banner stays green for ~5s after disconnect.
@@ -144,53 +204,71 @@ class MavlinkConnection {
         p1: Float = 0f, p2: Float = 0f, p3: Float = 0f, p4: Float = 0f,
         p5: Float = 0f, p6: Float = 0f, p7: Float = 0f,
     ) {
-        val sock = socket ?: error("not connected")
-        val addr = droneAddress ?: error("no drone address")
         val targetSys = _state.value.systemId ?: 1
         val targetComp = _state.value.componentId ?: 1
-
         val msg = CommandLong.builder()
-            .targetSystem(targetSys)
-            .targetComponent(targetComp)
-            .command(command)
-            .confirmation(0)
+            .targetSystem(targetSys).targetComponent(targetComp)
+            .command(command).confirmation(0)
             .param1(p1).param2(p2).param3(p3).param4(p4)
-            .param5(p5).param6(p6).param7(p7)
-            .build()
-
-        withContext(Dispatchers.IO) {
-            val buf = serialize(msg)
-            sock.send(DatagramPacket(buf, buf.size, addr, dronePort))
-        }
+            .param5(p5).param6(p6).param7(p7).build()
+        sendRaw(msg)
     }
 
     // ---------------------------------------------------------------- loops
 
-    private suspend fun readLoop(sock: DatagramSocket) {
-        val buf = ByteArray(280) // MAVLink 2 max frame size
+    private suspend fun readLoop() {
         while (scope?.isActive == true) {
             try {
-                val packet = DatagramPacket(buf, buf.size)
-                sock.receive(packet)
-                // First receive also tells us the drone's source port if
-                // the caller passed the wrong destination port (SITL is
-                // chatty about this — most ground stations rely on it).
-                if (droneAddress == null || packet.address != droneAddress) {
-                    droneAddress = packet.address
-                    dronePort = packet.port
+                when (transport) {
+                    Transport.UDP -> readOneUdp()
+                    Transport.TCP -> readOneTcp()
+                    null -> { delay(50) /* not connected yet */ }
                 }
-                handleIncoming(packet)
             } catch (_: java.net.SocketTimeoutException) {
-                // expected — we set SO_TIMEOUT so we can check cancellation
+                // expected — we set SO_TIMEOUT on UDP so we can check cancellation
             } catch (t: Throwable) {
                 if (scope?.isActive == true) {
                     Log.w(TAG, "read error: ${t.javaClass.simpleName}: ${t.message}")
+                    if (transport == Transport.TCP) {
+                        // TCP errors are usually fatal (socket closed).
+                        // Surface and back off to avoid hot-loop on EOF.
+                        delay(500)
+                    }
                 }
             }
         }
     }
 
-    private suspend fun heartbeatLoop(sock: DatagramSocket) {
+    private fun readOneUdp() {
+        val sock = udpSocket ?: return
+        val buf = ByteArray(280) // MAVLink 2 max frame size
+        val packet = DatagramPacket(buf, buf.size)
+        sock.receive(packet)
+        // First receive also tells us the drone's source port if the
+        // caller passed the wrong destination port (SITL is chatty about
+        // this — most ground stations rely on it).
+        if (udpAddress == null || packet.address != udpAddress) {
+            udpAddress = packet.address
+            udpPort = packet.port
+        }
+        val inStream = ByteArrayInputStream(packet.data, 0, packet.length)
+        val conn = DroneFleetConnection.create(inStream, ByteArrayOutputStream())
+        var msg: MavlinkMessage<*>? = try { conn.next() } catch (_: Throwable) { return }
+        while (msg != null) {
+            apply(msg)
+            msg = try { conn.next() } catch (_: Throwable) { null }
+        }
+    }
+
+    private fun readOneTcp() {
+        val conn = tcpConn ?: return
+        // dronefleet's conn.next() blocks on the InputStream and returns
+        // exactly one frame; null/EOFException means the stream is closed.
+        val msg = conn.next() ?: throw java.io.EOFException("TCP stream closed")
+        apply(msg)
+    }
+
+    private suspend fun heartbeatLoop() {
         val hb = Heartbeat.builder()
             .type(MavType.MAV_TYPE_GCS)
             .autopilot(MavAutopilot.MAV_AUTOPILOT_INVALID)
@@ -199,35 +277,13 @@ class MavlinkConnection {
             .build()
         while (scope?.isActive == true) {
             try {
-                val addr = droneAddress
-                if (addr != null) {
-                    val buf = serialize(hb)
-                    sock.send(DatagramPacket(buf, buf.size, addr, dronePort))
-                }
+                sendRaw(hb)
             } catch (t: Throwable) {
                 if (scope?.isActive == true) {
                     Log.w(TAG, "heartbeat send error: ${t.message}")
                 }
             }
             delay(1_000) // 1 Hz per RAS-A IOP
-        }
-    }
-
-    private fun handleIncoming(packet: DatagramPacket) {
-        val inStream = ByteArrayInputStream(packet.data, 0, packet.length)
-        // io.dronefleet's MavlinkConnection wraps a stream — re-create
-        // per packet rather than maintain a long-lived parser, because
-        // we're packet-oriented over UDP.
-        val conn = DroneFleetConnection.create(inStream, ByteArrayOutputStream())
-        var msg: MavlinkMessage<*>?
-        try {
-            msg = conn.next()
-        } catch (t: Throwable) {
-            return
-        }
-        while (msg != null) {
-            apply(msg)
-            try { msg = conn.next() } catch (_: Throwable) { msg = null }
         }
     }
 
@@ -265,7 +321,7 @@ class MavlinkConnection {
                 )
             }
             is Statustext -> _state.update { st ->
-                val line = body.text().trim(' ', ' ')
+                val line = body.text().trim(' ', ' ')
                 st.copy(recentStatusText = (st.recentStatusText + line).takeLast(8))
             }
             is MissionRequestInt -> _missionEvents.tryEmit(MissionEvent.RequestInt(body.seq()))
@@ -282,13 +338,28 @@ class MavlinkConnection {
      *  context (Main / Compose scope / etc.) without
      *  NetworkOnMainThreadException. */
     private suspend fun sendRaw(payload: Any) = withContext(Dispatchers.IO) {
-        val sock = socket ?: return@withContext
-        val addr = droneAddress ?: return@withContext
-        val buf = serialize(payload)
-        try {
-            sock.send(DatagramPacket(buf, buf.size, addr, dronePort))
-        } catch (t: Throwable) {
-            Log.w(TAG, "sendRaw failed: ${t.message}")
+        when (transport) {
+            Transport.UDP -> {
+                val sock = udpSocket ?: return@withContext
+                val addr = udpAddress ?: return@withContext
+                val buf = serialize(payload)
+                try {
+                    sock.send(DatagramPacket(buf, buf.size, addr, udpPort))
+                } catch (t: Throwable) {
+                    Log.w(TAG, "UDP sendRaw failed: ${t.message}")
+                }
+            }
+            Transport.TCP -> {
+                val conn = tcpConn ?: return@withContext
+                try {
+                    // dronefleet handles framing + sequencing.
+                    conn.send2(gcsSystemId, gcsComponentId, payload)
+                    tcpOut?.flush()
+                } catch (t: Throwable) {
+                    Log.w(TAG, "TCP sendRaw failed: ${t.message}")
+                }
+            }
+            null -> { /* not connected; drop silently — caller may race connect */ }
         }
     }
 

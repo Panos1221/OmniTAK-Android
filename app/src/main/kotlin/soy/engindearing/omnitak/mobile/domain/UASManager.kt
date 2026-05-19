@@ -8,13 +8,18 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import soy.engindearing.omnitak.mobile.data.uas.AltFrame
+import soy.engindearing.omnitak.mobile.data.uas.CruiseAltitude
 import soy.engindearing.omnitak.mobile.data.uas.DroneState
 import soy.engindearing.omnitak.mobile.data.uas.MavlinkConnection
 import soy.engindearing.omnitak.mobile.data.uas.MissionPhase
 import soy.engindearing.omnitak.mobile.data.uas.MissionStore
+import soy.engindearing.omnitak.mobile.data.uas.TerrainSampler
 import soy.engindearing.omnitak.mobile.data.uas.WaypointMission
 
 /**
@@ -34,6 +39,7 @@ import soy.engindearing.omnitak.mobile.data.uas.WaypointMission
  */
 class UASManager(
     private val sendCoT: suspend (String) -> Boolean,
+    private val terrain: TerrainSampler = TerrainSampler(),
 ) {
     private val mavlink = MavlinkConnection()
     val state: StateFlow<DroneState> = mavlink.state
@@ -42,6 +48,28 @@ class UASManager(
      *  multi-mission queueing is a fast-follow if it ever becomes a thing. */
     val missionStore = MissionStore()
     val mission: StateFlow<WaypointMission> = missionStore.state
+
+    /** Operator's cruise altitude — what fly-here and new waypoints use.
+     *  Default 80 m AGL; updated to drone's current relative_alt on
+     *  connect so the first reposition matches the current flight. */
+    private val _cruiseAlt = MutableStateFlow(CruiseAltitude())
+    val cruiseAlt: StateFlow<CruiseAltitude> = _cruiseAlt.asStateFlow()
+
+    fun setCruiseAltitude(meters: Double, frame: AltFrame) {
+        _cruiseAlt.value = CruiseAltitude(meters.coerceIn(0.0, 10_000.0), frame)
+    }
+
+    /** Result of a flyTo attempt. Sealed so the caller can render the
+     *  right toast / banner without sprinkling string matching around. */
+    sealed interface FlyHereResult {
+        /** Command went out to the autopilot. */
+        data class Sent(val targetMsl: Double, val terrainMsl: Double?, val clearance: Double?) : FlyHereResult
+        /** Blocked because the target altitude would clip the local terrain. */
+        data class WouldHitTerrain(val targetMsl: Double, val terrainMsl: Double, val clearance: Double) : FlyHereResult
+        /** Connected but no GPS fix yet — can't compute MSL from AGL. */
+        object NoGpsFix : FlyHereResult
+        object NotConnected : FlyHereResult
+    }
 
     private var scope: CoroutineScope? = null
     private var cotPumpJob: Job? = null
@@ -64,6 +92,7 @@ class UASManager(
         port: Int = MavlinkConnection.DEFAULT_DRONE_PORT,
         callsign: String = "OmniTAK-UAS",
         operatorUid: String? = null,
+        transport: MavlinkConnection.Transport = MavlinkConnection.Transport.UDP,
     ) {
         disconnect()
         droneCallsign = callsign.ifBlank { "OmniTAK-UAS" }
@@ -71,13 +100,13 @@ class UASManager(
         // Fresh UID per connect — different drone session, new marker.
         droneUid = "UAS-${CotBuilders.newUid().take(8)}"
 
-        mavlink.connect(host, port)
+        mavlink.connect(transport, host, port)
 
         val s = CoroutineScope(SupervisorJob() + Dispatchers.IO)
         scope = s
         cotPumpJob = s.launch { cotPumpLoop() }
         missionExecWatcherJob = s.launch { missionExecWatcher() }
-        Log.i(TAG, "UAS connect uid=$droneUid callsign=$droneCallsign target=$host:$port")
+        Log.i(TAG, "UAS connect uid=$droneUid callsign=$droneCallsign transport=$transport target=$host:$port")
     }
 
     fun disconnect() {
@@ -121,27 +150,50 @@ class UASManager(
     }
 
     /**
-     * "Fly to here." Send MAV_CMD_DO_REPOSITION with the operator-tapped
-     * coordinate at the drone's current altitude.
+     * "Fly to here." Send MAV_CMD_DO_REPOSITION using the operator's
+     * [cruiseAlt], with a pre-flight terrain safety check against TAK
+     * Terrain DEM at the target coordinate.
      *
-     * Works on both PX4 (any AUTO sub-mode honors DO_REPOSITION) and
-     * ArduPilot (Copter must be in GUIDED). Caller is responsible for
-     * making sure the drone is in a mode where DO_REPOSITION makes
-     * sense; if not, the drone responds with COMMAND_ACK = DENIED and
-     * we surface that via the STATUSTEXT path.
+     * Returns a [FlyHereResult] the caller renders as toast/banner:
+     *  - [FlyHereResult.Sent] — command went out
+     *  - [FlyHereResult.WouldHitTerrain] — blocked, target below local
+     *    terrain + [terrainBufferMeters] safety buffer
+     *  - [FlyHereResult.NoGpsFix] — drone has no MSL ref yet
+     *  - [FlyHereResult.NotConnected] — link down
      *
-     * Param mapping per the RAS-A IOP §Command Protocol / Mavlink common:
+     * If the terrain fetch fails (offline, CDN down), we send anyway —
+     * absence of data is not evidence the path is unsafe, and the
+     * operator already has eyes-on (it's a manual long-press). We
+     * surface this in [FlyHereResult.Sent.terrainMsl == null].
+     *
+     * Param mapping per RAS-A IOP §Command Protocol:
      *  - p1: ground speed (m/s, -1 = use default)
      *  - p2: bitmask (0 = position only)
-     *  - p3: reserved
      *  - p4: yaw (NaN = keep current)
-     *  - p5: latitude (deg)
-     *  - p6: longitude (deg)
-     *  - p7: altitude (m, MSL — we re-use the drone's current MSL alt
-     *        to keep it at the same level it's flying at now)
+     *  - p5: latitude (deg) / p6: longitude (deg) / p7: altitude (MSL)
      */
-    suspend fun flyTo(latDeg: Double, lonDeg: Double, groundSpeed: Float = -1f) {
-        val alt = state.value.altMslMeters?.toFloat() ?: 0f
+    suspend fun flyTo(
+        latDeg: Double,
+        lonDeg: Double,
+        groundSpeed: Float = -1f,
+        terrainBufferMeters: Double = 10.0,
+    ): FlyHereResult {
+        val st = state.value
+        if (!st.isConnected()) return FlyHereResult.NotConnected
+        val homeMsl = st.altMslMeters ?: return FlyHereResult.NoGpsFix
+
+        // Operator's chosen altitude → an MSL value the autopilot accepts.
+        val cruise = _cruiseAlt.value
+        val targetMsl = cruise.toMsl(homeMsl)
+
+        // Terrain safety check.
+        val terrainMsl = runCatching { terrain.sampleMeters(latDeg, lonDeg) }.getOrNull()
+        val clearance = terrainMsl?.let { targetMsl - it }
+        if (terrainMsl != null && clearance != null && clearance < terrainBufferMeters) {
+            Log.w(TAG, "flyTo BLOCKED: target=${targetMsl}m terrain=${terrainMsl}m clearance=${clearance}m")
+            return FlyHereResult.WouldHitTerrain(targetMsl, terrainMsl, clearance)
+        }
+
         mavlink.sendCommand(
             MavCmd.MAV_CMD_DO_REPOSITION,
             p1 = groundSpeed,
@@ -149,8 +201,9 @@ class UASManager(
             p4 = Float.NaN,
             p5 = latDeg.toFloat(),
             p6 = lonDeg.toFloat(),
-            p7 = alt,
+            p7 = targetMsl.toFloat(),
         )
+        return FlyHereResult.Sent(targetMsl, terrainMsl, clearance)
     }
 
     // ------------------------------------------------------- mission upload
@@ -167,12 +220,13 @@ class UASManager(
         val draft = missionStore.state.value
         if (draft.waypoints.isEmpty()) return
         missionStore.setPhase(MissionPhase.UPLOADING)
-        // Default mission altitude: keep waypoints at the drone's current
-        // MSL altitude if they didn't specify (the draw flow doesn't yet
-        // prompt for per-waypoint altitude — fast-follow).
-        val currentAlt = state.value.altMslMeters ?: 0.0
+        // Default mission altitude: operator's cruise altitude (the
+        // chip + sheet up top). Per-waypoint altitude override is a
+        // fast-follow (#54 in the backlog).
+        val homeMsl = state.value.altMslMeters ?: 0.0
+        val targetMsl = _cruiseAlt.value.toMsl(homeMsl)
         val waypoints = draft.waypoints.map {
-            if (it.altMslMeters == 0.0) it.copy(altMslMeters = currentAlt) else it
+            if (it.altMslMeters == 0.0) it.copy(altMslMeters = targetMsl) else it
         }
         val accepted = mavlink.uploadMission(waypoints)
         if (!accepted) {
