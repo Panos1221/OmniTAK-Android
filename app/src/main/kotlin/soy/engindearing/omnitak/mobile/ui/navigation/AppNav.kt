@@ -40,6 +40,7 @@ import soy.engindearing.omnitak.mobile.ui.screens.MeshTopologyScreen
 import soy.engindearing.omnitak.mobile.ui.screens.MeshtasticScreen
 import soy.engindearing.omnitak.mobile.ui.screens.ServersScreen
 import soy.engindearing.omnitak.mobile.ui.screens.SettingsScreen
+import soy.engindearing.omnitak.mobile.ui.screens.UASScreen
 
 // Per-tab brand colors mirror the iOS bottom bar — each glyph carries
 // its own tint instead of all five icons being the same accent yellow.
@@ -115,6 +116,9 @@ fun AppNav() {
             composable("servers/enroll") {
                 EnrollServerScreen(onDone = { nav.popBackStack() })
             }
+            composable("uas") {
+                UASScreen(onDone = { nav.popBackStack() })
+            }
             composable("chat") { ChatScreen() }
             composable(
                 route = "chat?convoId={convoId}",
@@ -173,6 +177,13 @@ fun AppNav() {
                 // flips its lassoMode flag and the freehand overlay
                 // takes over the pointer input.
                 LassoSelectionService.shared.requestActivate()
+            },
+            onUAS = {
+                showToolsLauncher = false
+                nav.navigate("uas") {
+                    popUpTo(nav.graph.startDestinationId) { saveState = true }
+                    launchSingleTop = true
+                }
             },
             onFullTools = {
                 showToolsLauncher = false

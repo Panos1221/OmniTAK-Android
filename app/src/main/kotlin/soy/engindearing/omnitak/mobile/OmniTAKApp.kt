@@ -217,6 +217,14 @@ class OmniTAKApp : Application() {
         )
     }
 
+    /** UAS / drone control (GAP-XXX). Single active drone connection
+     *  at a time. Multi-drone is a fast-follow once we have a UI for it. */
+    val uasManager: soy.engindearing.omnitak.mobile.domain.UASManager by lazy {
+        soy.engindearing.omnitak.mobile.domain.UASManager(
+            sendCoT = { xml -> serverManager.sendCoT(xml) },
+        )
+    }
+
     private fun readDeviceBatteryPercent(): Int? {
         val bm = getSystemService(Context.BATTERY_SERVICE) as? BatteryManager ?: return null
         val level = bm.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY)

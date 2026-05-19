@@ -16,6 +16,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Apps
 import androidx.compose.material.icons.filled.Build
+import androidx.compose.material.icons.filled.FlightTakeoff
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -51,6 +52,7 @@ import androidx.compose.ui.unit.sp
 fun ToolsLauncherSheet(
     onLasso: () -> Unit,
     onFullTools: () -> Unit,
+    onUAS: () -> Unit = {},
     onDismiss: () -> Unit,
 ) {
     val sheet = rememberModalBottomSheetState()
@@ -69,6 +71,18 @@ fun ToolsLauncherSheet(
                 title = "Lasso Select",
                 subtitle = "Long-press + drag on the map to multi-select features",
                 onClick = onLasso,
+            )
+
+            HorizontalDivider(
+                modifier = Modifier.padding(start = 76.dp),
+                color = Color.White.copy(alpha = 0.08f),
+            )
+
+            ToolsRow(
+                icon = { Icon(Icons.Filled.FlightTakeoff, contentDescription = null, tint = Color(0xFF34C759)) },
+                title = "UAS Quick Connect",
+                subtitle = "MAVLink / PX4 / ArduPilot — arm, takeoff, RTL, telemetry to CoT",
+                onClick = onUAS,
             )
 
             HorizontalDivider(
