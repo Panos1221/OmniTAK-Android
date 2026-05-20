@@ -226,6 +226,38 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
             .fillMaxSize()
             .background(MaterialTheme.colorScheme.background),
     ) {
+        if (userPrefs.cesiumGlobeEnabled) {
+        // 3D Globe — photoreal Cesium WebView engine. Contacts (incl. dropped
+        // pins) + self render as entities; long-press surfaces the same radial
+        // menu the 2D/terrain engines use, tapping a contact opens its sheet.
+        soy.engindearing.omnitak.mobile.ui.components.CesiumMapView(
+            modifier = Modifier.fillMaxSize(),
+            contacts = if (contactsVisible) {
+                if (meshNodesVisible) contacts.values.toList()
+                else contacts.values.filterNot { it.uid.startsWith("MESHTASTIC-") }
+            } else {
+                emptyList()
+            },
+            selfLat = selfFix?.lat,
+            selfLon = selfFix?.lon,
+            selfCallsign = userPrefs.callsign,
+            onLongPress = { latLng, offset ->
+                if (!measurementActive) {
+                    radialLatLng = latLng
+                    radialAnchor = offset
+                }
+            },
+            onContactTap = { event ->
+                if (!measurementActive) {
+                    editingMarker = event
+                    markerSheetLatLng = LatLng(event.lat, event.lon)
+                }
+            },
+            onCameraChanged = { target, zoom ->
+                app.mapCameraStore.update(target.latitude, target.longitude, zoom)
+            },
+        )
+        } else {
         TacticalMap(
             modifier = Modifier.fillMaxSize(),
             // Restore the operator's last pan/zoom across bottom-nav
@@ -316,6 +348,7 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
             followMeActive = followMeActive,
             useMilStdSelfSymbol = userPrefs.useMilStdSelfSymbol,
         )
+        }
 
         // Issue #16 — lasso freehand multi-select overlay. Renders
         // ABOVE the map so the dashed orange path stays on top of

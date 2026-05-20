@@ -58,6 +58,15 @@
 # Companion in com.google.android.gms.internal.location.zze — ignore.
 -dontwarn com.google.android.gms.internal.location.**
 
+# --- WebView JS bridge --------------------------------------------------
+# The Cesium 3D globe (CesiumMapView) exposes onReady/onMapEvent to the
+# scene's JavaScript via @JavascriptInterface. R8 would otherwise strip or
+# rename these (they're never called from Kotlin), breaking the bridge in
+# release builds — entities wouldn't push and taps wouldn't route.
+-keepclassmembers class * {
+    @android.webkit.JavascriptInterface <methods>;
+}
+
 # --- Misc ---------------------------------------------------------------
 # Suppress notes about packages R8 sees but doesn't act on; clean output.
 -dontwarn org.jetbrains.annotations.**

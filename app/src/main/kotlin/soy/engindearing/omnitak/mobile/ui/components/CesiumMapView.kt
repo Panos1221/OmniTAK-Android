@@ -1,0 +1,178 @@
+package soy.engindearing.omnitak.mobile.ui.components
+
+import android.annotation.SuppressLint
+import android.os.Handler
+import android.os.Looper
+import android.webkit.JavascriptInterface
+import android.webkit.WebChromeClient
+import android.webkit.WebView
+import android.webkit.WebViewClient
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.viewinterop.AndroidView
+import org.json.JSONArray
+import org.json.JSONObject
+import org.maplibre.android.geometry.LatLng
+import soy.engindearing.omnitak.mobile.data.CoTAffiliation
+import soy.engindearing.omnitak.mobile.data.CoTEvent
+
+/**
+ * Photoreal Cesium 3D globe map engine, hosted in a WebView. Mirrors the
+ * iOS Cesium scene — same `cesium_scene.html` bridge (OmniBridge.setEntities
+ * etc.) and the same tap / long-press / camera events posted back to native
+ * via `window.OmniBridgeNative`.
+ *
+ * Renders contacts (including dropped pins) and the operator's own position
+ * as MIL-STD-affiliation billboards. Long-press surfaces the same radial /
+ * drop flow the MapLibre map uses (the menu overlay is engine-agnostic);
+ * tapping a contact opens its edit sheet. MapLibre-specific overlays
+ * (drone, FAA, lasso, drawings) stay on the 2D / terrain engines for now.
+ */
+@SuppressLint("SetJavaScriptEnabled")
+@Composable
+fun CesiumMapView(
+    contacts: List<CoTEvent>,
+    selfLat: Double?,
+    selfLon: Double?,
+    selfCallsign: String,
+    onLongPress: (LatLng, Offset) -> Unit,
+    onContactTap: (CoTEvent) -> Unit,
+    onCameraChanged: (LatLng, Double) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val density = LocalDensity.current.density
+    val mainHandler = remember { Handler(Looper.getMainLooper()) }
+    val ready = remember { mutableStateOf(false) }
+    val webViewRef = remember { mutableStateOf<WebView?>(null) }
+
+    val contactsState = rememberUpdatedState(contacts)
+    val selfLatState = rememberUpdatedState(selfLat)
+    val selfLonState = rememberUpdatedState(selfLon)
+    val selfCallsignState = rememberUpdatedState(selfCallsign)
+    val onLongPressState = rememberUpdatedState(onLongPress)
+    val onContactTapState = rememberUpdatedState(onContactTap)
+    val onCameraState = rememberUpdatedState(onCameraChanged)
+
+    fun pushEntities() {
+        val wv = webViewRef.value ?: return
+        if (!ready.value) return
+        val json = buildEntitiesJson(
+            contactsState.value, selfLatState.value, selfLonState.value, selfCallsignState.value,
+        )
+        wv.evaluateJavascript("window.OmniBridge.setEntities($json);", null)
+    }
+
+    AndroidView(
+        modifier = modifier,
+        factory = { ctx ->
+            WebView(ctx).apply {
+                webViewRef.value = this
+                settings.javaScriptEnabled = true
+                settings.domStorageEnabled = true
+                setBackgroundColor(android.graphics.Color.BLACK)
+                webViewClient = WebViewClient()
+                webChromeClient = WebChromeClient()
+                addJavascriptInterface(
+                    object {
+                        @JavascriptInterface
+                        fun onReady() {
+                            mainHandler.post {
+                                ready.value = true
+                                pushEntities()
+                            }
+                        }
+
+                        @JavascriptInterface
+                        fun onMapEvent(json: String) {
+                            val o = runCatching { JSONObject(json) }.getOrNull() ?: return
+                            val event = o.optString("event")
+                            val lat = o.optDouble("lat")
+                            val lon = o.optDouble("lon")
+                            if (lat.isNaN() || lon.isNaN()) return
+                            mainHandler.post {
+                                when (event) {
+                                    "tap" -> {
+                                        val uid = if (o.isNull("uid")) null else o.optString("uid")
+                                        if (!uid.isNullOrEmpty() && uid != "__self__") {
+                                            contactsState.value.firstOrNull { it.uid == uid }
+                                                ?.let { onContactTapState.value(it) }
+                                        }
+                                    }
+                                    "longpress" -> {
+                                        val sx = (o.optDouble("screenX", 0.0) * density).toFloat()
+                                        val sy = (o.optDouble("screenY", 0.0) * density).toFloat()
+                                        onLongPressState.value(LatLng(lat, lon), Offset(sx, sy))
+                                    }
+                                    "camerachanged" -> {
+                                        onCameraState.value(LatLng(lat, lon), o.optDouble("zoom", 11.0))
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    "OmniBridgeNative",
+                )
+                val html = ctx.assets.open("cesium_scene.html")
+                    .bufferedReader().use { it.readText() }
+                loadDataWithBaseURL("https://cesium.com/", html, "text/html", "UTF-8", null)
+            }
+        },
+        update = { pushEntities() },
+    )
+
+    DisposableEffect(Unit) {
+        onDispose {
+            webViewRef.value?.destroy()
+            webViewRef.value = null
+        }
+    }
+}
+
+private fun buildEntitiesJson(
+    contacts: List<CoTEvent>,
+    selfLat: Double?,
+    selfLon: Double?,
+    selfCallsign: String,
+): String {
+    val arr = JSONArray()
+    if (selfLat != null && selfLon != null && !selfLat.isNaN() && !selfLon.isNaN()) {
+        arr.put(
+            JSONObject().apply {
+                put("uid", "__self__")
+                put("lat", selfLat)
+                put("lon", selfLon)
+                put("callsign", selfCallsign)
+                put("affiliation", "f")
+                put("kind", "self")
+            },
+        )
+    }
+    for (c in contacts) {
+        if (c.lat.isNaN() || c.lon.isNaN()) continue
+        arr.put(
+            JSONObject().apply {
+                put("uid", c.uid)
+                put("lat", c.lat)
+                put("lon", c.lon)
+                if (c.hae != 0.0) put("hae", c.hae)
+                c.callsign?.let { put("callsign", it) }
+                put("affiliation", affChar(c.affiliation))
+                put("kind", "contact")
+            },
+        )
+    }
+    return arr.toString()
+}
+
+private fun affChar(a: CoTAffiliation): String = when (a) {
+    CoTAffiliation.FRIEND -> "f"
+    CoTAffiliation.HOSTILE -> "h"
+    CoTAffiliation.NEUTRAL -> "n"
+    else -> "u"
+}
