@@ -2,6 +2,8 @@ package soy.engindearing.omnitak.mobile.ui.components
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -76,7 +78,9 @@ fun MarkerEditSheet(
     onDismiss: () -> Unit,
 ) {
     if (!visible) return
-    val state = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    // Partial detent + light scrim keep the map visible above the sheet — edit
+    // a marker while still seeing where it sits. Drag up for the full form.
+    val state = rememberModalBottomSheetState()
 
     var callsign by remember(initialCallsign) { mutableStateOf(initialCallsign) }
     var affiliation by remember(initialAffiliation) { mutableStateOf(initialAffiliation) }
@@ -89,10 +93,12 @@ fun MarkerEditSheet(
         onDismissRequest = onDismiss,
         sheetState = state,
         containerColor = TacticalSurface,
+        scrimColor = Color.Black.copy(alpha = 0.3f),
     ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
+                .verticalScroll(rememberScrollState())
                 .padding(horizontal = 20.dp, vertical = 8.dp),
         ) {
             Text(
