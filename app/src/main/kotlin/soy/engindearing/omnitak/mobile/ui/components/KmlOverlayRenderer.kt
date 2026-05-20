@@ -50,37 +50,19 @@ object KmlOverlayRenderer {
 
         for (overlay in overlays) {
             val sourceId = "kmlsrc-${overlay.id}"
-            val color = runCatching { Color.parseColor(overlay.colorHex) }.getOrDefault(Color.MAGENTA)
 
             if (style.getSource(sourceId) == null) {
                 val uri = URI("file://" + store.fileFor(overlay).absolutePath)
                 style.addSource(GeoJsonSource(sourceId, uri, GeoJsonOptions().withTolerance(1.0f)))
-
-                style.addLayer(
-                    FillLayer("kmlfill-${overlay.id}", sourceId).withProperties(
-                        PropertyFactory.fillColor(color),
-                        PropertyFactory.fillOpacity(0.18f),
-                        PropertyFactory.fillOutlineColor(color),
-                    ),
-                )
+                style.addLayer(FillLayer("kmlfill-${overlay.id}", sourceId))
                 style.addLayer(
                     LineLayer("kmlline-${overlay.id}", sourceId).withProperties(
-                        PropertyFactory.lineColor(color),
                         PropertyFactory.lineCap(Property.LINE_CAP_ROUND),
                         PropertyFactory.lineJoin(Property.LINE_JOIN_ROUND),
-                        PropertyFactory.lineWidth(
-                            Expression.interpolate(
-                                Expression.linear(), Expression.zoom(),
-                                Expression.stop(6, 0.6f),
-                                Expression.stop(12, 1.6f),
-                                Expression.stop(16, 3.0f),
-                            ),
-                        ),
                     ),
                 )
                 style.addLayer(
                     CircleLayer("kmlpt-${overlay.id}", sourceId).withProperties(
-                        PropertyFactory.circleColor(color),
                         PropertyFactory.circleRadius(3.0f),
                         PropertyFactory.circleStrokeColor(Color.WHITE),
                         PropertyFactory.circleStrokeWidth(1.0f),
@@ -88,10 +70,35 @@ object KmlOverlayRenderer {
                 )
             }
 
+            // Re-apply styling every pass so edits (color / opacity / line
+            // width / visibility) take effect live without a reload.
+            val color = runCatching { Color.parseColor(overlay.colorHex) }.getOrDefault(Color.MAGENTA)
             val vis = if (overlay.visible) Property.VISIBLE else Property.NONE
-            for (layerId in layerIds(overlay.id)) {
-                style.getLayer(layerId)?.setProperties(PropertyFactory.visibility(vis))
-            }
+            val m = overlay.lineWidth
+            style.getLayerAs<FillLayer>("kmlfill-${overlay.id}")?.setProperties(
+                PropertyFactory.visibility(vis),
+                PropertyFactory.fillColor(color),
+                PropertyFactory.fillOutlineColor(color),
+                PropertyFactory.fillOpacity(overlay.opacity * 0.25f),
+            )
+            style.getLayerAs<LineLayer>("kmlline-${overlay.id}")?.setProperties(
+                PropertyFactory.visibility(vis),
+                PropertyFactory.lineColor(color),
+                PropertyFactory.lineOpacity(overlay.opacity),
+                PropertyFactory.lineWidth(
+                    Expression.interpolate(
+                        Expression.linear(), Expression.zoom(),
+                        Expression.stop(6, 0.6f * m),
+                        Expression.stop(12, 1.6f * m),
+                        Expression.stop(16, 3.0f * m),
+                    ),
+                ),
+            )
+            style.getLayerAs<CircleLayer>("kmlpt-${overlay.id}")?.setProperties(
+                PropertyFactory.visibility(vis),
+                PropertyFactory.circleColor(color),
+                PropertyFactory.circleOpacity(overlay.opacity),
+            )
         }
     }
 

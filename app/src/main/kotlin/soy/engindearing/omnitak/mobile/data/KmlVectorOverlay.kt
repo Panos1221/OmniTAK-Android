@@ -38,6 +38,11 @@ data class KmlVectorOverlay(
     val minLon: Double,
     val maxLat: Double,
     val maxLon: Double,
+    /** Stroke/fill opacity (0..1). Defaulted so older overlays.json still loads. */
+    val opacity: Float = 0.9f,
+    /** Base line-width multiplier. */
+    val lineWidth: Float = 1.4f,
+    val createdAt: Long = 0L,
 )
 
 /** Streaming KML → GeoJSON converter. Pure; safe to run off the main thread. */
@@ -231,6 +236,7 @@ class KmlVectorOverlayStore(context: Context) {
                 featureCount = result.featureCount,
                 minLat = result.minLat, minLon = result.minLon,
                 maxLat = result.maxLat, maxLon = result.maxLon,
+                createdAt = System.currentTimeMillis(),
             )
             _overlays.value = _overlays.value + overlay
             persist()
@@ -263,13 +269,41 @@ class KmlVectorOverlayStore(context: Context) {
     }
 
     fun setVisible(id: String, visible: Boolean) {
-        _overlays.value = _overlays.value.map { if (it.id == id) it.copy(visible = visible) else it }
+        update(id) { it.copy(visible = visible) }
+    }
+
+    fun rename(id: String, name: String) {
+        val trimmed = name.trim()
+        if (trimmed.isEmpty()) return
+        update(id) { it.copy(name = trimmed) }
+    }
+
+    fun setColor(id: String, colorHex: String) {
+        update(id) { it.copy(colorHex = colorHex) }
+    }
+
+    fun setOpacity(id: String, value: Float) {
+        update(id) { it.copy(opacity = value.coerceIn(0.05f, 1.0f)) }
+    }
+
+    fun setLineWidth(id: String, value: Float) {
+        update(id) { it.copy(lineWidth = value.coerceIn(0.5f, 6.0f)) }
+    }
+
+    private fun update(id: String, transform: (KmlVectorOverlay) -> KmlVectorOverlay) {
+        _overlays.value = _overlays.value.map { if (it.id == id) transform(it) else it }
         persist()
     }
 
     fun remove(id: String) {
         _overlays.value.firstOrNull { it.id == id }?.let { fileFor(it).delete() }
         _overlays.value = _overlays.value.filterNot { it.id == id }
+        persist()
+    }
+
+    fun removeAll() {
+        _overlays.value.forEach { fileFor(it).delete() }
+        _overlays.value = emptyList()
         persist()
     }
 
