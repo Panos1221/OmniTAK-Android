@@ -108,10 +108,21 @@ object CotBuilders {
         isFixedWing: Boolean = false,
         operatorUid: String? = null,
         staleSeconds: Long = 30,
+        /** Platform class — drives the MIL-STD-2525 type. Air → friendly
+         *  air UAS; ground → friendly ground vehicle (a-f-G-E-V-U);
+         *  surface → friendly sea-surface (a-f-S-X). Defaults to AIR for
+         *  back-compat with existing UAS callers. */
+        vehicleClass: soy.engindearing.omnitak.mobile.data.uas.VehicleClass =
+            soy.engindearing.omnitak.mobile.data.uas.VehicleClass.AIR,
     ): String {
         val now = nowIso()
         val stale = isoOffset(staleSeconds)
-        val type = if (isFixedWing) "a-f-A-M-F-Q" else "a-f-A-M-H-Q"
+        val type = when (vehicleClass) {
+            soy.engindearing.omnitak.mobile.data.uas.VehicleClass.GROUND -> "a-f-G-E-V-U"
+            soy.engindearing.omnitak.mobile.data.uas.VehicleClass.SURFACE,
+            soy.engindearing.omnitak.mobile.data.uas.VehicleClass.SUB -> "a-f-S-X"
+            else -> if (isFixedWing) "a-f-A-M-F-Q" else "a-f-A-M-H-Q"
+        }
         val trackXml = if (headingDeg != null || groundSpeedMps != null)
             """<track course="${headingDeg ?: 0.0}" speed="${groundSpeedMps ?: 0.0}"/>""" else ""
         val videoXml = if (!videoUri.isNullOrBlank())

@@ -81,6 +81,15 @@ fun DroneOverlay(
     val pt = screen ?: return
     val xDp = with(density) { pt.x.toDp() }
     val yDp = with(density) { pt.y.toDp() }
+    // Marker fill encodes the platform class: cyan = air (UAS),
+    // lime = ground (UGV), teal = surface/sub. Keeps a fleet of mixed
+    // platforms visually distinct on one map.
+    val markerColor = when (drone.vehicleClass) {
+        soy.engindearing.omnitak.mobile.data.uas.VehicleClass.GROUND -> Color(0xFF76FF03)
+        soy.engindearing.omnitak.mobile.data.uas.VehicleClass.SURFACE,
+        soy.engindearing.omnitak.mobile.data.uas.VehicleClass.SUB -> Color(0xFF1DE9B6)
+        else -> Color(0xFF00E5FF)
+    }
     Box(modifier = Modifier.fillMaxSize()) {
         // Cyan ring with white halo, 36 dp diameter — pops over ADS-B
         // dots and the self-position symbol.
@@ -96,7 +105,7 @@ fun DroneOverlay(
                 .offset(x = xDp - 14.dp, y = yDp - 14.dp)
                 .size(28.dp)
                 .clip(CircleShape)
-                .background(Color(0xFF00E5FF)),
+                .background(markerColor),
         )
         // Heading chevron — small black triangle pointing forward.
         // Skip when heading is unknown (drone disarmed / no fix yet).
@@ -136,10 +145,21 @@ fun DroneOverlay(
                 )
             }
         }
-        // Callsign + altitude pill below the marker.
+        // Callsign + altitude pill below the marker. Tag adapts to the
+        // platform class (UAS air / UGV ground / USV surface); altitude
+        // is only meaningful for air vehicles so it's dropped on the
+        // ground/surface platforms.
+        val classTag = when (drone.vehicleClass) {
+            soy.engindearing.omnitak.mobile.data.uas.VehicleClass.GROUND -> "UGV"
+            soy.engindearing.omnitak.mobile.data.uas.VehicleClass.SURFACE -> "USV"
+            soy.engindearing.omnitak.mobile.data.uas.VehicleClass.SUB -> "UUV"
+            else -> "UAS"
+        }
+        val isAir = drone.vehicleClass == soy.engindearing.omnitak.mobile.data.uas.VehicleClass.AIR ||
+            drone.vehicleClass == soy.engindearing.omnitak.mobile.data.uas.VehicleClass.UNKNOWN
         val label = buildString {
-            append("UAS")
-            drone.altAglMeters?.let { append(" • ${it.toInt()} m") }
+            append(classTag)
+            if (isAir) drone.altAglMeters?.let { append(" • ${it.toInt()} m") }
         }
         Box(
             modifier = Modifier

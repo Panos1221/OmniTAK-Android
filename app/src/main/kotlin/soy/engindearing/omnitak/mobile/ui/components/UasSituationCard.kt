@@ -49,7 +49,11 @@ fun UasSituationCard(
         "${GeoMath.formatDistance(m)} @ ${GeoMath.formatBearing(bearing)}"
     }
 
-    val terrainLine: Pair<String, Color>? = terrainBelowDroneMsl?.let { terr ->
+    // AGL-above-terrain is meaningless for ground / surface vehicles —
+    // they're ON the terrain. Only compute it for air platforms.
+    val isAir = drone.vehicleClass == soy.engindearing.omnitak.mobile.data.uas.VehicleClass.AIR ||
+        drone.vehicleClass == soy.engindearing.omnitak.mobile.data.uas.VehicleClass.UNKNOWN
+    val terrainLine: Pair<String, Color>? = if (!isAir) null else terrainBelowDroneMsl?.let { terr ->
         drone.altMslMeters?.let { msl ->
             val agl = msl - terr
             val color = when {

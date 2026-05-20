@@ -1015,8 +1015,15 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
                 add(RadialAction("layers", Icons.Filled.Layers, "Layers"))
                 add(RadialAction("copy", Icons.Filled.LocationOn, "Copy Coords"))
                 if (uasConnected) {
-                    add(RadialAction("uas_fly_here", Icons.Filled.FlightTakeoff, "Fly UAS Here"))
-                    add(RadialAction("uas_waypoint", Icons.Filled.AddLocation, "UAS Waypoint"))
+                    // Ground/surface vehicles drive rather than fly — swap
+                    // the verb so the menu reads naturally for a UGV/USV.
+                    val isGround = droneState.vehicleClass ==
+                        soy.engindearing.omnitak.mobile.data.uas.VehicleClass.GROUND ||
+                        droneState.vehicleClass ==
+                        soy.engindearing.omnitak.mobile.data.uas.VehicleClass.SURFACE
+                    val goVerb = if (isGround) "Drive Here" else "Fly UAS Here"
+                    add(RadialAction("uas_fly_here", Icons.Filled.FlightTakeoff, goVerb))
+                    add(RadialAction("uas_waypoint", Icons.Filled.AddLocation, "Add Waypoint"))
                     add(RadialAction("uas_orbit", Icons.Filled.Refresh, "Orbit Here"))
                     add(RadialAction("uas_circle", Icons.Filled.RadioButtonUnchecked, "Circle Mission"))
                     add(RadialAction("uas_survey", Icons.Filled.GridOn, "Survey Area"))

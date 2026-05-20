@@ -873,6 +873,7 @@ class UASManager(
                             headingDeg = st.headingDeg,
                             groundSpeedMps = st.groundSpeedMps,
                             operatorUid = operatorUid,
+                            vehicleClass = st.vehicleClass,
                         )
                     )
                 }.onFailure { Log.w(TAG, "CoT pump send failed: ${it.message}") }

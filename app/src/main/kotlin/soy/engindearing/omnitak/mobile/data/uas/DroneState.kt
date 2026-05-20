@@ -84,7 +84,23 @@ data class DroneState(
 
     /** True if we have any usable position fix to emit as CoT. */
     fun hasFix(): Boolean = latDeg != null && lonDeg != null
+
+    /** Air / ground / surface / sub class, derived from the MAV_TYPE.
+     *  Drives the UI's vehicle-aware behaviour: ground vehicles drop the
+     *  altitude semantics (no cruise, no takeoff, no AGL), use "Drive"
+     *  verbs, and emit a ground CoT type. */
+    val vehicleClass: VehicleClass
+        get() = when (vehicleType) {
+            "MAV_TYPE_GROUND_ROVER" -> VehicleClass.GROUND
+            "MAV_TYPE_SURFACE_BOAT" -> VehicleClass.SURFACE
+            "MAV_TYPE_SUBMARINE" -> VehicleClass.SUB
+            null -> VehicleClass.UNKNOWN
+            else -> VehicleClass.AIR
+        }
 }
+
+/** Broad platform category for vehicle-aware UI + CoT typing. */
+enum class VehicleClass { AIR, GROUND, SURFACE, SUB, UNKNOWN }
 
 /** One sample on the drone's trail — lat/lon + when, so old samples can
  *  fade or be culled. */

@@ -607,21 +607,31 @@ class MavlinkConnection {
      */
     private fun decodeArduPilotMode(custom: Long, vehicleType: MavType?): String {
         val mode = custom.toInt()
-        val isPlane = vehicleType == MavType.MAV_TYPE_FIXED_WING
-        return if (isPlane) when (mode) {
-            0 -> "MANUAL"; 1 -> "CIRCLE"; 2 -> "STABILIZE"; 3 -> "TRAINING"
-            5 -> "FBWA"; 6 -> "FBWB"; 7 -> "CRUISE"; 8 -> "AUTOTUNE"
-            10 -> "AUTO"; 11 -> "RTL"; 12 -> "LOITER"; 15 -> "GUIDED"
-            17 -> "QSTABILIZE"; 18 -> "QHOVER"; 19 -> "QLOITER"; 20 -> "QLAND"; 21 -> "QRTL"
-            else -> "PLANE($mode)"
-        } else when (mode) {
-            0 -> "STABILIZE"; 1 -> "ACRO"; 2 -> "ALT_HOLD"; 3 -> "AUTO"
-            4 -> "GUIDED"; 5 -> "LOITER"; 6 -> "RTL"; 7 -> "CIRCLE"
-            9 -> "LAND"; 11 -> "DRIFT"; 13 -> "SPORT"; 14 -> "FLIP"; 15 -> "AUTOTUNE"
-            16 -> "POSHOLD"; 17 -> "BRAKE"; 18 -> "THROW"; 19 -> "AVOID_ADSB"
-            20 -> "GUIDED_NOGPS"; 21 -> "SMART_RTL"; 22 -> "FLOWHOLD"; 23 -> "FOLLOW"
-            24 -> "ZIGZAG"; 25 -> "SYSTEMID"; 26 -> "AUTOROTATE"; 27 -> "AUTO_RTL"
-            else -> "COPTER($mode)"
+        return when (vehicleType) {
+            MavType.MAV_TYPE_FIXED_WING -> when (mode) {
+                0 -> "MANUAL"; 1 -> "CIRCLE"; 2 -> "STABILIZE"; 3 -> "TRAINING"
+                5 -> "FBWA"; 6 -> "FBWB"; 7 -> "CRUISE"; 8 -> "AUTOTUNE"
+                10 -> "AUTO"; 11 -> "RTL"; 12 -> "LOITER"; 15 -> "GUIDED"
+                17 -> "QSTABILIZE"; 18 -> "QHOVER"; 19 -> "QLOITER"; 20 -> "QLAND"; 21 -> "QRTL"
+                else -> "PLANE($mode)"
+            }
+            // ArduPilot Rover / Boat — modes from rover/mode.h. UGV/USV
+            // share the same mode enum.
+            MavType.MAV_TYPE_GROUND_ROVER, MavType.MAV_TYPE_SURFACE_BOAT -> when (mode) {
+                0 -> "MANUAL"; 1 -> "ACRO"; 3 -> "STEERING"; 4 -> "HOLD"
+                5 -> "LOITER"; 6 -> "FOLLOW"; 7 -> "SIMPLE"; 10 -> "AUTO"
+                11 -> "RTL"; 12 -> "SMART_RTL"; 15 -> "GUIDED"; 16 -> "INITIALISING"
+                else -> "ROVER($mode)"
+            }
+            else -> when (mode) { // Copter (dominant default)
+                0 -> "STABILIZE"; 1 -> "ACRO"; 2 -> "ALT_HOLD"; 3 -> "AUTO"
+                4 -> "GUIDED"; 5 -> "LOITER"; 6 -> "RTL"; 7 -> "CIRCLE"
+                9 -> "LAND"; 11 -> "DRIFT"; 13 -> "SPORT"; 14 -> "FLIP"; 15 -> "AUTOTUNE"
+                16 -> "POSHOLD"; 17 -> "BRAKE"; 18 -> "THROW"; 19 -> "AVOID_ADSB"
+                20 -> "GUIDED_NOGPS"; 21 -> "SMART_RTL"; 22 -> "FLOWHOLD"; 23 -> "FOLLOW"
+                24 -> "ZIGZAG"; 25 -> "SYSTEMID"; 26 -> "AUTOROTATE"; 27 -> "AUTO_RTL"
+                else -> "COPTER($mode)"
+            }
         }
     }
 
