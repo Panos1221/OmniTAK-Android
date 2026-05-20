@@ -17,6 +17,9 @@ import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Apps
 import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.FlightTakeoff
+import androidx.compose.material.icons.filled.Public
+import androidx.compose.material.icons.filled.Terrain
+import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
@@ -55,6 +58,11 @@ fun ToolsLauncherSheet(
     onFullTools: () -> Unit,
     onUAS: () -> Unit = {},
     onOnvifCamera: () -> Unit = {},
+    onCustomize: () -> Unit = {},
+    map3dEnabled: Boolean = false,
+    cesiumGlobeEnabled: Boolean = false,
+    onToggleTerrain3D: () -> Unit = {},
+    onToggleGlobe: () -> Unit = {},
     onDismiss: () -> Unit,
 ) {
     val sheet = rememberModalBottomSheetState()
@@ -81,6 +89,30 @@ fun ToolsLauncherSheet(
             )
 
             ToolsRow(
+                icon = { Icon(Icons.Filled.Terrain, contentDescription = null, tint = Color(0xFFFF9F0A)) },
+                title = if (map3dEnabled && !cesiumGlobeEnabled) "3D Terrain ✓" else "3D Terrain",
+                subtitle = "Tilted DEM relief over the current basemap (MapLibre)",
+                onClick = onToggleTerrain3D,
+            )
+
+            HorizontalDivider(
+                modifier = Modifier.padding(start = 76.dp),
+                color = Color.White.copy(alpha = 0.08f),
+            )
+
+            ToolsRow(
+                icon = { Icon(Icons.Filled.Public, contentDescription = null, tint = Color(0xFF4FA8FF)) },
+                title = if (cesiumGlobeEnabled) "3D Globe (Photoreal) ✓" else "3D Globe (Photoreal)",
+                subtitle = "Cesium photoreal globe with 3D buildings — like the iOS view",
+                onClick = onToggleGlobe,
+            )
+
+            HorizontalDivider(
+                modifier = Modifier.padding(start = 76.dp),
+                color = Color.White.copy(alpha = 0.08f),
+            )
+
+            ToolsRow(
                 icon = { Icon(Icons.Filled.FlightTakeoff, contentDescription = null, tint = Color(0xFF34C759)) },
                 title = "Vehicle Connect (UAS / UGV)",
                 subtitle = "MAVLink drones, rovers & boats — PX4 / ArduPilot, telemetry to CoT",
@@ -97,6 +129,18 @@ fun ToolsLauncherSheet(
                 title = "ONVIF Camera (PTZ)",
                 subtitle = "Connect a PTZ IP camera — live RTSP feed + pan/tilt/zoom control",
                 onClick = onOnvifCamera,
+            )
+
+            HorizontalDivider(
+                modifier = Modifier.padding(start = 76.dp),
+                color = Color.White.copy(alpha = 0.08f),
+            )
+
+            ToolsRow(
+                icon = { Icon(Icons.Filled.Tune, contentDescription = null, tint = Color(0xFFFFCC00)) },
+                title = "Customize Toolbar",
+                subtitle = "Pick and arrange your own bottom-bar shortcuts",
+                onClick = onCustomize,
             )
 
             HorizontalDivider(

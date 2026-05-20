@@ -2,33 +2,35 @@ package soy.engindearing.omnitak.mobile.ui.navigation
 
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.padding
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.Chat
-import androidx.compose.material.icons.filled.Handyman
-import androidx.compose.material.icons.filled.Info
-import androidx.compose.material.icons.filled.Map
-import androidx.compose.material.icons.filled.Router
-import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import kotlinx.coroutines.launch
+import soy.engindearing.omnitak.mobile.OmniTAKApp
+import soy.engindearing.omnitak.mobile.data.UserPrefs
 import soy.engindearing.omnitak.mobile.domain.LassoSelectionService
-import soy.engindearing.omnitak.mobile.ui.components.LiquidGlassNavBar
-import soy.engindearing.omnitak.mobile.ui.components.NavTabSpec
+import soy.engindearing.omnitak.mobile.ui.components.BarCommand
+import soy.engindearing.omnitak.mobile.ui.components.BarItem
+import soy.engindearing.omnitak.mobile.ui.components.BarKind
+import soy.engindearing.omnitak.mobile.ui.components.CustomToolbar
+import soy.engindearing.omnitak.mobile.ui.components.ToolbarAddPalette
+import soy.engindearing.omnitak.mobile.ui.components.ToolbarCatalog
+import soy.engindearing.omnitak.mobile.ui.components.ToolbarEditBus
 import soy.engindearing.omnitak.mobile.ui.components.ToolsLauncherSheet
 import soy.engindearing.omnitak.mobile.ui.screens.AboutScreen
 import soy.engindearing.omnitak.mobile.ui.screens.AddServerScreen
@@ -42,47 +44,118 @@ import soy.engindearing.omnitak.mobile.ui.screens.ServersScreen
 import soy.engindearing.omnitak.mobile.ui.screens.SettingsScreen
 import soy.engindearing.omnitak.mobile.ui.screens.UASScreen
 
-// Per-tab brand colors mirror the iOS bottom bar — each glyph carries
-// its own tint instead of all five icons being the same accent yellow.
-// "tools" is a command tab — selecting it opens the ToolsLauncherSheet
-// popup instead of navigating to its own destination.
-private val NavTabs = listOf(
-    NavTabSpec("map", "Map", Icons.Filled.Map, Color(0xFF4FA8FF)),
-    NavTabSpec("chat", "Chat", Icons.AutoMirrored.Filled.Chat, Color(0xFF34C759)),
-    NavTabSpec("servers", "Servers", Icons.Filled.Storage, Color(0xFF5AC8FA)),
-    NavTabSpec("mesh", "Mesh", Icons.Filled.Router, Color(0xFFFF9F0A)),
-    NavTabSpec("tools", "Tools", Icons.Filled.Handyman, Color(0xFFFFCC00)),
-    NavTabSpec("settings", "Settings", Icons.Filled.Settings, Color(0xFF8E8E93)),
-)
-
 @Composable
 fun AppNav() {
+    val app = LocalContext.current.applicationContext as OmniTAKApp
+    val prefs by app.userPrefsStore.prefs.collectAsState(initial = UserPrefs())
+    val scope = rememberCoroutineScope()
+
     val nav = rememberNavController()
     val backStack by nav.currentBackStackEntryAsState()
     val currentRoute = backStack?.destination?.route
-    // Tools tab is a command, not a destination — selecting it opens
-    // a Material 3 ModalBottomSheet popup instead of navigating. The
-    // visible nav highlight stays on whichever real tab the user was
-    // on, so the popup feels like a transient overlay.
+
     var showToolsLauncher by remember { mutableStateOf(false) }
+    var showAddPalette by remember { mutableStateOf(false) }
+    var editing by remember { mutableStateOf(false) }
     val snackbarHostState = remember { SnackbarHostState() }
     val snackbarScope = rememberCoroutineScope()
 
-    Scaffold(
-        bottomBar = {
-            LiquidGlassNavBar(
-                tabs = NavTabs,
-                currentRoute = currentRoute,
-                onSelect = { tab ->
-                    if (tab.route == "tools") {
-                        showToolsLauncher = true
-                    } else {
-                        nav.navigate(tab.route) {
-                            popUpTo(nav.graph.startDestinationId) { saveState = true }
-                            launchSingleTop = true
-                            restoreState = true
+    fun navigateTo(route: String) {
+        nav.navigate(route) {
+            popUpTo(nav.graph.startDestinationId) { saveState = true }
+            launchSingleTop = true
+            restoreState = true
+        }
+    }
+
+    // Working copy of the bar layout. Edits mutate this live (smooth, no
+    // DataStore churn); we persist on Done / add / reset. While not editing
+    // it tracks the saved config.
+    val savedIds = prefs.toolbarItemIds.ifEmpty { ToolbarCatalog.defaultIds }
+    val workingIds = remember { mutableStateListOf<String>() }
+    LaunchedEffect(savedIds, editing) {
+        if (!editing) {
+            workingIds.clear()
+            workingIds.addAll(savedIds)
+        }
+    }
+
+    fun persistToolbar() {
+        scope.launch { app.userPrefsStore.setToolbarItemIds(workingIds.toList()) }
+    }
+
+    fun enterEdit() {
+        scope.launch { app.userPrefsStore.setToolbarCoachmarkSeen(true) }
+        editing = true
+    }
+
+    // Settings / Tools popup can request edit mode from another screen.
+    val editGen by ToolbarEditBus.editGeneration.collectAsState()
+    LaunchedEffect(editGen) {
+        if (editGen > 0L) {
+            navigateTo("map")
+            editing = true
+        }
+    }
+
+    fun dispatch(item: BarItem) {
+        when (val kind = item.kind) {
+            is BarKind.Destination -> navigateTo(kind.route)
+            is BarKind.Command -> when (kind.command) {
+                BarCommand.TOOLS -> showToolsLauncher = true
+                BarCommand.LASSO -> {
+                    navigateTo("map")
+                    LassoSelectionService.shared.requestActivate()
+                }
+                BarCommand.ENGINE_TOGGLE -> {
+                    // Cycle 2D Flat → 3D Terrain → 3D Globe → 2D Flat.
+                    scope.launch {
+                        app.userPrefsStore.update {
+                            when {
+                                it.cesiumGlobeEnabled -> it.copy(cesiumGlobeEnabled = false, map3dEnabled = false)
+                                it.map3dEnabled -> it.copy(map3dEnabled = false, cesiumGlobeEnabled = true)
+                                else -> it.copy(map3dEnabled = true, cesiumGlobeEnabled = false)
+                            }
                         }
                     }
+                }
+            }
+        }
+    }
+
+    val barItems = ToolbarCatalog.resolve(workingIds)
+    val coachmarkVisible = !prefs.toolbarCoachmarkSeen && currentRoute == "map" && !editing
+
+    Scaffold(
+        bottomBar = {
+            CustomToolbar(
+                items = barItems,
+                currentRoute = currentRoute,
+                editing = editing,
+                coachmarkVisible = coachmarkVisible,
+                canAdd = workingIds.size < ToolbarCatalog.MAX_ITEMS,
+                canRemove = workingIds.size > ToolbarCatalog.MIN_ITEMS,
+                onSelect = { dispatch(it) },
+                onEnterEdit = { enterEdit() },
+                onDoneEdit = {
+                    editing = false
+                    persistToolbar()
+                },
+                onRemove = { item ->
+                    val next = workingIds.toMutableList().apply { remove(item.id) }
+                    if (next.size >= ToolbarCatalog.MIN_ITEMS && ToolbarCatalog.hasDestination(next)) {
+                        workingIds.clear()
+                        workingIds.addAll(next)
+                    }
+                },
+                onReorder = { from, to ->
+                    if (from in workingIds.indices && to in workingIds.indices && from != to) {
+                        workingIds.add(to, workingIds.removeAt(from))
+                    }
+                },
+                onAddTapped = { showAddPalette = true },
+                onDismissCoachmark = {
+                    scope.launch { app.userPrefsStore.setToolbarCoachmarkSeen(true) }
                 },
             )
         },
@@ -94,15 +167,7 @@ fun AppNav() {
             modifier = Modifier.padding(inner),
         ) {
             composable("map") {
-                MapScreen(
-                    onOpenTab = { route ->
-                        nav.navigate(route) {
-                            popUpTo(nav.graph.startDestinationId) { saveState = true }
-                            launchSingleTop = true
-                            restoreState = true
-                        }
-                    },
-                )
+                MapScreen(onOpenTab = { route -> navigateTo(route) })
             }
             composable("servers") {
                 ServersScreen(
@@ -140,8 +205,6 @@ fun AppNav() {
                     onOpenTopology = { nav.navigate("mesh_topology") },
                     onOpenDeviceSettings = { nav.navigate("mesh/device-settings") },
                     onOpenChat = { convoId ->
-                        // GAP-124 — jump straight into the chat tab with
-                        // the requested conversation pre-selected.
                         nav.navigate("chat?convoId=$convoId") {
                             popUpTo(nav.graph.startDestinationId) { saveState = true }
                             launchSingleTop = true
@@ -161,24 +224,13 @@ fun AppNav() {
         }
     }
 
-    // Tools popup. Lasso routes to Map and toggles the LassoSelectionService
-    // (wired in subsequent phases). Full Tools surfaces a snackbar for now
-    // until we port the iOS ATAKToolsView grid.
+    // Tools popup.
     if (showToolsLauncher) {
         ToolsLauncherSheet(
             onDismiss = { showToolsLauncher = false },
             onLasso = {
                 showToolsLauncher = false
-                // Make sure the user is on the map before activating
-                // lasso — otherwise the gesture has no canvas.
-                nav.navigate("map") {
-                    popUpTo(nav.graph.startDestinationId) { saveState = true }
-                    launchSingleTop = true
-                    restoreState = true
-                }
-                // Fire the activation event — MapScreen's collector
-                // flips its lassoMode flag and the freehand overlay
-                // takes over the pointer input.
+                navigateTo("map")
                 LassoSelectionService.shared.requestActivate()
             },
             onUAS = {
@@ -195,12 +247,52 @@ fun AppNav() {
                     launchSingleTop = true
                 }
             },
+            onCustomize = {
+                showToolsLauncher = false
+                navigateTo("map")
+                enterEdit()
+            },
+            map3dEnabled = prefs.map3dEnabled,
+            cesiumGlobeEnabled = prefs.cesiumGlobeEnabled,
+            onToggleTerrain3D = {
+                scope.launch {
+                    app.userPrefsStore.update {
+                        it.copy(map3dEnabled = !it.map3dEnabled, cesiumGlobeEnabled = false)
+                    }
+                }
+            },
+            onToggleGlobe = {
+                scope.launch {
+                    app.userPrefsStore.update { it.copy(cesiumGlobeEnabled = !it.cesiumGlobeEnabled) }
+                }
+            },
             onFullTools = {
                 showToolsLauncher = false
                 snackbarScope.launch {
                     snackbarHostState.showSnackbar("Full Tools — porting the iOS grid next")
                 }
             },
+        )
+    }
+
+    // Add-a-shortcut palette.
+    if (showAddPalette) {
+        ToolbarAddPalette(
+            available = ToolbarCatalog.all.filter { it.id !in workingIds },
+            isFull = workingIds.size >= ToolbarCatalog.MAX_ITEMS,
+            onAdd = { item ->
+                if (workingIds.size < ToolbarCatalog.MAX_ITEMS && item.id !in workingIds) {
+                    workingIds.add(item.id)
+                    persistToolbar()
+                }
+            },
+            onReset = {
+                workingIds.clear()
+                workingIds.addAll(ToolbarCatalog.defaultIds)
+                persistToolbar()
+                showAddPalette = false
+            },
+            onDismiss = { showAddPalette = false },
         )
     }
 }

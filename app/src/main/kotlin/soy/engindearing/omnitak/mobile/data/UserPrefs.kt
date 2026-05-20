@@ -75,6 +75,18 @@ data class UserPrefs(
      *  (AWS Terrarium tiles). Parity with the iOS Cesium 3D globe
      *  toggle. Default off — 2D top-down is the tactical default. */
     val map3dEnabled: Boolean = false,
+    /** Photoreal Cesium 3D globe map engine (WebView). Distinct from
+     *  [map3dEnabled] (MapLibre terrain tilt): when this is on the map
+     *  switches to the Cesium globe, matching the iOS 3D experience.
+     *  Map mode is effectively: GLOBE if this is on, else TERRAIN if
+     *  [map3dEnabled], else flat 2D. Default off. */
+    val cesiumGlobeEnabled: Boolean = false,
+    /** Customizable bottom-bar layout — ordered list of ToolbarCatalog
+     *  item ids. Empty means "use the default layout". Mirrors the iOS
+     *  ToolbarConfigStore. */
+    val toolbarItemIds: List<String> = emptyList(),
+    /** One-time flag for the "press & hold to customize" coachmark. */
+    val toolbarCoachmarkSeen: Boolean = false,
 )
 
 class UserPrefsStore(private val context: Context) {
@@ -99,6 +111,9 @@ class UserPrefsStore(private val context: Context) {
     private val KEY_MIL_STD_SELF = booleanPreferencesKey("use_milstd_self_symbol")
     private val KEY_REMOTE_ID_SCAN = booleanPreferencesKey("remote_id_scan_enabled")
     private val KEY_MAP_3D = booleanPreferencesKey("map_3d_enabled")
+    private val KEY_CESIUM_GLOBE = booleanPreferencesKey("cesium_globe_enabled")
+    private val KEY_TOOLBAR_ITEMS = stringPreferencesKey("toolbar_item_ids")
+    private val KEY_TOOLBAR_COACH = booleanPreferencesKey("toolbar_coachmark_seen")
 
     val prefs: Flow<UserPrefs> = context.userPrefsDataStore.data.map { p -> readFrom(p) }
 
@@ -125,7 +140,20 @@ class UserPrefsStore(private val context: Context) {
             p[KEY_MIL_STD_SELF] = next.useMilStdSelfSymbol
             p[KEY_REMOTE_ID_SCAN] = next.remoteIdScanEnabled
             p[KEY_MAP_3D] = next.map3dEnabled
+            p[KEY_CESIUM_GLOBE] = next.cesiumGlobeEnabled
+            p[KEY_TOOLBAR_ITEMS] = next.toolbarItemIds.joinToString(",")
+            p[KEY_TOOLBAR_COACH] = next.toolbarCoachmarkSeen
         }
+    }
+
+    /** Persist the customizable toolbar layout. */
+    suspend fun setToolbarItemIds(ids: List<String>) {
+        update { it.copy(toolbarItemIds = ids) }
+    }
+
+    /** Mark the customize-toolbar coachmark as seen. */
+    suspend fun setToolbarCoachmarkSeen(value: Boolean) {
+        update { it.copy(toolbarCoachmarkSeen = value) }
     }
 
     /** Convenience writer for the Meshtastic auto-publish toggle so the
@@ -163,5 +191,8 @@ class UserPrefsStore(private val context: Context) {
         useMilStdSelfSymbol = p[KEY_MIL_STD_SELF] ?: true,
         remoteIdScanEnabled = p[KEY_REMOTE_ID_SCAN] ?: false,
         map3dEnabled = p[KEY_MAP_3D] ?: false,
+        cesiumGlobeEnabled = p[KEY_CESIUM_GLOBE] ?: false,
+        toolbarItemIds = p[KEY_TOOLBAR_ITEMS]?.split(",")?.filter { it.isNotBlank() } ?: emptyList(),
+        toolbarCoachmarkSeen = p[KEY_TOOLBAR_COACH] ?: false,
     )
 }
