@@ -85,6 +85,15 @@ object KmlGeoJsonConverter {
                 if (lon < minLon) minLon = lon; if (lon > maxLon) maxLon = lon
             }
 
+            // Real-world KML carries junk coords — (0,0) "Null Island" from
+            // missing values, or out-of-range/NaN. A single 0,0 blows the
+            // bounding box up to half the planet, so "zoom to overlay" frames
+            // the whole globe. Drop them.
+            fun isValid(lat: Double, lon: Double): Boolean =
+                lat.isFinite() && lon.isFinite() &&
+                    kotlin.math.abs(lat) <= 90 && kotlin.math.abs(lon) <= 180 &&
+                    !(kotlin.math.abs(lat) < 0.0001 && kotlin.math.abs(lon) < 0.0001)
+
             // Returns the [lon,lat] JSON array string for a KML coord tuple
             // list, tracking bounds. KML tuples are "lon,lat[,alt]" separated
             // by whitespace.
@@ -97,6 +106,7 @@ object KmlGeoJsonConverter {
                     if (parts.size < 2) continue
                     val lon = parts[0].toDoubleOrNull() ?: continue
                     val lat = parts[1].toDoubleOrNull() ?: continue
+                    if (!isValid(lat, lon)) continue
                     if (n > 0) sb.append(",")
                     sb.append("[").append(fmt(lon)).append(",").append(fmt(lat)).append("]")
                     track(lat, lon)
@@ -144,7 +154,7 @@ object KmlGeoJsonConverter {
                                     val one = raw.trim().split(Regex("\\s+")).firstOrNull()?.split(",")
                                     if (one != null && one.size >= 2) {
                                         val lon = one[0].toDoubleOrNull(); val lat = one[1].toDoubleOrNull()
-                                        if (lon != null && lat != null) {
+                                        if (lon != null && lat != null && isValid(lat, lon)) {
                                             featureHeader(); w.append("{\"type\":\"Point\",\"coordinates\":[").append(fmt(lon)).append(",").append(fmt(lat)).append("]}}")
                                             track(lat, lon); count++
                                         }
