@@ -185,6 +185,8 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
     // as a distinct cyan ring + callsign label, above the aircraft circle.
     val droneForMap = if (droneState.hasFix()) droneState else null
     val drawings by app.drawingStore.drawings.collectAsState()
+    // KML vector overlays (imported KML/KMZ rendered as GeoJSON sources).
+    val kmlOverlays by app.kmlOverlayStore.overlays.collectAsState()
     val snackbar = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
 
@@ -219,6 +221,30 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
 
     fun toast(msg: String) {
         scope.launch { snackbar.showSnackbar(msg, withDismissAction = true) }
+    }
+
+    // Re-apply KML overlays to the live style whenever the set changes.
+    // (Re-application after a style RELOAD is handled by TacticalMap.onStyleReady.)
+    LaunchedEffect(kmlOverlays) {
+        mapboxMap?.getStyle { style ->
+            soy.engindearing.omnitak.mobile.ui.components.KmlOverlayRenderer
+                .apply(style, kmlOverlays, app.kmlOverlayStore)
+        }
+    }
+    // Frame an overlay's bounds when the Map Overlays sheet requests it.
+    val kmlZoom by soy.engindearing.omnitak.mobile.ui.components.KmlOverlayEvents.zoomTo.collectAsState()
+    LaunchedEffect(kmlZoom) {
+        val o = kmlZoom ?: return@LaunchedEffect
+        if (userPrefs.cesiumGlobeEnabled) {
+            app.userPrefsStore.update { it.copy(cesiumGlobeEnabled = false) }
+        }
+        mapboxMap?.let { m ->
+            val bounds = org.maplibre.android.geometry.LatLngBounds.from(o.maxLat, o.maxLon, o.minLat, o.minLon)
+            runCatching {
+                m.easeCamera(org.maplibre.android.camera.CameraUpdateFactory.newLatLngBounds(bounds, 100), 800)
+            }
+        }
+        soy.engindearing.omnitak.mobile.ui.components.KmlOverlayEvents.consumed()
     }
 
     Box(
@@ -347,6 +373,10 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
             panTargetTick = panTargetTick,
             followMeActive = followMeActive,
             useMilStdSelfSymbol = userPrefs.useMilStdSelfSymbol,
+            onStyleReady = { _, style ->
+                soy.engindearing.omnitak.mobile.ui.components.KmlOverlayRenderer
+                    .apply(style, kmlOverlays, app.kmlOverlayStore)
+            },
         )
         }
 

@@ -76,6 +76,10 @@ fun TacticalMap(
      *  this to grab the [MapLibreMap] reference for screen↔geo
      *  projection during freehand selection. */
     onMapReady: ((org.maplibre.android.maps.MapLibreMap) -> Unit)? = null,
+    /** Fired after every style (re)load with the live map + style, so the
+     *  caller can re-apply style-level content (e.g. KML vector overlays)
+     *  that a setStyle wipes. */
+    onStyleReady: ((org.maplibre.android.maps.MapLibreMap, Style) -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -91,6 +95,7 @@ fun TacticalMap(
     val currentAircraft by rememberUpdatedState(aircraft)
     val currentCameraIdle by rememberUpdatedState(onCameraIdle)
     val currentMapReady by rememberUpdatedState(onMapReady)
+    val currentStyleReady by rememberUpdatedState(onStyleReady)
     val currentTerrain3d by rememberUpdatedState(terrain3d)
 
     val mapView = remember {
@@ -122,6 +127,7 @@ fun TacticalMap(
                         map.cameraPosition = CameraPosition.Builder(map.cameraPosition)
                             .tilt(55.0).build()
                     }
+                    currentStyleReady?.invoke(map, style)
                 }
                 map.uiSettings.apply {
                     isCompassEnabled = true
@@ -275,12 +281,13 @@ fun TacticalMap(
             // Skip the first emission — the initial setStyle is handled by the
             // getMapAsync block during MapView construction (line ~88).
             if (map.style != null && map.style?.json != styleJson) {
-                map.setStyle(Style.Builder().fromJson(styleJson)) { _ ->
+                map.setStyle(Style.Builder().fromJson(styleJson)) { style ->
                     ContactLayer.update(map, context, currentContacts)
                     MeasurementLayer.update(map, currentMeasurementPoints)
                     DrawingLayer.update(map, currentDrawings)
                     currentGridCenter?.let { GridLayer.update(map, it) }
                     AircraftLayer.update(map, currentAircraft)
+                    currentStyleReady?.invoke(map, style)
                     // Apply 3D tilt AFTER the style (which carries the
                     // terrain source) finishes loading — deterministic vs
                     // a separate effect that races the style reload.

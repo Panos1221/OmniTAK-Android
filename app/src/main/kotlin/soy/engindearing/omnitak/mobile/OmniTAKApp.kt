@@ -193,6 +193,9 @@ class OmniTAKApp : Application() {
     }
     val meshDeviceConfigStore: MeshDeviceConfigStore by lazy { MeshDeviceConfigStore(this) }
     val userPrefsStore: UserPrefsStore by lazy { UserPrefsStore(this) }
+    val kmlOverlayStore: soy.engindearing.omnitak.mobile.data.KmlVectorOverlayStore by lazy {
+        soy.engindearing.omnitak.mobile.data.KmlVectorOverlayStore(this)
+    }
 
     /** FAA Remote ID BLE scanner (Phase 2 of the gy6 plan). Starts/stops
      *  from a coroutine in [onCreate] driven by `remoteIdScanEnabled`. */

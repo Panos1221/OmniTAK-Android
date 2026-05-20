@@ -56,6 +56,7 @@ fun AppNav() {
 
     var showToolsLauncher by remember { mutableStateOf(false) }
     var showAddPalette by remember { mutableStateOf(false) }
+    var showKmlOverlays by remember { mutableStateOf(false) }
     var editing by remember { mutableStateOf(false) }
     val snackbarHostState = remember { SnackbarHostState() }
     val snackbarScope = rememberCoroutineScope()
@@ -95,6 +96,26 @@ fun AppNav() {
         if (editGen > 0L) {
             navigateTo("map")
             editing = true
+        }
+    }
+
+    // DEBUG: auto-import a KML/KMZ staged in filesDir/import/ (mirrors the
+    // DataPackageBootstrap sideload) so the real on-device import + render
+    // path can be exercised with large files without the document picker.
+    LaunchedEffect(Unit) {
+        val debuggable = (app.applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0
+        if (debuggable && app.kmlOverlayStore.overlays.value.isEmpty()) {
+            val ext = java.io.File(app.getExternalFilesDir(null) ?: app.filesDir, "import")
+            val intl = java.io.File(app.filesDir, "import")
+            val candidates = (ext.listFiles()?.toList() ?: emptyList()) +
+                (intl.listFiles()?.toList() ?: emptyList())
+            val kml = candidates.firstOrNull { it.extension.lowercase() in listOf("kml", "kmz") }
+            if (kml != null) {
+                app.kmlOverlayStore.importKml(kml, kml.name)
+                app.kmlOverlayStore.overlays.value.lastOrNull()?.let {
+                    soy.engindearing.omnitak.mobile.ui.components.KmlOverlayEvents.requestZoom(it)
+                }
+            }
         }
     }
 
@@ -252,6 +273,11 @@ fun AppNav() {
                 navigateTo("map")
                 enterEdit()
             },
+            onMapOverlays = {
+                showToolsLauncher = false
+                navigateTo("map")
+                showKmlOverlays = true
+            },
             map3dEnabled = prefs.map3dEnabled,
             cesiumGlobeEnabled = prefs.cesiumGlobeEnabled,
             onToggleTerrain3D = {
@@ -293,6 +319,13 @@ fun AppNav() {
                 showAddPalette = false
             },
             onDismiss = { showAddPalette = false },
+        )
+    }
+
+    // Map Overlays (KML/KMZ import + manage).
+    if (showKmlOverlays) {
+        soy.engindearing.omnitak.mobile.ui.components.KmlOverlaysSheet(
+            onDismiss = { showKmlOverlays = false },
         )
     }
 }

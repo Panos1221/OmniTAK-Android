@@ -17,6 +17,7 @@ import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Apps
 import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.FlightTakeoff
+import androidx.compose.material.icons.filled.Layers
 import androidx.compose.material.icons.filled.Public
 import androidx.compose.material.icons.filled.Terrain
 import androidx.compose.material.icons.filled.Tune
@@ -59,6 +60,7 @@ fun ToolsLauncherSheet(
     onUAS: () -> Unit = {},
     onOnvifCamera: () -> Unit = {},
     onCustomize: () -> Unit = {},
+    onMapOverlays: () -> Unit = {},
     map3dEnabled: Boolean = false,
     cesiumGlobeEnabled: Boolean = false,
     onToggleTerrain3D: () -> Unit = {},
@@ -141,6 +143,18 @@ fun ToolsLauncherSheet(
                 title = "Customize Toolbar",
                 subtitle = "Pick and arrange your own bottom-bar shortcuts",
                 onClick = onCustomize,
+            )
+
+            HorizontalDivider(
+                modifier = Modifier.padding(start = 76.dp),
+                color = Color.White.copy(alpha = 0.08f),
+            )
+
+            ToolsRow(
+                icon = { Icon(Icons.Filled.Layers, contentDescription = null, tint = Color(0xFFA78BFA)) },
+                title = "Map Overlays",
+                subtitle = "Import & toggle KML/KMZ overlays (handles huge files)",
+                onClick = onMapOverlays,
             )
 
             HorizontalDivider(
