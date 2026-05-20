@@ -17,6 +17,7 @@ import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Apps
 import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.FlightTakeoff
+import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -53,6 +54,7 @@ fun ToolsLauncherSheet(
     onLasso: () -> Unit,
     onFullTools: () -> Unit,
     onUAS: () -> Unit = {},
+    onOnvifCamera: () -> Unit = {},
     onDismiss: () -> Unit,
 ) {
     val sheet = rememberModalBottomSheetState()
@@ -83,6 +85,18 @@ fun ToolsLauncherSheet(
                 title = "Vehicle Connect (UAS / UGV)",
                 subtitle = "MAVLink drones, rovers & boats — PX4 / ArduPilot, telemetry to CoT",
                 onClick = onUAS,
+            )
+
+            HorizontalDivider(
+                modifier = Modifier.padding(start = 76.dp),
+                color = Color.White.copy(alpha = 0.08f),
+            )
+
+            ToolsRow(
+                icon = { Icon(Icons.Filled.Videocam, contentDescription = null, tint = Color(0xFF00E5FF)) },
+                title = "ONVIF Camera (PTZ)",
+                subtitle = "Connect a PTZ IP camera — live RTSP feed + pan/tilt/zoom control",
+                onClick = onOnvifCamera,
             )
 
             HorizontalDivider(

@@ -119,6 +119,9 @@ fun AppNav() {
             composable("uas") {
                 UASScreen(onDone = { nav.popBackStack() })
             }
+            composable("onvif") {
+                soy.engindearing.omnitak.mobile.ui.screens.OnvifCameraScreen(onDone = { nav.popBackStack() })
+            }
             composable("chat") { ChatScreen() }
             composable(
                 route = "chat?convoId={convoId}",
@@ -181,6 +184,13 @@ fun AppNav() {
             onUAS = {
                 showToolsLauncher = false
                 nav.navigate("uas") {
+                    popUpTo(nav.graph.startDestinationId) { saveState = true }
+                    launchSingleTop = true
+                }
+            },
+            onOnvifCamera = {
+                showToolsLauncher = false
+                nav.navigate("onvif") {
                     popUpTo(nav.graph.startDestinationId) { saveState = true }
                     launchSingleTop = true
                 }
