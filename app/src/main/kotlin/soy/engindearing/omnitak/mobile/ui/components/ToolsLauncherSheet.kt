@@ -80,8 +80,8 @@ fun ToolsLauncherSheet(
 
             ToolsRow(
                 icon = { Icon(Icons.Filled.FlightTakeoff, contentDescription = null, tint = Color(0xFF34C759)) },
-                title = "UAS Quick Connect",
-                subtitle = "MAVLink / PX4 / ArduPilot — arm, takeoff, RTL, telemetry to CoT",
+                title = "Vehicle Connect (UAS / UGV)",
+                subtitle = "MAVLink drones, rovers & boats — PX4 / ArduPilot, telemetry to CoT",
                 onClick = onUAS,
             )
 

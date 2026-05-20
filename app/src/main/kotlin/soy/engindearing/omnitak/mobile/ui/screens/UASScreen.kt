@@ -96,7 +96,7 @@ fun UASScreen(onDone: () -> Unit) {
         containerColor = TacticalBackground,
         topBar = {
             TopAppBar(
-                title = { Text("UAS Quick Connect") },
+                title = { Text("Vehicle Connect") },
                 navigationIcon = {
                     IconButton(onClick = onDone) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
@@ -155,7 +155,7 @@ fun UASScreen(onDone: () -> Unit) {
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             Text(
-                "Connect a MAVLink UAS. Day-one supports PX4 / ArduPilot per the RAS-A v1.2 IOP. Your CoT marker flows to every other operator on the active TAK server.",
+                "Connect any MAVLink vehicle — drone (UAS), ground rover (UGV), or boat (USV). PX4 / ArduPilot. The platform type is auto-detected from the vehicle and the map adapts (Fly/Drive Here, altitude, marker). Your CoT marker flows to every operator on the active TAK server.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f),
             )
