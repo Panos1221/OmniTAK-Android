@@ -100,8 +100,10 @@ fun KmlOverlaysSheet(onDismiss: () -> Unit) {
                         tmp.outputStream().use { input.copyTo(it) }
                     }
                 }
-                if (name.lowercase().endsWith(".mbtiles")) {
-                    if (mbStore.importMBTiles(tmp, name)) {
+                val lower = name.lowercase()
+                if (lower.endsWith(".mbtiles") || lower.endsWith(".gpkg")) {
+                    val ok = if (lower.endsWith(".gpkg")) mbStore.importGPKG(tmp, name) else mbStore.importMBTiles(tmp, name)
+                    if (ok) {
                         mbStore.overlays.value.lastOrNull()?.takeIf { it.hasBounds }?.let {
                             KmlOverlayEvents.requestZoomBounds(it.north, it.south, it.east, it.west)
                         }
@@ -188,7 +190,7 @@ private fun OverlayList(
         ) {
             Icon(Icons.Filled.FileDownload, contentDescription = null, tint = Color(0xFF4FA8FF))
             Spacer(Modifier.width(14.dp))
-            Text("Import KML / KMZ / MBTiles", color = Color(0xFF4FA8FF), fontSize = 16.sp)
+            Text("Import KML / KMZ / MBTiles / GPKG", color = Color(0xFF4FA8FF), fontSize = 16.sp)
         }
 
         if (importing) {
