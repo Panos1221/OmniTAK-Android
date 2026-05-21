@@ -189,6 +189,8 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
     val kmlOverlays by app.kmlOverlayStore.overlays.collectAsState()
     // MBTiles raster tile overlays (served by the in-app tile server).
     val mbtilesOverlays by app.mbtilesOverlayStore.overlays.collectAsState()
+    // Single-image raster overlays (GroundOverlay etc.) via ImageSource.
+    val rasterImagery by app.rasterOverlayStore.overlays.collectAsState()
     val snackbar = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
 
@@ -238,6 +240,13 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
         mapboxMap?.getStyle { style ->
             soy.engindearing.omnitak.mobile.ui.components.KmlOverlayRenderer
                 .applyMBTiles(style, mbtilesOverlays, app.mbtilesOverlayStore)
+        }
+    }
+    // Re-apply single-image raster overlays when the set changes.
+    LaunchedEffect(rasterImagery) {
+        mapboxMap?.getStyle { style ->
+            soy.engindearing.omnitak.mobile.ui.components.KmlOverlayRenderer
+                .applyRaster(style, rasterImagery, app.rasterOverlayStore)
         }
     }
     // Frame raster/MBTiles bounds on request.
@@ -402,6 +411,8 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
                     .apply(style, kmlOverlays, app.kmlOverlayStore)
                 soy.engindearing.omnitak.mobile.ui.components.KmlOverlayRenderer
                     .applyMBTiles(style, mbtilesOverlays, app.mbtilesOverlayStore)
+                soy.engindearing.omnitak.mobile.ui.components.KmlOverlayRenderer
+                    .applyRaster(style, rasterImagery, app.rasterOverlayStore)
             },
         )
         }

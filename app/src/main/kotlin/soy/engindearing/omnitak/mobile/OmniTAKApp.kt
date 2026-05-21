@@ -199,6 +199,9 @@ class OmniTAKApp : Application() {
     val mbtilesOverlayStore: soy.engindearing.omnitak.mobile.data.MBTilesOverlayStore by lazy {
         soy.engindearing.omnitak.mobile.data.MBTilesOverlayStore(this)
     }
+    val rasterOverlayStore: soy.engindearing.omnitak.mobile.data.RasterOverlayStore by lazy {
+        soy.engindearing.omnitak.mobile.data.RasterOverlayStore(this)
+    }
 
     /** FAA Remote ID BLE scanner (Phase 2 of the gy6 plan). Starts/stops
      *  from a coroutine in [onCreate] driven by `remoteIdScanEnabled`. */
