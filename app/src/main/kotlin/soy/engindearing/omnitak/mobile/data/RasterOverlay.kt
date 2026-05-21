@@ -2,6 +2,10 @@ package soy.engindearing.omnitak.mobile.data
 
 import android.content.Context
 import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.Color
+import android.graphics.pdf.PdfRenderer
+import android.os.ParcelFileDescriptor
 import android.util.Xml
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -13,8 +17,10 @@ import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import mil.nga.tiff.TiffReader
 import org.xmlpull.v1.XmlPullParser
+import java.io.ByteArrayOutputStream
 import java.io.File
 import java.util.UUID
+import java.util.zip.Inflater
 import java.util.zip.ZipInputStream
 import kotlin.math.abs
 import kotlin.math.atan
@@ -203,6 +209,136 @@ object GeoTIFFParser {
     }
 }
 
+/**
+ * Reads the geo-registration of a GeoPDF (ISO 32000 geospatial). Android has
+ * no PDF object-model API, so we parse the /VP → /Measure → /GPTS array (a
+ * flat list of lat/lon corner pairs) straight out of the PDF bytes — both the
+ * raw bytes and any FlateDecode object streams, since PDF 1.5+ tucks these
+ * dictionaries inside compressed object streams. Mirrors the iOS
+ * GeoPDFImporter.geoBounds (first viewport, min/max of GPTS → corner box).
+ */
+object GeoPDFParser {
+    data class Box(val north: Double, val south: Double, val east: Double, val west: Double)
+
+    private val NUM = Regex("[-+]?[0-9]*\\.?[0-9]+(?:[eE][-+]?[0-9]+)?")
+    private const val MAX_STREAM = 32 * 1024 * 1024
+    private const val MAX_TOTAL = 64 * 1024 * 1024
+
+    fun bounds(bytes: ByteArray): Box? {
+        // Try the raw bytes first (uncompressed GeoPDFs), then inflated streams.
+        extractGpts(String(bytes, Charsets.ISO_8859_1))?.let { boxFrom(it)?.let { b -> return b } }
+        var total = 0
+        for (text in inflatedStreams(bytes)) {
+            total += text.length
+            extractGpts(text)?.let { boxFrom(it)?.let { b -> return b } }
+            if (total > MAX_TOTAL) break
+        }
+        return null
+    }
+
+    private fun boxFrom(gpts: List<Double>): Box? {
+        if (gpts.size < 4 || gpts.size % 2 != 0) return null
+        val lats = ArrayList<Double>(); val lons = ArrayList<Double>()
+        var i = 0
+        while (i + 1 < gpts.size) { lats.add(gpts[i]); lons.add(gpts[i + 1]); i += 2 } // GPTS = lat, lon
+        val north = lats.maxOrNull() ?: return null
+        val south = lats.minOrNull() ?: return null
+        val east = lons.maxOrNull() ?: return null
+        val west = lons.minOrNull() ?: return null
+        if (abs(north) > 90 || abs(south) > 90 || abs(east) > 180 || abs(west) > 180 ||
+            north <= south || east == west
+        ) return null
+        return Box(north, south, east, west)
+    }
+
+    /** First `/GPTS [ ... ]` numeric array in the text, or null. */
+    private fun extractGpts(text: String): List<Double>? {
+        var idx = text.indexOf("/GPTS")
+        while (idx >= 0) {
+            var j = idx + 5
+            while (j < text.length && text[j].isWhitespace()) j++
+            if (j < text.length && text[j] == '[') {
+                val end = text.indexOf(']', j)
+                if (end > j) {
+                    val nums = NUM.findAll(text.substring(j + 1, end)).map { it.value.toDouble() }.toList()
+                    if (nums.size >= 4) return nums
+                }
+            }
+            idx = text.indexOf("/GPTS", idx + 5)
+        }
+        return null
+    }
+
+    /** Inflate every FlateDecode-looking `stream ... endstream` block. Brute
+     *  force: try zlib then raw-deflate; skip blocks that aren't deflate. */
+    private fun inflatedStreams(bytes: ByteArray): List<String> {
+        val out = ArrayList<String>()
+        val streamKw = "stream".toByteArray(Charsets.ISO_8859_1)
+        val endKw = "endstream".toByteArray(Charsets.ISO_8859_1)
+        var pos = 0
+        var total = 0
+        while (true) {
+            val s = indexOf(bytes, streamKw, pos)
+            if (s < 0) break
+            // Skip the "stream" inside "endstream".
+            if (s >= 3 && bytes[s - 1].toInt() == 'd'.code && bytes[s - 2].toInt() == 'n'.code && bytes[s - 3].toInt() == 'e'.code) {
+                pos = s + streamKw.size; continue
+            }
+            var c = s + streamKw.size
+            if (c < bytes.size && bytes[c].toInt() == 0x0D) c++ // CR
+            if (c < bytes.size && bytes[c].toInt() == 0x0A) c++ // LF
+            val e = indexOf(bytes, endKw, c)
+            if (e < 0) break
+            var contentEnd = e
+            if (contentEnd > c && bytes[contentEnd - 1].toInt() == 0x0A) contentEnd--
+            if (contentEnd > c && bytes[contentEnd - 1].toInt() == 0x0D) contentEnd--
+            val len = contentEnd - c
+            if (len in 1..MAX_STREAM) {
+                tryInflate(bytes, c, len)?.let {
+                    out.add(String(it, Charsets.ISO_8859_1)); total += it.size
+                }
+            }
+            if (total > MAX_TOTAL) break
+            pos = e + endKw.size
+        }
+        return out
+    }
+
+    private fun tryInflate(buf: ByteArray, off: Int, len: Int): ByteArray? {
+        for (nowrap in booleanArrayOf(false, true)) {
+            try {
+                val inf = Inflater(nowrap)
+                inf.setInput(buf, off, len)
+                val out = ByteArrayOutputStream(len * 4)
+                val tmp = ByteArray(16384)
+                while (!inf.finished()) {
+                    val n = inf.inflate(tmp)
+                    if (n == 0 && (inf.needsInput() || inf.needsDictionary())) break
+                    out.write(tmp, 0, n)
+                    if (out.size() > MAX_STREAM) break
+                }
+                inf.end()
+                if (out.size() > 0) return out.toByteArray()
+            } catch (_: Exception) {
+            }
+        }
+        return null
+    }
+
+    private fun indexOf(hay: ByteArray, needle: ByteArray, from: Int): Int {
+        if (needle.isEmpty() || from < 0) return -1
+        var i = from
+        val last = hay.size - needle.size
+        while (i <= last) {
+            var k = 0
+            while (k < needle.size && hay[i + k] == needle[k]) k++
+            if (k == needle.size) return i
+            i++
+        }
+        return -1
+    }
+}
+
 class RasterOverlayStore(context: Context) {
     private val dir = File(context.filesDir, "raster_overlays").apply { mkdirs() }
     private val metaFile = File(dir, "rasters.json")
@@ -331,6 +467,64 @@ class RasterOverlayStore(context: Context) {
             oy++; y += step
         }
         Bitmap.createBitmap(pixels, outW, outH, Bitmap.Config.ARGB_8888)
+    }.getOrNull()
+
+    /** Import a georeferenced PDF (GeoPDF). Parses the /VP /Measure /GPTS
+     *  corner box and rasterizes page 1 to a PNG placed by that box. Returns
+     *  false if the PDF isn't georeferenced or can't be rendered. */
+    suspend fun importGeoPDF(source: File, displayName: String): Boolean {
+        _isImporting.value = true; _lastError.value = null
+        return try {
+            val bytes = withContext(Dispatchers.IO) { source.readBytes() }
+            val box = GeoPDFParser.bounds(bytes)
+            if (box == null) {
+                _lastError.value = "That PDF isn't georeferenced (no GeoPDF /VP /Measure /GPTS registration)."
+                _isImporting.value = false; return false
+            }
+            val bmp = withContext(Dispatchers.IO) { rasterizePdf(source) }
+            if (bmp == null) {
+                _lastError.value = "Couldn't render that PDF."
+                _isImporting.value = false; return false
+            }
+            val id = UUID.randomUUID().toString()
+            val out = File(dir, "$id.png")
+            withContext(Dispatchers.IO) { out.outputStream().use { bmp.compress(Bitmap.CompressFormat.PNG, 100, it) } }
+            bmp.recycle()
+            _overlays.value = _overlays.value + RasterOverlay(
+                id = id, name = displayName.substringBeforeLast('.'), fileName = out.name,
+                north = box.north, south = box.south, east = box.east, west = box.west,
+                createdAt = System.currentTimeMillis(),
+            )
+            persist()
+            _isImporting.value = false
+            true
+        } catch (e: Exception) {
+            _lastError.value = "GeoPDF import failed: ${e.message}"
+            _isImporting.value = false
+            false
+        }
+    }
+
+    /** Render page 1 of a PDF to an ARGB Bitmap at ~2x, longest edge capped at
+     *  4096px (uniform scale preserves aspect). PdfRenderer draws onto a
+     *  transparent surface, so we fill white first. */
+    private fun rasterizePdf(source: File): Bitmap? = runCatching {
+        ParcelFileDescriptor.open(source, ParcelFileDescriptor.MODE_READ_ONLY).use { pfd ->
+            PdfRenderer(pfd).use { renderer ->
+                if (renderer.pageCount < 1) return@runCatching null
+                renderer.openPage(0).use { page ->
+                    val longest = maxOf(page.width, page.height)
+                    if (longest <= 0) return@runCatching null
+                    val scale = if (longest * 2.0 > 4096) 4096.0 / longest else 2.0
+                    val w = (page.width * scale).toInt().coerceAtLeast(1)
+                    val h = (page.height * scale).toInt().coerceAtLeast(1)
+                    val bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+                    Canvas(bmp).drawColor(Color.WHITE)
+                    page.render(bmp, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
+                    bmp
+                }
+            }
+        }
     }.getOrNull()
 
     /** Returns (kmlBytes, resourceName→bytes). For plain KML, resources is empty. */

@@ -120,6 +120,12 @@ fun KmlOverlaysSheet(onDismiss: () -> Unit) {
                             KmlOverlayEvents.requestZoomBounds(it.north, it.south, it.east, it.west)
                         }
                     }
+                } else if (lower.endsWith(".pdf")) {
+                    if (rasterStore.importGeoPDF(tmp, name)) {
+                        rasterStore.overlays.value.lastOrNull()?.let {
+                            KmlOverlayEvents.requestZoomBounds(it.north, it.south, it.east, it.west)
+                        }
+                    }
                 } else if (lower.endsWith(".kmz") && rasterStore.importGroundOverlay(tmp, name)) {
                     // KMZ image overlay (GroundOverlay).
                     rasterStore.overlays.value.lastOrNull()?.let {
@@ -218,7 +224,7 @@ private fun OverlayList(
         ) {
             Icon(Icons.Filled.FileDownload, contentDescription = null, tint = Color(0xFF4FA8FF))
             Spacer(Modifier.width(14.dp))
-            Text("Import KML / KMZ / GeoTIFF / MBTiles / GPKG", color = Color(0xFF4FA8FF), fontSize = 15.sp, maxLines = 1)
+            Text("Import KML / KMZ / GeoTIFF / GeoPDF / MBTiles / GPKG", color = Color(0xFF4FA8FF), fontSize = 13.sp, maxLines = 1)
         }
 
         if (importing) {
