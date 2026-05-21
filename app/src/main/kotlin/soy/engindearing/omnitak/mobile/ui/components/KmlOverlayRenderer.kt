@@ -8,9 +8,13 @@ import org.maplibre.android.style.layers.FillLayer
 import org.maplibre.android.style.layers.LineLayer
 import org.maplibre.android.style.layers.Property
 import org.maplibre.android.style.layers.PropertyFactory
+import android.graphics.BitmapFactory
+import org.maplibre.android.geometry.LatLng
+import org.maplibre.android.geometry.LatLngQuad
 import org.maplibre.android.style.layers.RasterLayer
 import org.maplibre.android.style.sources.GeoJsonOptions
 import org.maplibre.android.style.sources.GeoJsonSource
+import org.maplibre.android.style.sources.ImageSource
 import org.maplibre.android.style.sources.RasterSource
 import org.maplibre.android.style.sources.TileSet
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -20,6 +24,8 @@ import soy.engindearing.omnitak.mobile.data.KmlVectorOverlay
 import soy.engindearing.omnitak.mobile.data.KmlVectorOverlayStore
 import soy.engindearing.omnitak.mobile.data.MBTilesOverlay
 import soy.engindearing.omnitak.mobile.data.MBTilesOverlayStore
+import soy.engindearing.omnitak.mobile.data.RasterOverlay
+import soy.engindearing.omnitak.mobile.data.RasterOverlayStore
 import java.net.URI
 
 /** Lets the Map Overlays sheet ask the map to frame bounds. */
@@ -116,6 +122,40 @@ object KmlOverlayRenderer {
     }
 
     private fun layerIds(id: String) = listOf("kmlfill-$id", "kmlline-$id", "kmlpt-$id")
+
+    // Single-image raster overlays (KMZ GroundOverlay etc.) via ImageSource.
+    private val installedRaster = mutableSetOf<String>()
+
+    fun applyRaster(style: Style, overlays: List<RasterOverlay>, store: RasterOverlayStore) {
+        val wanted = overlays.map { it.id }.toSet()
+        for (id in installedRaster - wanted) {
+            style.removeLayer("rasterlyr-$id")
+            style.removeSource("rastersrc-$id")
+        }
+        installedRaster.clear()
+        installedRaster.addAll(wanted)
+
+        for (overlay in overlays) {
+            val sourceId = "rastersrc-${overlay.id}"
+            val layerId = "rasterlyr-${overlay.id}"
+            if (style.getSource(sourceId) == null) {
+                val bmp = runCatching { BitmapFactory.decodeFile(store.fileFor(overlay).absolutePath) }.getOrNull() ?: continue
+                val quad = LatLngQuad(
+                    LatLng(overlay.north, overlay.west), // top-left
+                    LatLng(overlay.north, overlay.east), // top-right
+                    LatLng(overlay.south, overlay.east), // bottom-right
+                    LatLng(overlay.south, overlay.west), // bottom-left
+                )
+                style.addSource(ImageSource(sourceId, quad, bmp))
+                style.addLayer(RasterLayer(layerId, sourceId))
+            }
+            val vis = if (overlay.visible) Property.VISIBLE else Property.NONE
+            style.getLayerAs<RasterLayer>(layerId)?.setProperties(
+                PropertyFactory.visibility(vis),
+                PropertyFactory.rasterOpacity(overlay.opacity),
+            )
+        }
+    }
 
     // MBTiles raster tile sources (served by the in-app HTTP tile server).
     private val installedMBTiles = mutableSetOf<String>()

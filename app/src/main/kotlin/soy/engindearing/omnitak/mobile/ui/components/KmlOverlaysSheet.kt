@@ -56,6 +56,7 @@ import kotlinx.coroutines.launch
 import soy.engindearing.omnitak.mobile.OmniTAKApp
 import soy.engindearing.omnitak.mobile.data.KmlVectorOverlay
 import soy.engindearing.omnitak.mobile.data.MBTilesOverlay
+import soy.engindearing.omnitak.mobile.data.RasterOverlay
 import java.io.File
 
 private val PALETTE = listOf(
@@ -78,11 +79,13 @@ fun KmlOverlaysSheet(onDismiss: () -> Unit) {
     val app = context.applicationContext as OmniTAKApp
     val store = app.kmlOverlayStore
     val mbStore = app.mbtilesOverlayStore
+    val rasterStore = app.rasterOverlayStore
     val scope = rememberCoroutineScope()
     val sheet = rememberModalBottomSheetState()
 
     val overlays by store.overlays.collectAsState()
     val mbtiles by mbStore.overlays.collectAsState()
+    val imagery by rasterStore.overlays.collectAsState()
     val importing by store.isImporting.collectAsState()
     val status by store.status.collectAsState()
     val error by store.lastError.collectAsState()
@@ -107,6 +110,11 @@ fun KmlOverlaysSheet(onDismiss: () -> Unit) {
                         mbStore.overlays.value.lastOrNull()?.takeIf { it.hasBounds }?.let {
                             KmlOverlayEvents.requestZoomBounds(it.north, it.south, it.east, it.west)
                         }
+                    }
+                } else if (lower.endsWith(".kmz") && rasterStore.importGroundOverlay(tmp, name)) {
+                    // KMZ image overlay (GroundOverlay).
+                    rasterStore.overlays.value.lastOrNull()?.let {
+                        KmlOverlayEvents.requestZoomBounds(it.north, it.south, it.east, it.west)
                     }
                 } else {
                     store.importKml(tmp, name)
@@ -134,6 +142,7 @@ fun KmlOverlaysSheet(onDismiss: () -> Unit) {
         } else {
             OverlayList(
                 overlays = overlays,
+                imagery = imagery,
                 mbtiles = mbtiles,
                 importing = importing,
                 status = status,
@@ -141,6 +150,12 @@ fun KmlOverlaysSheet(onDismiss: () -> Unit) {
                 onImport = { picker.launch(arrayOf("*/*")) },
                 onSelect = { editingId = it },
                 onToggle = { id, v -> store.setVisible(id, v) },
+                onImgToggle = { id, v -> rasterStore.setVisible(id, v) },
+                onImgZoom = { o ->
+                    KmlOverlayEvents.requestZoomBounds(o.north, o.south, o.east, o.west)
+                    onDismiss()
+                },
+                onImgDelete = { rasterStore.remove(it) },
                 onMbToggle = { id, v -> mbStore.setVisible(id, v) },
                 onMbZoom = { o ->
                     if (o.hasBounds) {
@@ -158,8 +173,8 @@ fun KmlOverlaysSheet(onDismiss: () -> Unit) {
         AlertDialog(
             onDismissRequest = { confirmDeleteAll = false },
             title = { Text("Delete all overlays?") },
-            text = { Text("This removes every imported overlay (vector + tiles). It can't be undone.") },
-            confirmButton = { TextButton(onClick = { store.removeAll(); mbStore.removeAll(); confirmDeleteAll = false }) { Text("Delete All") } },
+            text = { Text("This removes every imported overlay (vector + imagery + tiles). It can't be undone.") },
+            confirmButton = { TextButton(onClick = { store.removeAll(); rasterStore.removeAll(); mbStore.removeAll(); confirmDeleteAll = false }) { Text("Delete All") } },
             dismissButton = { TextButton(onClick = { confirmDeleteAll = false }) { Text("Cancel") } },
         )
     }
@@ -168,6 +183,7 @@ fun KmlOverlaysSheet(onDismiss: () -> Unit) {
 @Composable
 private fun OverlayList(
     overlays: List<KmlVectorOverlay>,
+    imagery: List<RasterOverlay>,
     mbtiles: List<MBTilesOverlay>,
     importing: Boolean,
     status: String,
@@ -175,6 +191,9 @@ private fun OverlayList(
     onImport: () -> Unit,
     onSelect: (String) -> Unit,
     onToggle: (String, Boolean) -> Unit,
+    onImgToggle: (String, Boolean) -> Unit,
+    onImgZoom: (RasterOverlay) -> Unit,
+    onImgDelete: (String) -> Unit,
     onMbToggle: (String, Boolean) -> Unit,
     onMbZoom: (MBTilesOverlay) -> Unit,
     onMbDelete: (String) -> Unit,
@@ -190,7 +209,7 @@ private fun OverlayList(
         ) {
             Icon(Icons.Filled.FileDownload, contentDescription = null, tint = Color(0xFF4FA8FF))
             Spacer(Modifier.width(14.dp))
-            Text("Import KML / KMZ / MBTiles / GPKG", color = Color(0xFF4FA8FF), fontSize = 16.sp)
+            Text("Import KML / KMZ / MBTiles / GPKG", color = Color(0xFF4FA8FF), fontSize = 16.sp, maxLines = 1)
         }
 
         if (importing) {
@@ -207,7 +226,7 @@ private fun OverlayList(
 
         HorizontalDivider(color = Color.White.copy(alpha = 0.08f))
 
-        if (overlays.isEmpty() && mbtiles.isEmpty()) {
+        if (overlays.isEmpty() && imagery.isEmpty() && mbtiles.isEmpty()) {
             Text("No overlays yet.", color = Color.White.copy(alpha = 0.5f), fontSize = 14.sp,
                 modifier = Modifier.padding(horizontal = 20.dp, vertical = 14.dp))
         } else {
@@ -231,6 +250,35 @@ private fun OverlayList(
                     }
                 }
                 HorizontalDivider(modifier = Modifier.padding(start = 20.dp), color = Color.White.copy(alpha = 0.06f))
+            }
+
+            if (imagery.isNotEmpty()) {
+                Text("Imagery", color = Color.White.copy(alpha = 0.6f), fontSize = 13.sp, fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp))
+                imagery.forEach { o ->
+                    Row(
+                        modifier = Modifier.fillMaxWidth().clickable { onImgZoom(o) }.padding(horizontal = 20.dp, vertical = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Box(modifier = Modifier.size(14.dp).clip(CircleShape).background(Color(0xFF30D5C8)))
+                        Spacer(Modifier.width(12.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(o.name, color = Color.White, fontSize = 16.sp, maxLines = 1)
+                            Text("Image overlay", color = Color.White.copy(alpha = 0.5f), fontSize = 12.sp)
+                        }
+                        IconButton(onClick = { onImgToggle(o.id, !o.visible) }) {
+                            Icon(
+                                if (o.visible) Icons.Filled.Visibility else Icons.Filled.VisibilityOff,
+                                contentDescription = "Toggle visibility",
+                                tint = if (o.visible) Color(0xFF4FA8FF) else Color.White.copy(alpha = 0.4f),
+                            )
+                        }
+                        IconButton(onClick = { onImgDelete(o.id) }) {
+                            Icon(Icons.Filled.Delete, contentDescription = "Delete", tint = Color(0xFFFF3B30))
+                        }
+                    }
+                    HorizontalDivider(modifier = Modifier.padding(start = 20.dp), color = Color.White.copy(alpha = 0.06f))
+                }
             }
 
             if (mbtiles.isNotEmpty()) {
