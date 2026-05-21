@@ -193,6 +193,9 @@ class OmniTAKApp : Application() {
     }
     val meshDeviceConfigStore: MeshDeviceConfigStore by lazy { MeshDeviceConfigStore(this) }
     val userPrefsStore: UserPrefsStore by lazy { UserPrefsStore(this) }
+    val kmlOverlayStore: soy.engindearing.omnitak.mobile.data.KmlVectorOverlayStore by lazy {
+        soy.engindearing.omnitak.mobile.data.KmlVectorOverlayStore(this)
+    }
 
     /** FAA Remote ID BLE scanner (Phase 2 of the gy6 plan). Starts/stops
      *  from a coroutine in [onCreate] driven by `remoteIdScanEnabled`. */
@@ -216,6 +219,24 @@ class OmniTAKApp : Application() {
             batteryProvider = ::readDeviceBatteryPercent,
         )
     }
+
+    /** UAS / drone control (GAP-XXX). Single active drone connection
+     *  at a time. Multi-drone is a fast-follow once we have a UI for it. */
+    /** Registry of all connected UAS — supports multi-drone ops. The
+     *  active manager is what the HUD / commands bind to; inactive
+     *  managers keep streaming telemetry and rendering CoT.
+     *  [uasManager] proxies to the currently-active drone so legacy
+     *  one-shot reads keep working; Compose code should collect
+     *  [uasRegistry.active] for reactive HUD swaps. */
+    val uasRegistry: soy.engindearing.omnitak.mobile.domain.MultiUasRegistry by lazy {
+        soy.engindearing.omnitak.mobile.domain.MultiUasRegistry(
+            sendCoT = { xml -> serverManager.sendCoT(xml) },
+            operatorFix = { locationProvider.fix.value },
+        )
+    }
+
+    val uasManager: soy.engindearing.omnitak.mobile.domain.UASManager
+        get() = uasRegistry.active.value
 
     private fun readDeviceBatteryPercent(): Int? {
         val bm = getSystemService(Context.BATTERY_SERVICE) as? BatteryManager ?: return null

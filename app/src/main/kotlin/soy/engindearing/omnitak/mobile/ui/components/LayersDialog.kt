@@ -36,12 +36,14 @@ fun LayersDialog(
     contactsVisible: Boolean,
     callsignCardVisible: Boolean,
     meshNodesVisible: Boolean = true,
+    map3dEnabled: Boolean = false,
     onToggleGrid: (Boolean) -> Unit,
     onToggleDrawings: (Boolean) -> Unit,
     onToggleAircraft: (Boolean) -> Unit,
     onToggleContacts: (Boolean) -> Unit,
     onToggleCallsignCard: (Boolean) -> Unit,
     onToggleMeshNodes: (Boolean) -> Unit = {},
+    onToggle3d: (Boolean) -> Unit = {},
     onDismiss: () -> Unit,
 ) {
     AlertDialog(
@@ -56,6 +58,7 @@ fun LayersDialog(
         },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                LayerRow("3D terrain", map3dEnabled, onToggle3d)
                 LayerRow("Contacts", contactsVisible, onToggleContacts)
                 LayerRow("Mesh nodes", meshNodesVisible, onToggleMeshNodes)
                 LayerRow("Drawings", drawingsVisible, onToggleDrawings)

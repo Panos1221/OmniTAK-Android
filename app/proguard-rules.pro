@@ -39,6 +39,34 @@
     native <methods>;
 }
 
+# --- MAVLink (io.dronefleet.mavlink) -----------------------------------
+# The MAVLink Java codec uses reflection-heavy message dispatch — every
+# message class has builder + accessor methods looked up by name. Stripping
+# any of them breaks parse/serialize at runtime, and R8 can't see the
+# reflective edges. Keep the whole codec.
+-keep class io.dronefleet.mavlink.** { *; }
+-keep enum io.dronefleet.mavlink.** { *; }
+-keepattributes Signature, *Annotation*, InnerClasses, EnclosingMethod
+-dontwarn io.dronefleet.mavlink.**
+
+# --- BouncyCastle ------------------------------------------------------
+# BC's provider self-registers classes by name via reflection.
+-keep class org.bouncycastle.** { *; }
+-dontwarn org.bouncycastle.**
+
+# --- Play services location: false-positive R8 warning about a removed
+# Companion in com.google.android.gms.internal.location.zze — ignore.
+-dontwarn com.google.android.gms.internal.location.**
+
+# --- WebView JS bridge --------------------------------------------------
+# The Cesium 3D globe (CesiumMapView) exposes onReady/onMapEvent to the
+# scene's JavaScript via @JavascriptInterface. R8 would otherwise strip or
+# rename these (they're never called from Kotlin), breaking the bridge in
+# release builds — entities wouldn't push and taps wouldn't route.
+-keepclassmembers class * {
+    @android.webkit.JavascriptInterface <methods>;
+}
+
 # --- Misc ---------------------------------------------------------------
 # Suppress notes about packages R8 sees but doesn't act on; clean output.
 -dontwarn org.jetbrains.annotations.**

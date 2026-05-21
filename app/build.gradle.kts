@@ -21,8 +21,8 @@ android {
         applicationId = "soy.engindearing.omnitak.mobile"
         minSdk = 26
         targetSdk = 35
-        versionCode = 52
-        versionName = "0.9.0"
+        versionCode = 75
+        versionName = "0.29.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables { useSupportLibrary = true }
@@ -156,6 +156,20 @@ dependencies {
     // old, so we ship the full provider + PKIX. Used by CSRGenerator only.
     implementation("org.bouncycastle:bcprov-jdk18on:1.78.1")
     implementation("org.bouncycastle:bcpkix-jdk18on:1.78.1")
+
+    // MAVLink Java codec for UAS Quick Connect drone control. MIT-licensed,
+    // pure Java, MAVLink 2 support per the RAS-A IOP v1.2 (the DoD
+    // interoperability standard the official ATAK UAS Tool 13.0 implements).
+    // We use this for parsing/serializing MAVLink frames; UDP transport is
+    // our own (datagram socket on port 14550).
+    implementation("io.dronefleet.mavlink:mavlink:1.1.11")
+
+    // AndroidX Media3 / ExoPlayer with the RTSP source — drone-video PIP.
+    // Pure Java, Apache-2.0, RTSP (RFC 7826) + RTP support live in the
+    // exoplayer-rtsp module. ~3 MB to the APK after R8 shrink.
+    implementation("androidx.media3:media3-exoplayer:1.4.1")
+    implementation("androidx.media3:media3-exoplayer-rtsp:1.4.1")
+    implementation("androidx.media3:media3-ui:1.4.1")
 
     debugImplementation("androidx.compose.ui:ui-tooling")
     debugImplementation("androidx.compose.ui:ui-test-manifest")

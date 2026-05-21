@@ -67,6 +67,7 @@
             android:name=".MainActivity"
             android:exported="true"
             android:launchMode="singleTask"
+            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|smallestScreenSize"
             android:theme="@style/Theme.OmniTAK.Launch">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />

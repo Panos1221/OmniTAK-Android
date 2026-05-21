@@ -1,0 +1,124 @@
+<!DOCTYPE html><html lang="en"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<link href="https://cesium.com/downloads/cesiumjs/releases/1.124/Build/Cesium/Widgets/widgets.css" rel="stylesheet">
+<style>
+  /* Android WebView (after loadDataWithBaseURL) resolves 100%/100vh to 0,
+     so size the canvas in pixels via _fitViewport. */
+  html,body{margin:0;padding:0;overflow:hidden;background:#000;color:#fff;font-family:-apple-system,BlinkMacSystemFont,sans-serif;-webkit-touch-callout:none;-webkit-user-select:none;user-select:none}
+  #cesiumContainer{position:fixed;top:0;left:0}
+  #loading{position:absolute;top:50%;left:0;right:0;text-align:center;transform:translateY(-50%);z-index:10;pointer-events:none}
+  .dot{display:inline-block;width:12px;height:12px;border-radius:50%;background:#FFCC00;margin:0 4px;animation:p 1.4s infinite}
+  .dot:nth-child(2){animation-delay:.2s}.dot:nth-child(3){animation-delay:.4s}
+  @keyframes p{0%,80%,100%{opacity:.3}40%{opacity:1}}
+  .label{margin-top:16px;font-size:14px;opacity:.7}
+  .cesium-viewer-bottom{display:none!important}
+</style></head><body>
+<div id="loading"><span class="dot"></span><span class="dot"></span><span class="dot"></span><div class="label">Loading 3D world…</div></div>
+<div id="cesiumContainer"></div>
+<script src="https://cesium.com/downloads/cesiumjs/releases/1.124/Build/Cesium/Cesium.js"></script>
+<script src="https://unpkg.com/milsymbol@2.2.0/dist/milsymbol.js"></script>
+<script>
+  Cesium.Ion.defaultAccessToken='eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJqdGkiOiI3NDUwNGNjMy05ZGM2LTRhNjgtYWY1ZS0xNjdjMTI0OTYxMjYiLCJpZCI6NDMyNTU0LCJpc3MiOiJodHRwczovL2lvbi5jZXNpdW0uY29tIiwiYXVkIjoidW5kZWZpbmVkX2RlZmF1bHQiLCJpYXQiOjE3Nzg5OTYwNzd9.4MTmIKjioTboeXn02fm7i7Ftude-JVIg3RYW4jgIZ48';
+  const _state={ready:false,viewer:null,entities:new Map(),drawings:new Map(),billboardCache:new Map()};
+  function _drawColor(hex,a){try{const c=Cesium.Color.fromCssColorString(hex||'#4ADE80');return a!==undefined?c.withAlpha(a):c}catch(e){return Cesium.Color.CYAN}}
+  function _havDist(a,b){const R=6371000,lat1=a[1]*Math.PI/180,lat2=b[1]*Math.PI/180,dLat=(b[1]-a[1])*Math.PI/180,dLon=(b[0]-a[0])*Math.PI/180;const s=Math.sin(dLat/2)**2+Math.cos(lat1)*Math.cos(lat2)*Math.sin(dLon/2)**2;return 2*R*Math.asin(Math.min(1,Math.sqrt(s)))}
+  function _fitViewport(){
+    const w=window.innerWidth,h=window.innerHeight;
+    document.body.style.width=w+'px';document.body.style.height=h+'px';
+    const c=document.getElementById('cesiumContainer');
+    if(c){c.style.width=w+'px';c.style.height=h+'px';}
+    if(_state.viewer){_state.viewer.resize();_state.viewer.scene.requestRender();}
+  }
+  window.addEventListener('resize',_fitViewport);
+  document.addEventListener('DOMContentLoaded',_fitViewport);
+  function _color(a){return a==='f'?'#4ADE80':a==='h'?'#F44336':a==='n'?'#FFC107':'#B39DDB'}
+  function _billboard(a,k,sidc){
+    if(sidc&&window.ms&&k!=='aircraft'){const sk='sidc|'+sidc;if(_state.billboardCache.has(sk))return _state.billboardCache.get(sk);
+      try{const sym=new window.ms.Symbol(sidc,{size:32,infoBackground:'transparent',infoColor:'white'});const url=sym.asCanvas().toDataURL('image/png');_state.billboardCache.set(sk,url);return url;}catch(e){console.warn('milsymbol failed for',sidc,e);}}
+    const key=a+'|'+(k||'');if(_state.billboardCache.has(key))return _state.billboardCache.get(key);
+    const c=document.createElement('canvas');c.width=56;c.height=56;const ctx=c.getContext('2d');
+    const color=_color(a);ctx.lineWidth=4;ctx.strokeStyle=color;ctx.fillStyle=color+'55';
+    if(k==='aircraft'){ctx.beginPath();ctx.moveTo(28,6);ctx.lineTo(46,48);ctx.lineTo(28,38);ctx.lineTo(10,48);ctx.closePath();ctx.fill();ctx.stroke();}
+    else if(a==='f'){ctx.beginPath();ctx.arc(28,28,22,0,Math.PI*2);ctx.fill();ctx.stroke();}
+    else if(a==='h'){ctx.beginPath();ctx.moveTo(28,4);ctx.lineTo(52,28);ctx.lineTo(28,52);ctx.lineTo(4,28);ctx.closePath();ctx.fill();ctx.stroke();}
+    else if(a==='n'){ctx.fillRect(8,8,40,40);ctx.strokeRect(8,8,40,40);}
+    else{ctx.beginPath();ctx.arc(20,28,10,0,Math.PI*2);ctx.arc(36,28,10,0,Math.PI*2);ctx.arc(28,20,10,0,Math.PI*2);ctx.arc(28,36,10,0,Math.PI*2);ctx.fill();ctx.stroke();}
+    if(k!=='aircraft'){ctx.fillStyle=color;ctx.beginPath();ctx.arc(28,28,3,0,Math.PI*2);ctx.fill();}
+    const url=c.toDataURL('image/png');_state.billboardCache.set(key,url);return url;
+  }
+  function _parse(x){return typeof x==='string'?(()=>{try{return JSON.parse(x)}catch(e){return null}})():x}
+  function _hideLoading(){const el=document.getElementById('loading');if(el)el.style.display='none';}
+  function _signalReady(){
+    _state.ready=true;_hideLoading();
+    try{if(window.OmniBridgeNative&&window.OmniBridgeNative.onReady)window.OmniBridgeNative.onReady()}catch(e){}
+  }
+  function _postMapEvent(p){const j=JSON.stringify(p);
+    try{if(window.OmniBridgeNative&&window.OmniBridgeNative.onMapEvent)window.OmniBridgeNative.onMapEvent(j)}catch(e){}
+  }
+  function _pickedUid(viewer,pos){const p=viewer.scene.pick(pos);return(p&&p.id&&typeof p.id.id==='string')?p.id.id:null}
+  function _cartoFor(viewer,pos){let c=viewer.scene.pickPosition(pos);if(!Cesium.defined(c))c=viewer.camera.pickEllipsoid(pos,viewer.scene.globe.ellipsoid);if(!Cesium.defined(c))return null;const cc=Cesium.Cartographic.fromCartesian(c);return{lat:Cesium.Math.toDegrees(cc.latitude),lon:Cesium.Math.toDegrees(cc.longitude),hae:cc.height}}
+  function _zoomFromHeight(h,latRad){const c=Math.max(Math.cos(latRad||0),0.01),mpp=(h*256)/1000.0,z=Math.log2(40075017*c/Math.max(mpp,1));return Math.max(0,Math.min(22,z))}
+  function _postCameraChanged(v){const cam=v.camera,carto=cam.positionCartographic;if(!carto)return;
+    _postMapEvent({event:'camerachanged',lat:Cesium.Math.toDegrees(carto.latitude),lon:Cesium.Math.toDegrees(carto.longitude),height:carto.height,heading:Cesium.Math.toDegrees(cam.heading),pitch:Cesium.Math.toDegrees(cam.pitch),zoom:_zoomFromHeight(carto.height,carto.latitude)})}
+  function _installInputHandlers(viewer){
+    viewer.camera.moveEnd.addEventListener(function(){_postCameraChanged(viewer)});
+    const h=new Cesium.ScreenSpaceEventHandler(viewer.scene.canvas);
+    h.setInputAction(function(click){const p=_cartoFor(viewer,click.position);if(!p)return;_postMapEvent({event:'tap',lat:p.lat,lon:p.lon,hae:p.hae,screenX:click.position.x,screenY:click.position.y,uid:_pickedUid(viewer,click.position)})},Cesium.ScreenSpaceEventType.LEFT_CLICK);
+    let pressTimer=null,pressStart=null;
+    h.setInputAction(function(down){pressStart=down.position;if(pressTimer)clearTimeout(pressTimer);pressTimer=setTimeout(function(){if(!pressStart)return;const p=_cartoFor(viewer,pressStart);if(!p)return;_postMapEvent({event:'longpress',lat:p.lat,lon:p.lon,hae:p.hae,screenX:pressStart.x,screenY:pressStart.y,uid:_pickedUid(viewer,pressStart)});pressStart=null},500)},Cesium.ScreenSpaceEventType.LEFT_DOWN);
+    h.setInputAction(function(){if(pressTimer){clearTimeout(pressTimer);pressTimer=null}pressStart=null},Cesium.ScreenSpaceEventType.LEFT_UP);
+    h.setInputAction(function(m){if(!pressStart)return;const dx=m.endPosition.x-pressStart.x,dy=m.endPosition.y-pressStart.y;if(Math.hypot(dx,dy)>8&&pressTimer){clearTimeout(pressTimer);pressTimer=null;pressStart=null}},Cesium.ScreenSpaceEventType.MOUSE_MOVE);
+  }
+  window.OmniBridge={
+    upsertEntity(arg){const e=_parse(arg);if(!e||!e.uid||typeof e.lat!=='number'||typeof e.lon!=='number')return;const v=_state.viewer;if(!v)return;
+      const hae=(typeof e.hae==='number'&&isFinite(e.hae))?e.hae:0;const useGround=hae===0;
+      const pos=Cesium.Cartesian3.fromDegrees(e.lon,e.lat,hae);
+      const rot=(typeof e.heading==='number')?-e.heading*Math.PI/180:0;
+      let entity=_state.entities.get(e.uid);
+      if(!entity){entity=v.entities.add({id:e.uid,position:pos,
+        billboard:{image:_billboard(e.affiliation||'u',e.kind,e.sidc),verticalOrigin:Cesium.VerticalOrigin.CENTER,heightReference:useGround?Cesium.HeightReference.CLAMP_TO_GROUND:Cesium.HeightReference.NONE,disableDepthTestDistance:Number.POSITIVE_INFINITY,scale:e.kind==='aircraft'?1.5:0.7,rotation:rot},
+        label:e.callsign?{text:e.callsign,font:'12px -apple-system, sans-serif',fillColor:Cesium.Color.WHITE,outlineColor:Cesium.Color.BLACK,outlineWidth:2,style:Cesium.LabelStyle.FILL_AND_OUTLINE,pixelOffset:new Cesium.Cartesian2(0,-32),heightReference:useGround?Cesium.HeightReference.CLAMP_TO_GROUND:Cesium.HeightReference.NONE,disableDepthTestDistance:Number.POSITIVE_INFINITY}:undefined,
+      });_state.entities.set(e.uid,entity);}
+      else{entity.position=pos;entity.billboard.image=_billboard(e.affiliation||'u',e.kind,e.sidc);entity.billboard.heightReference=useGround?Cesium.HeightReference.CLAMP_TO_GROUND:Cesium.HeightReference.NONE;entity.billboard.rotation=rot;if(entity.label&&e.callsign)entity.label.text=e.callsign;}
+    },
+    setEntities(arg){const list=_parse(arg);if(!Array.isArray(list))return;const seen=new Set();
+      for(const e of list){if(e&&e.uid){seen.add(e.uid);window.OmniBridge.upsertEntity(e);}}
+      for(const uid of Array.from(_state.entities.keys()))if(!seen.has(uid))window.OmniBridge.removeEntity(uid);
+    },
+    removeEntity(uid){const v=_state.viewer;if(!v)return;const e=_state.entities.get(uid);if(e){v.entities.remove(e);_state.entities.delete(uid);}},
+    removeAll(){const v=_state.viewer;if(!v)return;v.entities.removeAll();_state.entities.clear();_state.drawings.clear();},
+    flyTo(arg){const e=_parse(arg);if(!e)return;const v=_state.viewer;if(!v)return;
+      v.camera.flyTo({destination:Cesium.Cartesian3.fromDegrees(e.lon,e.lat,(typeof e.range==='number')?e.range:5000),
+        orientation:{heading:Cesium.Math.toRadians(e.heading||0),pitch:Cesium.Math.toRadians(typeof e.pitch==='number'?e.pitch:-30),roll:0},duration:1.2});
+    },
+    ping(){return _state.ready?'pong':'loading'},
+    upsertDrawing(arg){const d=_parse(arg);if(!d||!d.uid||!d.kind||!Array.isArray(d.coords)||d.coords.length===0)return;const v=_state.viewer;if(!v)return;
+      const color=_drawColor(d.color,0.85),fillC=_drawColor(d.color,0.25),width=typeof d.width==='number'?d.width:3;
+      const prior=_state.drawings.get(d.uid);if(prior)v.entities.remove(prior);
+      const opts={id:d.uid};
+      if(d.kind==='line'){opts.polyline={positions:d.coords.map(c=>Cesium.Cartesian3.fromDegrees(c[0],c[1],0)),width:width,material:color,clampToGround:true};}
+      else if(d.kind==='polygon'){const positions=d.coords.map(c=>Cesium.Cartesian3.fromDegrees(c[0],c[1],0));
+        opts.polygon={hierarchy:new Cesium.PolygonHierarchy(positions),material:fillC,outline:false,heightReference:Cesium.HeightReference.CLAMP_TO_GROUND};
+        opts.polyline={positions:[...positions,positions[0]],width:width,material:color,clampToGround:true};}
+      else if(d.kind==='circle'){if(d.coords.length<2)return;const center=d.coords[0],edge=d.coords[1],radius=_havDist(center,edge);
+        opts.position=Cesium.Cartesian3.fromDegrees(center[0],center[1],0);
+        opts.ellipse={semiMajorAxis:radius,semiMinorAxis:radius,material:fillC,outline:true,outlineColor:color,outlineWidth:width,heightReference:Cesium.HeightReference.CLAMP_TO_GROUND};}
+      else return;
+      _state.drawings.set(d.uid,v.entities.add(opts));
+    },
+    setDrawings(arg){const list=_parse(arg);if(!Array.isArray(list))return;const seen=new Set();
+      for(const d of list)if(d&&d.uid){seen.add(d.uid);window.OmniBridge.upsertDrawing(d);}
+      const v=_state.viewer;if(!v)return;
+      for(const uid of Array.from(_state.drawings.keys()))if(!seen.has(uid)){const e=_state.drawings.get(uid);if(e)v.entities.remove(e);_state.drawings.delete(uid);}
+    }
+  };
+  (async()=>{
+    _fitViewport();
+    const v=new Cesium.Viewer('cesiumContainer',{terrain:Cesium.Terrain.fromWorldTerrain(),animation:false,timeline:false,baseLayerPicker:false,geocoder:false,homeButton:false,sceneModePicker:false,navigationHelpButton:false,fullscreenButton:false,infoBox:false,selectionIndicator:false,creditContainer:document.createElement('div')});
+    v.scene.skyAtmosphere.show=true;v.scene.globe.enableLighting=true;_state.viewer=v;_fitViewport();_installInputHandlers(v);
+    try{const t=await Cesium.createGooglePhotorealistic3DTileset();v.scene.primitives.add(t);}catch(e){console.warn('Photoreal unavailable:',e);}
+    v.camera.flyTo({destination:Cesium.Cartesian3.fromDegrees(-117.4260,47.6588,50000),orientation:{heading:0,pitch:Cesium.Math.toRadians(-60),roll:0},duration:1.5,complete:_hideLoading});
+    _signalReady();
+  })().catch(e=>{const el=document.getElementById('loading');if(el)el.innerHTML='<div class="label">3D scene failed: '+(e&&e.message?e.message:'unknown')+'</div>';});
+</script></body></html>

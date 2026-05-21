@@ -16,6 +16,12 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Apps
 import androidx.compose.material.icons.filled.Build
+import androidx.compose.material.icons.filled.FlightTakeoff
+import androidx.compose.material.icons.filled.Layers
+import androidx.compose.material.icons.filled.Public
+import androidx.compose.material.icons.filled.Terrain
+import androidx.compose.material.icons.filled.Tune
+import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -51,6 +57,14 @@ import androidx.compose.ui.unit.sp
 fun ToolsLauncherSheet(
     onLasso: () -> Unit,
     onFullTools: () -> Unit,
+    onUAS: () -> Unit = {},
+    onOnvifCamera: () -> Unit = {},
+    onCustomize: () -> Unit = {},
+    onMapOverlays: () -> Unit = {},
+    map3dEnabled: Boolean = false,
+    cesiumGlobeEnabled: Boolean = false,
+    onToggleTerrain3D: () -> Unit = {},
+    onToggleGlobe: () -> Unit = {},
     onDismiss: () -> Unit,
 ) {
     val sheet = rememberModalBottomSheetState()
@@ -69,6 +83,78 @@ fun ToolsLauncherSheet(
                 title = "Lasso Select",
                 subtitle = "Long-press + drag on the map to multi-select features",
                 onClick = onLasso,
+            )
+
+            HorizontalDivider(
+                modifier = Modifier.padding(start = 76.dp),
+                color = Color.White.copy(alpha = 0.08f),
+            )
+
+            ToolsRow(
+                icon = { Icon(Icons.Filled.Terrain, contentDescription = null, tint = Color(0xFFFF9F0A)) },
+                title = if (map3dEnabled && !cesiumGlobeEnabled) "3D Terrain ✓" else "3D Terrain",
+                subtitle = "Tilted DEM relief over the current basemap (MapLibre)",
+                onClick = onToggleTerrain3D,
+            )
+
+            HorizontalDivider(
+                modifier = Modifier.padding(start = 76.dp),
+                color = Color.White.copy(alpha = 0.08f),
+            )
+
+            ToolsRow(
+                icon = { Icon(Icons.Filled.Public, contentDescription = null, tint = Color(0xFF4FA8FF)) },
+                title = if (cesiumGlobeEnabled) "3D Globe (Photoreal) ✓" else "3D Globe (Photoreal)",
+                subtitle = "Cesium photoreal globe with 3D buildings — like the iOS view",
+                onClick = onToggleGlobe,
+            )
+
+            HorizontalDivider(
+                modifier = Modifier.padding(start = 76.dp),
+                color = Color.White.copy(alpha = 0.08f),
+            )
+
+            ToolsRow(
+                icon = { Icon(Icons.Filled.FlightTakeoff, contentDescription = null, tint = Color(0xFF34C759)) },
+                title = "Vehicle Connect (UAS / UGV)",
+                subtitle = "MAVLink drones, rovers & boats — PX4 / ArduPilot, telemetry to CoT",
+                onClick = onUAS,
+            )
+
+            HorizontalDivider(
+                modifier = Modifier.padding(start = 76.dp),
+                color = Color.White.copy(alpha = 0.08f),
+            )
+
+            ToolsRow(
+                icon = { Icon(Icons.Filled.Videocam, contentDescription = null, tint = Color(0xFF00E5FF)) },
+                title = "ONVIF Camera (PTZ)",
+                subtitle = "Connect a PTZ IP camera — live RTSP feed + pan/tilt/zoom control",
+                onClick = onOnvifCamera,
+            )
+
+            HorizontalDivider(
+                modifier = Modifier.padding(start = 76.dp),
+                color = Color.White.copy(alpha = 0.08f),
+            )
+
+            ToolsRow(
+                icon = { Icon(Icons.Filled.Tune, contentDescription = null, tint = Color(0xFFFFCC00)) },
+                title = "Customize Toolbar",
+                subtitle = "Pick and arrange your own bottom-bar shortcuts",
+                onClick = onCustomize,
+            )
+
+            HorizontalDivider(
+                modifier = Modifier.padding(start = 76.dp),
+                color = Color.White.copy(alpha = 0.08f),
+            )
+
+            ToolsRow(
+                icon = { Icon(Icons.Filled.Layers, contentDescription = null, tint = Color(0xFFA78BFA)) },
+                title = "Map Overlays",
+                subtitle = "Import & toggle KML/KMZ overlays (handles huge files)",
+                onClick = onMapOverlays,
             )
 
             HorizontalDivider(

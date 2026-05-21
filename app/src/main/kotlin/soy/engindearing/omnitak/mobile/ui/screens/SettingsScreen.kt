@@ -60,6 +60,7 @@ import soy.engindearing.omnitak.mobile.data.UserPrefs
 import soy.engindearing.omnitak.mobile.ui.theme.TacticalAccent
 import soy.engindearing.omnitak.mobile.ui.theme.TacticalBackground
 import soy.engindearing.omnitak.mobile.ui.theme.TacticalSurface
+import soy.engindearing.omnitak.mobile.ui.components.ToolbarEditBus
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -116,6 +117,27 @@ fun SettingsScreen() {
                 value = prefs.team,
                 onSelect = { v -> mutate { it.copy(team = v) } },
             )
+
+            SectionHeader("Interface")
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(TacticalSurface)
+                    .clickable { ToolbarEditBus.requestEdit() }
+                    .padding(horizontal = 16.dp, vertical = 16.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("Customize Toolbar", color = MaterialTheme.colorScheme.onBackground)
+                    Text(
+                        "Build your own bottom-bar shortcuts",
+                        color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+                Text("›", color = TacticalAccent, fontWeight = FontWeight.Bold)
+            }
 
             SectionHeader("Units")
             SegmentedRow(

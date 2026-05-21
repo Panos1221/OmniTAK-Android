@@ -1,0 +1,332 @@
+package soy.engindearing.omnitak.mobile.ui.components
+
+import android.net.Uri
+import android.provider.OpenableColumns
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.FileDownload
+import androidx.compose.material.icons.filled.MyLocation
+import androidx.compose.material.icons.filled.Visibility
+import androidx.compose.material.icons.filled.VisibilityOff
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Slider
+import androidx.compose.material3.Switch
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.rememberModalBottomSheetState
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import soy.engindearing.omnitak.mobile.OmniTAKApp
+import soy.engindearing.omnitak.mobile.data.KmlVectorOverlay
+import java.io.File
+
+private val PALETTE = listOf(
+    "#A78BFA", "#5AC8FA", "#34C759", "#FF9F0A", "#FF375F",
+    "#FFD60A", "#0A84FF", "#FF453A", "#30D158", "#FFFFFF",
+)
+
+private fun parseColor(hex: String): Color =
+    runCatching { Color(android.graphics.Color.parseColor(hex)) }.getOrDefault(Color.Magenta)
+
+/**
+ * "Map Overlays" — full CRUD over imported KML/KMZ vector overlays.
+ * List → tap an overlay to edit (rename, recolor, opacity, line width,
+ * visibility, zoom-to-fit, delete). Backed by KmlVectorOverlayStore.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun KmlOverlaysSheet(onDismiss: () -> Unit) {
+    val context = LocalContext.current
+    val app = context.applicationContext as OmniTAKApp
+    val store = app.kmlOverlayStore
+    val scope = rememberCoroutineScope()
+    val sheet = rememberModalBottomSheetState()
+
+    val overlays by store.overlays.collectAsState()
+    val importing by store.isImporting.collectAsState()
+    val status by store.status.collectAsState()
+    val error by store.lastError.collectAsState()
+
+    var editingId by remember { mutableStateOf<String?>(null) }
+    var confirmDeleteAll by remember { mutableStateOf(false) }
+
+    val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri: Uri? ->
+        if (uri != null) {
+            scope.launch(Dispatchers.IO) {
+                val name = queryDisplayName(context, uri) ?: "overlay.kml"
+                val tmp = File(context.cacheDir, name)
+                runCatching {
+                    context.contentResolver.openInputStream(uri)?.use { input ->
+                        tmp.outputStream().use { input.copyTo(it) }
+                    }
+                }
+                store.importKml(tmp, name)
+                store.overlays.value.lastOrNull()?.let { KmlOverlayEvents.requestZoom(it) }
+                tmp.delete()
+            }
+        }
+    }
+
+    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheet, containerColor = Color(0xFF0F1115)) {
+        val editing = overlays.firstOrNull { it.id == editingId }
+        if (editing != null) {
+            OverlayEditor(
+                overlay = editing,
+                onBack = { editingId = null },
+                onRename = { store.rename(editing.id, it) },
+                onColor = { store.setColor(editing.id, it) },
+                onOpacity = { store.setOpacity(editing.id, it) },
+                onLineWidth = { store.setLineWidth(editing.id, it) },
+                onVisible = { store.setVisible(editing.id, it) },
+                onZoom = { KmlOverlayEvents.requestZoom(editing); onDismiss() },
+                onDelete = { store.remove(editing.id); editingId = null },
+            )
+        } else {
+            OverlayList(
+                overlays = overlays,
+                importing = importing,
+                status = status,
+                error = error,
+                onImport = { picker.launch(arrayOf("*/*")) },
+                onSelect = { editingId = it },
+                onToggle = { id, v -> store.setVisible(id, v) },
+                onDeleteAll = { confirmDeleteAll = true },
+            )
+        }
+    }
+
+    if (confirmDeleteAll) {
+        AlertDialog(
+            onDismissRequest = { confirmDeleteAll = false },
+            title = { Text("Delete all overlays?") },
+            text = { Text("This removes every imported overlay. It can't be undone.") },
+            confirmButton = { TextButton(onClick = { store.removeAll(); confirmDeleteAll = false }) { Text("Delete All") } },
+            dismissButton = { TextButton(onClick = { confirmDeleteAll = false }) { Text("Cancel") } },
+        )
+    }
+}
+
+@Composable
+private fun OverlayList(
+    overlays: List<KmlVectorOverlay>,
+    importing: Boolean,
+    status: String,
+    error: String?,
+    onImport: () -> Unit,
+    onSelect: (String) -> Unit,
+    onToggle: (String, Boolean) -> Unit,
+    onDeleteAll: () -> Unit,
+) {
+    Column(modifier = Modifier.fillMaxWidth().padding(bottom = 24.dp)) {
+        Text("Map Overlays", color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.SemiBold,
+            modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp))
+
+        Row(
+            modifier = Modifier.fillMaxWidth().clickable { onImport() }.padding(horizontal = 20.dp, vertical = 14.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(Icons.Filled.FileDownload, contentDescription = null, tint = Color(0xFF4FA8FF))
+            Spacer(Modifier.width(14.dp))
+            Text("Import KML / KMZ", color = Color(0xFF4FA8FF), fontSize = 16.sp)
+        }
+
+        if (importing) {
+            Row(modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                Spacer(Modifier.width(10.dp))
+                Text(status.ifEmpty { "Importing…" }, color = Color.White.copy(alpha = 0.7f), fontSize = 13.sp)
+            }
+        }
+        error?.let { Text(it, color = Color(0xFFFF6B6B), fontSize = 13.sp, modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp)) }
+
+        Text("Big files render as one GPU vector layer and stay smooth. Tap an overlay to rename, recolor, or restyle it.",
+            color = Color.White.copy(alpha = 0.5f), fontSize = 12.sp, modifier = Modifier.padding(horizontal = 20.dp, vertical = 6.dp))
+
+        HorizontalDivider(color = Color.White.copy(alpha = 0.08f))
+
+        if (overlays.isEmpty()) {
+            Text("No overlays yet.", color = Color.White.copy(alpha = 0.5f), fontSize = 14.sp,
+                modifier = Modifier.padding(horizontal = 20.dp, vertical = 14.dp))
+        } else {
+            overlays.forEach { overlay ->
+                Row(
+                    modifier = Modifier.fillMaxWidth().clickable { onSelect(overlay.id) }.padding(horizontal = 20.dp, vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Box(modifier = Modifier.size(14.dp).clip(CircleShape).background(parseColor(overlay.colorHex)))
+                    Spacer(Modifier.width(12.dp))
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(overlay.name, color = Color.White, fontSize = 16.sp, maxLines = 1)
+                        Text("${overlay.featureCount} features", color = Color.White.copy(alpha = 0.5f), fontSize = 12.sp)
+                    }
+                    IconButton(onClick = { onToggle(overlay.id, !overlay.visible) }) {
+                        Icon(
+                            if (overlay.visible) Icons.Filled.Visibility else Icons.Filled.VisibilityOff,
+                            contentDescription = "Toggle visibility",
+                            tint = if (overlay.visible) Color(0xFF4FA8FF) else Color.White.copy(alpha = 0.4f),
+                        )
+                    }
+                }
+                HorizontalDivider(modifier = Modifier.padding(start = 20.dp), color = Color.White.copy(alpha = 0.06f))
+            }
+            TextButton(onClick = onDeleteAll, modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)) {
+                Icon(Icons.Filled.Delete, contentDescription = null, tint = Color(0xFFFF3B30))
+                Spacer(Modifier.width(8.dp))
+                Text("Delete All Overlays", color = Color(0xFFFF3B30))
+            }
+        }
+    }
+}
+
+@Composable
+private fun OverlayEditor(
+    overlay: KmlVectorOverlay,
+    onBack: () -> Unit,
+    onRename: (String) -> Unit,
+    onColor: (String) -> Unit,
+    onOpacity: (Float) -> Unit,
+    onLineWidth: (Float) -> Unit,
+    onVisible: (Boolean) -> Unit,
+    onZoom: () -> Unit,
+    onDelete: () -> Unit,
+) {
+    var name by remember(overlay.id) { mutableStateOf(overlay.name) }
+    var confirmDelete by remember { mutableStateOf(false) }
+
+    Column(modifier = Modifier.fillMaxWidth().padding(bottom = 24.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(start = 8.dp, end = 20.dp, top = 4.dp)) {
+            IconButton(onClick = { onRename(name); onBack() }) {
+                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = Color.White)
+            }
+            Text("Edit Overlay", color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
+        }
+
+        OutlinedTextField(
+            value = name,
+            onValueChange = { name = it },
+            label = { Text("Name") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 6.dp),
+        )
+
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text("Visible", color = Color.White, fontSize = 15.sp, modifier = Modifier.weight(1f))
+            Switch(checked = overlay.visible, onCheckedChange = onVisible)
+        }
+
+        Text("Color", color = Color.White.copy(alpha = 0.7f), fontSize = 13.sp, modifier = Modifier.padding(start = 20.dp, top = 4.dp))
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 8.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            PALETTE.take(5).forEach { hex -> ColorSwatch(hex, overlay.colorHex.equals(hex, true)) { onColor(hex) } }
+        }
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp).padding(bottom = 8.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            PALETTE.drop(5).forEach { hex -> ColorSwatch(hex, overlay.colorHex.equals(hex, true)) { onColor(hex) } }
+        }
+
+        Text("Opacity — ${(overlay.opacity * 100).toInt()}%", color = Color.White.copy(alpha = 0.7f), fontSize = 13.sp,
+            modifier = Modifier.padding(start = 20.dp))
+        Slider(value = overlay.opacity, onValueChange = onOpacity, valueRange = 0.05f..1.0f,
+            modifier = Modifier.padding(horizontal = 20.dp))
+
+        Text("Line width — ${"%.1f".format(overlay.lineWidth)}×", color = Color.White.copy(alpha = 0.7f), fontSize = 13.sp,
+            modifier = Modifier.padding(start = 20.dp))
+        Slider(value = overlay.lineWidth, onValueChange = onLineWidth, valueRange = 0.5f..6.0f,
+            modifier = Modifier.padding(horizontal = 20.dp))
+
+        Text("${overlay.featureCount} features", color = Color.White.copy(alpha = 0.5f), fontSize = 12.sp,
+            modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp))
+
+        HorizontalDivider(color = Color.White.copy(alpha = 0.08f), modifier = Modifier.padding(vertical = 6.dp))
+
+        Row(
+            modifier = Modifier.fillMaxWidth().clickable { onZoom() }.padding(horizontal = 20.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(Icons.Filled.MyLocation, contentDescription = null, tint = Color(0xFF4FA8FF))
+            Spacer(Modifier.width(14.dp))
+            Text("Zoom to overlay", color = Color(0xFF4FA8FF), fontSize = 16.sp)
+        }
+        Row(
+            modifier = Modifier.fillMaxWidth().clickable { confirmDelete = true }.padding(horizontal = 20.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(Icons.Filled.Delete, contentDescription = null, tint = Color(0xFFFF3B30))
+            Spacer(Modifier.width(14.dp))
+            Text("Delete overlay", color = Color(0xFFFF3B30), fontSize = 16.sp)
+        }
+    }
+
+    if (confirmDelete) {
+        AlertDialog(
+            onDismissRequest = { confirmDelete = false },
+            title = { Text("Delete this overlay?") },
+            confirmButton = { TextButton(onClick = { confirmDelete = false; onDelete() }) { Text("Delete") } },
+            dismissButton = { TextButton(onClick = { confirmDelete = false }) { Text("Cancel") } },
+        )
+    }
+}
+
+@Composable
+private fun ColorSwatch(hex: String, selected: Boolean, onClick: () -> Unit) {
+    Box(
+        modifier = Modifier.size(34.dp).clip(CircleShape).background(parseColor(hex)).clickable { onClick() },
+        contentAlignment = Alignment.Center,
+    ) {
+        if (selected) {
+            Text("✓", color = if (hex.equals("#FFFFFF", true)) Color.Black else Color.White, fontWeight = FontWeight.Bold)
+        }
+    }
+}
+
+private fun queryDisplayName(context: android.content.Context, uri: Uri): String? {
+    return runCatching {
+        context.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { c ->
+            if (c.moveToFirst()) c.getString(0) else null
+        }
+    }.getOrNull()
+}

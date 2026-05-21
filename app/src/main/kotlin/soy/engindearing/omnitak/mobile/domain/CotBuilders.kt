@@ -83,6 +83,69 @@ object CotBuilders {
         """.trimIndent()
     }
 
+    /**
+     * UAS Position Location Information (GAP-XXX UAS support).
+     *
+     * MIL-STD-2525D friendly-air codes per the official ATAK UAS Tool 13.0
+     * spec analysis: rotary-wing UAS is `a-f-A-M-H-Q`, fixed-wing is
+     * `a-f-A-M-F-Q`. Vendors / autopilots that don't self-identify a wing
+     * shape are emitted as rotary by default since that's what most
+     * MAVLink platforms in the field are.
+     *
+     * Optional `videoUri` adds the `<video><ConnectionEntry>` detail
+     * (RTSP URL) that lets other ATAK / iTAK / OmniTAK clients pick up
+     * the drone's FMV stream from the same map marker.
+     */
+    fun buildUasPliEvent(
+        uid: String,
+        callsign: String,
+        latDeg: Double,
+        lonDeg: Double,
+        haeMeters: Double,
+        headingDeg: Double? = null,
+        groundSpeedMps: Double? = null,
+        videoUri: String? = null,
+        isFixedWing: Boolean = false,
+        operatorUid: String? = null,
+        staleSeconds: Long = 30,
+        /** Platform class — drives the MIL-STD-2525 type. Air → friendly
+         *  air UAS; ground → friendly ground vehicle (a-f-G-E-V-U);
+         *  surface → friendly sea-surface (a-f-S-X). Defaults to AIR for
+         *  back-compat with existing UAS callers. */
+        vehicleClass: soy.engindearing.omnitak.mobile.data.uas.VehicleClass =
+            soy.engindearing.omnitak.mobile.data.uas.VehicleClass.AIR,
+    ): String {
+        val now = nowIso()
+        val stale = isoOffset(staleSeconds)
+        val type = when (vehicleClass) {
+            soy.engindearing.omnitak.mobile.data.uas.VehicleClass.GROUND -> "a-f-G-E-V-U"
+            soy.engindearing.omnitak.mobile.data.uas.VehicleClass.SURFACE,
+            soy.engindearing.omnitak.mobile.data.uas.VehicleClass.SUB -> "a-f-S-X"
+            else -> if (isFixedWing) "a-f-A-M-F-Q" else "a-f-A-M-H-Q"
+        }
+        val trackXml = if (headingDeg != null || groundSpeedMps != null)
+            """<track course="${headingDeg ?: 0.0}" speed="${groundSpeedMps ?: 0.0}"/>""" else ""
+        val videoXml = if (!videoUri.isNullOrBlank())
+            """<video><ConnectionEntry uid="${xmlEscape(uid)}-VID" protocol="rtsp" address="${xmlEscape(videoUri)}"/></video>"""
+            else ""
+        val linkXml = if (!operatorUid.isNullOrBlank())
+            """<link uid="${xmlEscape(operatorUid)}" relation="p-p" type="a-f-G-U-C"/>""" else ""
+        return """
+            <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+            <event version="2.0" uid="${xmlEscape(uid)}" type="$type" how="m-g"
+                   time="$now" start="$now" stale="$stale">
+              <point lat="$latDeg" lon="$lonDeg" hae="$haeMeters" ce="9999999.0" le="9999999.0"/>
+              <detail>
+                <contact callsign="${xmlEscape(callsign)}"/>
+                <__group name="Cyan" role="UAV"/>
+                $trackXml
+                $videoXml
+                $linkXml
+              </detail>
+            </event>
+        """.trimIndent()
+    }
+
     /** Fresh random TAK-style UID. */
     fun newUid(): String = UUID.randomUUID().toString()
 

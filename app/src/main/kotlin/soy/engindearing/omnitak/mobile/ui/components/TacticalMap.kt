@@ -63,6 +63,10 @@ fun TacticalMap(
     panTarget: LatLng? = null,
     panTargetTick: Int = 0,
     followMeActive: Boolean = false,
+    /** 3D terrain mode — tilts the camera so the DEM relief baked into
+     *  the style JSON renders dimensionally. The style itself carries
+     *  the terrain source; this flag drives the camera pitch. */
+    terrain3d: Boolean = false,
     /** Render self-position with the MIL-STD-2525 friendly-combat
      *  frame. When false, falls back to the legacy `ic_self_marker`
      *  tinted disc. Sourced from [soy.engindearing.omnitak.mobile.data.UserPrefs.useMilStdSelfSymbol]. */
@@ -72,6 +76,10 @@ fun TacticalMap(
      *  this to grab the [MapLibreMap] reference for screen↔geo
      *  projection during freehand selection. */
     onMapReady: ((org.maplibre.android.maps.MapLibreMap) -> Unit)? = null,
+    /** Fired after every style (re)load with the live map + style, so the
+     *  caller can re-apply style-level content (e.g. KML vector overlays)
+     *  that a setStyle wipes. */
+    onStyleReady: ((org.maplibre.android.maps.MapLibreMap, Style) -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -87,6 +95,8 @@ fun TacticalMap(
     val currentAircraft by rememberUpdatedState(aircraft)
     val currentCameraIdle by rememberUpdatedState(onCameraIdle)
     val currentMapReady by rememberUpdatedState(onMapReady)
+    val currentStyleReady by rememberUpdatedState(onStyleReady)
+    val currentTerrain3d by rememberUpdatedState(terrain3d)
 
     val mapView = remember {
         MapLibre.getInstance(context)
@@ -110,6 +120,14 @@ fun TacticalMap(
                     if (currentLocationEnabled) {
                         activateLocation(map, style, context, useMilStdSelfSymbol)
                     }
+                    // Cold-start 3D: if the persisted pref has terrain on,
+                    // apply the tilt once the style (+ terrain source) is
+                    // loaded. Instant move (no animation) on first paint.
+                    if (currentTerrain3d) {
+                        map.cameraPosition = CameraPosition.Builder(map.cameraPosition)
+                            .tilt(55.0).build()
+                    }
+                    currentStyleReady?.invoke(map, style)
                 }
                 map.uiSettings.apply {
                     isCompassEnabled = true
@@ -225,6 +243,25 @@ fun TacticalMap(
         }
         onDispose { }
     }
+    // 3D terrain: tilt the camera so the DEM relief (baked into the
+    // style JSON via injectTerrain) renders dimensionally. 0° = flat
+    // top-down 2D; 55° = the dimensional tactical view. Animated so the
+    // toggle feels like a transition, not a jump.
+    DisposableEffect(mapView, terrain3d) {
+        mapView.getMapAsync { map ->
+            val cur = map.cameraPosition
+            val targetTilt = if (terrain3d) 55.0 else 0.0
+            if (kotlin.math.abs(cur.tilt - targetTilt) > 1.0) {
+                map.animateCamera(
+                    CameraUpdateFactory.newCameraPosition(
+                        CameraPosition.Builder(cur).tilt(targetTilt).build()
+                    ),
+                    400,
+                )
+            }
+        }
+        onDispose { }
+    }
 
     // Push contact updates through to the GeoJson source whenever the
     // caller's collection reference changes.
@@ -244,12 +281,23 @@ fun TacticalMap(
             // Skip the first emission — the initial setStyle is handled by the
             // getMapAsync block during MapView construction (line ~88).
             if (map.style != null && map.style?.json != styleJson) {
-                map.setStyle(Style.Builder().fromJson(styleJson)) { _ ->
+                map.setStyle(Style.Builder().fromJson(styleJson)) { style ->
                     ContactLayer.update(map, context, currentContacts)
                     MeasurementLayer.update(map, currentMeasurementPoints)
                     DrawingLayer.update(map, currentDrawings)
                     currentGridCenter?.let { GridLayer.update(map, it) }
                     AircraftLayer.update(map, currentAircraft)
+                    currentStyleReady?.invoke(map, style)
+                    // Apply 3D tilt AFTER the style (which carries the
+                    // terrain source) finishes loading — deterministic vs
+                    // a separate effect that races the style reload.
+                    val targetTilt = if (currentTerrain3d) 55.0 else 0.0
+                    map.animateCamera(
+                        CameraUpdateFactory.newCameraPosition(
+                            CameraPosition.Builder(map.cameraPosition).tilt(targetTilt).build()
+                        ),
+                        500,
+                    )
                 }
             }
         }
@@ -723,16 +771,49 @@ internal fun normalizeTileUrlPlaceholders(raw: String): String {
 fun styleJsonForProvider(
     provider: MapProvider,
     customTileUrl: String = "",
-): String = when (provider) {
-    MapProvider.OSM_RASTER -> TACTICAL_STYLE_OSM
-    MapProvider.TOPO_HINT -> TACTICAL_STYLE_TOPO
-    MapProvider.SATELLITE_HINT -> TACTICAL_STYLE_SATELLITE
-    MapProvider.WMTS_CUSTOM -> {
-        val url = normalizeTileUrlPlaceholders(customTileUrl)
-        if (url.startsWith("http") && url.contains("{z}") && url.contains("{x}") && url.contains("{y}")) {
-            buildTacticalStyle("OmniTAK Custom WMTS", url, "Custom tile source")
-        } else {
-            TACTICAL_STYLE_OSM
+    terrain3d: Boolean = false,
+): String {
+    val base = when (provider) {
+        MapProvider.OSM_RASTER -> TACTICAL_STYLE_OSM
+        MapProvider.TOPO_HINT -> TACTICAL_STYLE_TOPO
+        MapProvider.SATELLITE_HINT -> TACTICAL_STYLE_SATELLITE
+        MapProvider.WMTS_CUSTOM -> {
+            val url = normalizeTileUrlPlaceholders(customTileUrl)
+            if (url.startsWith("http") && url.contains("{z}") && url.contains("{x}") && url.contains("{y}")) {
+                buildTacticalStyle("OmniTAK Custom WMTS", url, "Custom tile source")
+            } else {
+                TACTICAL_STYLE_OSM
+            }
         }
     }
+    return if (terrain3d) injectTerrain(base) else base
+}
+
+/**
+ * Inject a MapLibre 3D terrain layer into an existing style JSON.
+ * Adds a `raster-dem` source (AWS Terrarium tiles — free, public,
+ * Web-Mercator-aligned with the basemap, so the relief lines up) and a
+ * top-level `terrain` property that MapLibre Native v11+ renders as
+ * real elevation when the camera is pitched.
+ *
+ * String-injection rather than full JSON re-serialize keeps the
+ * operational layers (which depend on exact source ids) untouched.
+ */
+internal fun injectTerrain(styleJson: String): String {
+    val demSource = """
+    "terrain-dem": {
+      "type": "raster-dem",
+      "tiles": ["https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png"],
+      "tileSize": 256,
+      "encoding": "terrarium",
+      "maxzoom": 14,
+      "attribution": "Terrain: AWS / Mapzen"
+    },"""
+    val terrainProp = """  "terrain": {"source": "terrain-dem", "exaggeration": 1.3},
+"""
+    // 1. Add the DEM source right after the sources block opens.
+    var out = styleJson.replaceFirst("\"sources\": {", "\"sources\": {$demSource")
+    // 2. Add the top-level terrain property right before the layers array.
+    out = out.replaceFirst("  \"layers\": [", "$terrainProp  \"layers\": [")
+    return out
 }

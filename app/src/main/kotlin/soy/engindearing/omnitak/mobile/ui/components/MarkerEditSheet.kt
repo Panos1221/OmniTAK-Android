@@ -2,6 +2,8 @@ package soy.engindearing.omnitak.mobile.ui.components
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -69,10 +71,16 @@ fun MarkerEditSheet(
     editing: Boolean = false,
     onSave: (MarkerEditResult) -> Unit,
     onDelete: (() -> Unit)? = null,
+    /** When non-null, renders a "Pursue with UAS" button — Map screen
+     *  supplies this only when (a) the marker is an existing contact
+     *  (editing=true), and (b) a UAS is currently connected. */
+    onPursueWithUas: (() -> Unit)? = null,
     onDismiss: () -> Unit,
 ) {
     if (!visible) return
-    val state = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    // Partial detent + light scrim keep the map visible above the sheet — edit
+    // a marker while still seeing where it sits. Drag up for the full form.
+    val state = rememberModalBottomSheetState()
 
     var callsign by remember(initialCallsign) { mutableStateOf(initialCallsign) }
     var affiliation by remember(initialAffiliation) { mutableStateOf(initialAffiliation) }
@@ -85,10 +93,12 @@ fun MarkerEditSheet(
         onDismissRequest = onDismiss,
         sheetState = state,
         containerColor = TacticalSurface,
+        scrimColor = Color.Black.copy(alpha = 0.3f),
     ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
+                .verticalScroll(rememberScrollState())
                 .padding(horizontal = 20.dp, vertical = 8.dp),
         ) {
             Text(
@@ -183,6 +193,14 @@ fun MarkerEditSheet(
                             contentColor = soy.engindearing.omnitak.mobile.ui.theme.HostileRed,
                         ),
                     ) { Text("Delete") }
+                }
+                if (onPursueWithUas != null) {
+                    TextButton(
+                        onClick = onPursueWithUas,
+                        colors = ButtonDefaults.textButtonColors(
+                            contentColor = androidx.compose.ui.graphics.Color(0xFF00E5FF),
+                        ),
+                    ) { Text("Pursue with UAS") }
                 }
                 Spacer(Modifier.weight(1f))
                 TextButton(onClick = onDismiss) { Text("Cancel") }
