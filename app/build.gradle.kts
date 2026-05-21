@@ -137,6 +137,12 @@ dependencies {
     // Pure-Java, ~250 KB, no Android resources.
     implementation("mil.nga.mgrs:mgrs-android:2.2.3")
 
+    // NGA's pure-Java TIFF reader — decodes GeoTIFF rasters (uncompressed,
+    // LZW, Deflate, PackBits) that Android's BitmapFactory can't. We parse the
+    // GeoTIFF geo-tags ourselves (GeoTIFFParser) and use this only for the
+    // pixel raster → Bitmap. Apache-2.0, ~150 KB, no Android resources.
+    implementation("mil.nga:tiff:3.0.0")
+
     // Nordic Semiconductor BLE library — used by MeshtasticBleClient.
     // Wraps the platform GATT API in a queueable, callback-driven manager
     // with built-in MTU negotiation, bond handling, and reconnection.
