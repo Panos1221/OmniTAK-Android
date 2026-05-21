@@ -187,6 +187,8 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
     val drawings by app.drawingStore.drawings.collectAsState()
     // KML vector overlays (imported KML/KMZ rendered as GeoJSON sources).
     val kmlOverlays by app.kmlOverlayStore.overlays.collectAsState()
+    // MBTiles raster tile overlays (served by the in-app tile server).
+    val mbtilesOverlays by app.mbtilesOverlayStore.overlays.collectAsState()
     val snackbar = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
 
@@ -230,6 +232,28 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
             soy.engindearing.omnitak.mobile.ui.components.KmlOverlayRenderer
                 .apply(style, kmlOverlays, app.kmlOverlayStore)
         }
+    }
+    // Re-apply MBTiles raster overlays when the set changes.
+    LaunchedEffect(mbtilesOverlays) {
+        mapboxMap?.getStyle { style ->
+            soy.engindearing.omnitak.mobile.ui.components.KmlOverlayRenderer
+                .applyMBTiles(style, mbtilesOverlays, app.mbtilesOverlayStore)
+        }
+    }
+    // Frame raster/MBTiles bounds on request.
+    val mbZoomBounds by soy.engindearing.omnitak.mobile.ui.components.KmlOverlayEvents.zoomBounds.collectAsState()
+    LaunchedEffect(mbZoomBounds) {
+        val b = mbZoomBounds ?: return@LaunchedEffect
+        if (userPrefs.cesiumGlobeEnabled) {
+            app.userPrefsStore.update { it.copy(cesiumGlobeEnabled = false) }
+        }
+        mapboxMap?.let { m ->
+            val bounds = org.maplibre.android.geometry.LatLngBounds.from(b[0], b[2], b[1], b[3])
+            runCatching {
+                m.easeCamera(org.maplibre.android.camera.CameraUpdateFactory.newLatLngBounds(bounds, 100), 800)
+            }
+        }
+        soy.engindearing.omnitak.mobile.ui.components.KmlOverlayEvents.boundsConsumed()
     }
     // Frame an overlay's bounds when the Map Overlays sheet requests it.
     val kmlZoom by soy.engindearing.omnitak.mobile.ui.components.KmlOverlayEvents.zoomTo.collectAsState()
@@ -376,6 +400,8 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
             onStyleReady = { _, style ->
                 soy.engindearing.omnitak.mobile.ui.components.KmlOverlayRenderer
                     .apply(style, kmlOverlays, app.kmlOverlayStore)
+                soy.engindearing.omnitak.mobile.ui.components.KmlOverlayRenderer
+                    .applyMBTiles(style, mbtilesOverlays, app.mbtilesOverlayStore)
             },
         )
         }

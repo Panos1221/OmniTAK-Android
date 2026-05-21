@@ -8,21 +8,34 @@ import org.maplibre.android.style.layers.FillLayer
 import org.maplibre.android.style.layers.LineLayer
 import org.maplibre.android.style.layers.Property
 import org.maplibre.android.style.layers.PropertyFactory
+import org.maplibre.android.style.layers.RasterLayer
 import org.maplibre.android.style.sources.GeoJsonOptions
 import org.maplibre.android.style.sources.GeoJsonSource
+import org.maplibre.android.style.sources.RasterSource
+import org.maplibre.android.style.sources.TileSet
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import soy.engindearing.omnitak.mobile.data.KmlVectorOverlay
 import soy.engindearing.omnitak.mobile.data.KmlVectorOverlayStore
+import soy.engindearing.omnitak.mobile.data.MBTilesOverlay
+import soy.engindearing.omnitak.mobile.data.MBTilesOverlayStore
 import java.net.URI
 
-/** Lets the Map Overlays sheet ask the map to frame an overlay's bounds. */
+/** Lets the Map Overlays sheet ask the map to frame bounds. */
 object KmlOverlayEvents {
     private val _zoomTo = MutableStateFlow<KmlVectorOverlay?>(null)
     val zoomTo: StateFlow<KmlVectorOverlay?> = _zoomTo.asStateFlow()
     fun requestZoom(overlay: KmlVectorOverlay) { _zoomTo.value = overlay }
     fun consumed() { _zoomTo.value = null }
+
+    // Generic [north, south, east, west] zoom for raster/MBTiles overlays.
+    private val _zoomBounds = MutableStateFlow<DoubleArray?>(null)
+    val zoomBounds: StateFlow<DoubleArray?> = _zoomBounds.asStateFlow()
+    fun requestZoomBounds(north: Double, south: Double, east: Double, west: Double) {
+        _zoomBounds.value = doubleArrayOf(north, south, east, west)
+    }
+    fun boundsConsumed() { _zoomBounds.value = null }
 }
 
 /**
@@ -103,4 +116,36 @@ object KmlOverlayRenderer {
     }
 
     private fun layerIds(id: String) = listOf("kmlfill-$id", "kmlline-$id", "kmlpt-$id")
+
+    // MBTiles raster tile sources (served by the in-app HTTP tile server).
+    private val installedMBTiles = mutableSetOf<String>()
+
+    fun applyMBTiles(style: Style, overlays: List<MBTilesOverlay>, store: MBTilesOverlayStore) {
+        val wanted = overlays.map { it.id }.toSet()
+        for (id in installedMBTiles - wanted) {
+            style.removeLayer("mbtileslyr-$id")
+            style.removeSource("mbtilessrc-$id")
+        }
+        installedMBTiles.clear()
+        installedMBTiles.addAll(wanted)
+
+        for (overlay in overlays) {
+            val sourceId = "mbtilessrc-${overlay.id}"
+            val layerId = "mbtileslyr-${overlay.id}"
+            if (style.getSource(sourceId) == null) {
+                val template = store.tileUrlTemplate(overlay) ?: continue
+                val tileSet = TileSet("2.1.0", template).apply {
+                    minZoom = overlay.minZoom.toFloat()
+                    maxZoom = overlay.maxZoom.toFloat()
+                }
+                style.addSource(RasterSource(sourceId, tileSet, 256))
+                style.addLayer(RasterLayer(layerId, sourceId))
+            }
+            val vis = if (overlay.visible) Property.VISIBLE else Property.NONE
+            style.getLayerAs<RasterLayer>(layerId)?.setProperties(
+                PropertyFactory.visibility(vis),
+                PropertyFactory.rasterOpacity(overlay.opacity),
+            )
+        }
+    }
 }
