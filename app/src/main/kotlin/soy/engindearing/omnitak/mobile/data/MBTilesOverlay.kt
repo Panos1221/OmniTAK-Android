@@ -25,12 +25,22 @@ import java.util.concurrent.Executors
  * MBTiles store tiles in TMS row order; the server flips Y to XYZ.
  */
 
-class MBTilesDb private constructor(private val db: SQLiteDatabase) {
+/** A read-only raster tile pyramid (MBTiles or GeoPackage) served over HTTP. */
+interface RasterTileDb {
     val minZoom: Int
     val maxZoom: Int
-    val format: String
+    val format: String           // tile image format: "png" / "jpg"
+    val bounds: DoubleArray?     // [north, south, east, west] or null
+    fun tile(z: Int, x: Int, y: Int): ByteArray?
+    fun close()
+}
+
+class MBTilesDb private constructor(private val db: SQLiteDatabase) : RasterTileDb {
+    override val minZoom: Int
+    override val maxZoom: Int
+    override val format: String
     /** [north, south, east, west] if declared. */
-    val bounds: DoubleArray?
+    override val bounds: DoubleArray?
 
     init {
         val meta = HashMap<String, String>()
@@ -47,7 +57,7 @@ class MBTilesDb private constructor(private val db: SQLiteDatabase) {
     }
 
     /** Tile bytes for an XYZ request (flips Y to MBTiles' TMS row). */
-    fun tile(z: Int, x: Int, y: Int): ByteArray? {
+    override fun tile(z: Int, x: Int, y: Int): ByteArray? {
         val tmsY = (1 shl z) - 1 - y
         return runCatching {
             db.rawQuery(
@@ -57,11 +67,60 @@ class MBTilesDb private constructor(private val db: SQLiteDatabase) {
         }.getOrNull()
     }
 
-    fun close() = runCatching { db.close() }
+    override fun close() { runCatching { db.close() } }
 
     companion object {
         fun open(path: String): MBTilesDb? = runCatching {
             MBTilesDb(SQLiteDatabase.openDatabase(path, null, SQLiteDatabase.OPEN_READONLY))
+        }.getOrNull()
+    }
+}
+
+/**
+ * GeoPackage raster reader. Supports the standard case: a tiles table whose
+ * grid matches the slippy-map (XYZ) scheme in EPSG:3857 or 4326. GPKG
+ * tile_row is top-origin (= XYZ y, no TMS flip).
+ */
+class GPKGDb private constructor(
+    private val db: SQLiteDatabase,
+    private val table: String,
+    override val minZoom: Int,
+    override val maxZoom: Int,
+    override val bounds: DoubleArray?,
+) : RasterTileDb {
+    override val format: String = "png"
+
+    override fun tile(z: Int, x: Int, y: Int): ByteArray? = runCatching {
+        db.rawQuery(
+            "SELECT tile_data FROM \"$table\" WHERE zoom_level=? AND tile_column=? AND tile_row=?",
+            arrayOf(z.toString(), x.toString(), y.toString()), // GPKG tile_row = XYZ y (no flip)
+        ).use { c -> if (c.moveToFirst()) c.getBlob(0) else null }
+    }.getOrNull()
+
+    override fun close() { runCatching { db.close() } }
+
+    companion object {
+        fun open(path: String): GPKGDb? = runCatching {
+            val db = SQLiteDatabase.openDatabase(path, null, SQLiteDatabase.OPEN_READONLY)
+            var table: String? = null
+            var bounds: DoubleArray? = null
+            db.rawQuery("SELECT table_name, min_x, min_y, max_x, max_y, srs_id FROM gpkg_contents WHERE data_type='tiles' LIMIT 1", null).use { c ->
+                if (c.moveToFirst()) {
+                    table = c.getString(0)
+                    val minX = c.getDouble(1); val minY = c.getDouble(2)
+                    val maxX = c.getDouble(3); val maxY = c.getDouble(4); val srs = c.getInt(5)
+                    fun lon(x: Double) = if (srs == 3857 || srs == 900913) x / 6378137.0 * 180.0 / Math.PI else x
+                    fun lat(y: Double) = if (srs == 3857 || srs == 900913) (2 * Math.atan(Math.exp(y / 6378137.0)) - Math.PI / 2) * 180.0 / Math.PI else y
+                    val n = lat(maxY); val s = lat(minY); val e = lon(maxX); val w = lon(minX)
+                    bounds = if (kotlin.math.abs(n) <= 90 && kotlin.math.abs(s) <= 90 && n > s) doubleArrayOf(n, s, e, w) else null
+                }
+            }
+            val t = table ?: run { db.close(); return null }
+            var lo = 0; var hi = 19
+            db.rawQuery("SELECT min(zoom_level), max(zoom_level) FROM gpkg_tile_matrix WHERE table_name=?", arrayOf(t)).use { c ->
+                if (c.moveToFirst() && !c.isNull(0)) { lo = c.getInt(0); hi = c.getInt(1) }
+            }
+            GPKGDb(db, t, lo, hi, bounds)
         }.getOrNull()
     }
 }
@@ -71,11 +130,11 @@ object MBTilesServer {
         private set
     private var serverSocket: ServerSocket? = null
     private var started = false
-    private val dbs = ConcurrentHashMap<String, MBTilesDb>()
+    private val dbs = ConcurrentHashMap<String, RasterTileDb>()
     private val pool = Executors.newCachedThreadPool { Thread(it).apply { isDaemon = true } }
 
     @Synchronized
-    fun register(id: String, db: MBTilesDb) {
+    fun register(id: String, db: RasterTileDb) {
         dbs[id]?.close()
         dbs[id] = db
         start()
@@ -145,6 +204,8 @@ data class MBTilesOverlay(
     val opacity: Float = 1.0f,
     val visible: Boolean = true,
     val createdAt: Long = 0L,
+    /** Container format used to reopen the right reader: "mbtiles" or "gpkg". */
+    val container: String = "mbtiles",
 )
 
 class MBTilesOverlayStore(context: Context) {
@@ -161,19 +222,27 @@ class MBTilesOverlayStore(context: Context) {
 
     init {
         // Re-register persisted tile sets with the server on launch.
-        _overlays.value.forEach { o -> MBTilesDb.open(fileFor(o).absolutePath)?.let { MBTilesServer.register(o.id, it) } }
+        _overlays.value.forEach { o -> openDb(o)?.let { MBTilesServer.register(o.id, it) } }
     }
 
     fun fileFor(o: MBTilesOverlay): File = File(dir, o.fileName)
     fun tileUrlTemplate(o: MBTilesOverlay): String? = MBTilesServer.tileUrlTemplate(o.id)
 
-    suspend fun importMBTiles(source: File, displayName: String): Boolean {
+    private fun openDb(o: MBTilesOverlay): RasterTileDb? =
+        if (o.container == "gpkg") GPKGDb.open(fileFor(o).absolutePath) else MBTilesDb.open(fileFor(o).absolutePath)
+
+    suspend fun importMBTiles(source: File, displayName: String): Boolean = importTileSet(source, displayName, "mbtiles")
+    suspend fun importGPKG(source: File, displayName: String): Boolean = importTileSet(source, displayName, "gpkg")
+
+    private suspend fun importTileSet(source: File, displayName: String, container: String): Boolean {
         _isImporting.value = true; _lastError.value = null
+        val label = if (container == "gpkg") "GeoPackage" else "MBTiles"
         val id = UUID.randomUUID().toString()
-        val dest = File(dir, "$id.mbtiles")
+        val dest = File(dir, "$id.$container")
         return try {
             withContext(Dispatchers.IO) { source.copyTo(dest, overwrite = true) }
-            val db = MBTilesDb.open(dest.absolutePath) ?: throw IllegalStateException("not a valid MBTiles file")
+            val db = (if (container == "gpkg") GPKGDb.open(dest.absolutePath) else MBTilesDb.open(dest.absolutePath))
+                ?: throw IllegalStateException("not a valid $label file")
             MBTilesServer.register(id, db)
             val b = db.bounds
             _overlays.value = _overlays.value + MBTilesOverlay(
@@ -181,14 +250,14 @@ class MBTilesOverlayStore(context: Context) {
                 minZoom = db.minZoom, maxZoom = db.maxZoom,
                 north = b?.get(0) ?: 85.0, south = b?.get(1) ?: -85.0,
                 east = b?.get(2) ?: 180.0, west = b?.get(3) ?: -180.0,
-                hasBounds = b != null, createdAt = System.currentTimeMillis(),
+                hasBounds = b != null, createdAt = System.currentTimeMillis(), container = container,
             )
             persist()
             _isImporting.value = false
             true
         } catch (e: Exception) {
             dest.delete()
-            _lastError.value = "MBTiles import failed: ${e.message}"
+            _lastError.value = "$label import failed: ${e.message}"
             _isImporting.value = false
             false
         }
