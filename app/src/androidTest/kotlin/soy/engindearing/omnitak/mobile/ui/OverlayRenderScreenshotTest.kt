@@ -34,27 +34,49 @@ class OverlayRenderScreenshotTest {
     )
 
     @Test
-    fun geotiff_rendersOnMap() {
+    fun geotiff_rendersOnMap() = captureOnMap("test_geotiff.tif", "geotiff") { store, f, n ->
+        runBlocking { store.importGeoTIFF(f, n) }
+    }
+
+    @Test
+    fun geopdf_rendersOnMap() = captureOnMap("test_geopdf.pdf", "geopdf") { store, f, n ->
+        runBlocking { store.importGeoPDF(f, n) }
+    }
+
+    @Test
+    fun groundOverlay_rendersOnMap() = captureOnMap("test_groundoverlay.kmz", "groundoverlay") { store, f, n ->
+        runBlocking { store.importGroundOverlay(f, n) }
+    }
+
+    /**
+     * Imports a fixture into the running app's store, frames the camera on the
+     * imported overlay's bounds, and screencaps the live map to
+     * /sdcard/Download/overlay-<label>-onmap.png.
+     */
+    private fun captureOnMap(
+        assetName: String,
+        label: String,
+        import: (store: soy.engindearing.omnitak.mobile.data.RasterOverlayStore, file: File, name: String) -> Boolean,
+    ) {
         val instr = InstrumentationRegistry.getInstrumentation()
         val app = instr.targetContext.applicationContext as OmniTAKApp
 
-        // Copy the fixture out of the test APK assets.
-        val fixture = File(app.cacheDir, "test_geotiff.tif")
-        instr.context.assets.open("test_geotiff.tif").use { i -> fixture.outputStream().use { i.copyTo(it) } }
+        val fixture = File(app.cacheDir, assetName)
+        instr.context.assets.open(assetName).use { i -> fixture.outputStream().use { i.copyTo(it) } }
 
         ActivityScenario.launch(MainActivity::class.java).use {
             Thread.sleep(3000) // let the map style finish loading
 
             app.rasterOverlayStore.removeAll()
-            val ok = runBlocking { app.rasterOverlayStore.importGeoTIFF(fixture, "test_geotiff.tif") }
-            assertTrue("GeoTIFF import failed", ok)
-            val o = app.rasterOverlayStore.overlays.value.single()
+            val ok = import(app.rasterOverlayStore, fixture, assetName)
+            assertTrue("$label import failed", ok)
+            val o = app.rasterOverlayStore.overlays.value.first()
 
             // Frame the camera on the overlay bounds (MapScreen observes this).
             KmlOverlayEvents.requestZoomBounds(o.north, o.south, o.east, o.west)
             Thread.sleep(4000) // camera animation + raster + basemap tiles
 
-            val outPath = "/sdcard/Download/overlay-geotiff-onmap.png"
+            val outPath = "/sdcard/Download/overlay-$label-onmap.png"
             instr.uiAutomation.executeShellCommand("screencap -p $outPath").let { pfd ->
                 java.io.FileInputStream(pfd.fileDescriptor).use { it.readBytes() }
                 pfd.close()
