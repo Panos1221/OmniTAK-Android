@@ -1,6 +1,7 @@
 package soy.engindearing.omnitak.mobile.data
 
 import android.content.Context
+import android.graphics.Bitmap
 import android.util.Xml
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -10,10 +11,14 @@ import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import mil.nga.tiff.TiffReader
 import org.xmlpull.v1.XmlPullParser
 import java.io.File
 import java.util.UUID
 import java.util.zip.ZipInputStream
+import kotlin.math.abs
+import kotlin.math.atan
+import kotlin.math.exp
 
 /**
  * Single-image georeferenced raster overlays (KMZ/KML GroundOverlay now;
@@ -81,6 +86,123 @@ object GroundOverlayParser {
     }
 }
 
+/**
+ * Reads the geo-registration of a GeoTIFF straight from the TIFF IFD — a
+ * faithful port of the iOS GeoTIFFImporter.geoBounds so both platforms agree
+ * to the bit. Supports the two common georef encodings (ModelPixelScale +
+ * ModelTiepoint, or ModelTransformation) and EPSG 4326 / 3857. Returns null
+ * when the file carries no usable georeferencing.
+ */
+object GeoTIFFParser {
+    data class Box(val north: Double, val south: Double, val east: Double, val west: Double)
+
+    fun bounds(b: ByteArray): Box? {
+        if (b.size <= 8) return null
+        val little = when {
+            (b[0].toInt() and 0xFF) == 0x49 && (b[1].toInt() and 0xFF) == 0x49 -> true   // "II"
+            (b[0].toInt() and 0xFF) == 0x4D && (b[1].toInt() and 0xFF) == 0x4D -> false  // "MM"
+            else -> return null
+        }
+
+        fun u16(o: Int): Int {
+            if (o + 1 >= b.size) return 0
+            val b0 = b[o].toInt() and 0xFF; val b1 = b[o + 1].toInt() and 0xFF
+            return if (little) b0 or (b1 shl 8) else (b0 shl 8) or b1
+        }
+        fun u32(o: Int): Int {
+            if (o + 3 >= b.size) return 0
+            val b0 = b[o].toInt() and 0xFF; val b1 = b[o + 1].toInt() and 0xFF
+            val b2 = b[o + 2].toInt() and 0xFF; val b3 = b[o + 3].toInt() and 0xFF
+            return if (little) b0 or (b1 shl 8) or (b2 shl 16) or (b3 shl 24)
+            else (b0 shl 24) or (b1 shl 16) or (b2 shl 8) or b3
+        }
+        fun f64(o: Int): Double {
+            if (o + 7 >= b.size) return 0.0
+            var u = 0L
+            for (i in 0 until 8) {
+                val idx = o + (if (little) i else 7 - i)
+                u = u or ((b[idx].toLong() and 0xFF) shl (8 * i))
+            }
+            return Double.fromBits(u)
+        }
+
+        if (u16(2) != 42) return null   // TIFF magic
+        val ifd = u32(4)
+        if (ifd + 2 > b.size) return null
+        val entries = u16(ifd)
+
+        var width = 0; var height = 0
+        var pixelScale = DoubleArray(0); var tiepoint = DoubleArray(0); var transform = DoubleArray(0)
+        var geoKeys = IntArray(0)
+        val typeSizes = intArrayOf(0, 1, 1, 2, 4, 8, 1, 1, 2, 4, 8, 4, 8)
+
+        for (e in 0 until entries) {
+            val off = ifd + 2 + e * 12
+            if (off + 12 > b.size) break
+            val tag = u16(off); val type = u16(off + 2); val cnt = u32(off + 4)
+            val tsize = if (type < typeSizes.size) typeSizes[type] else 0
+            val len = tsize * cnt
+            val valOff = if (len <= 4) off + 8 else u32(off + 8)
+            when (tag) {
+                256 -> width = if (type == 3) u16(off + 8) else u32(off + 8)
+                257 -> height = if (type == 3) u16(off + 8) else u32(off + 8)
+                33550 -> pixelScale = DoubleArray(cnt) { f64(valOff + it * 8) }
+                33922 -> tiepoint = DoubleArray(cnt) { f64(valOff + it * 8) }
+                34264 -> transform = DoubleArray(cnt) { f64(valOff + it * 8) }
+                34735 -> geoKeys = IntArray(cnt) { u16(valOff + it * 2) }
+            }
+        }
+        if (width <= 0 || height <= 0) return null
+
+        // CRS: GeoKeyDirectory = header(4) then 4-short entries (key, loc, count, value).
+        var epsg = 4326
+        if (geoKeys.size >= 4) {
+            var i = 4
+            repeat(geoKeys[3]) {
+                if (i + 3 < geoKeys.size) {
+                    val key = geoKeys[i]; val loc = geoKeys[i + 1]; val value = geoKeys[i + 3]
+                    if (loc == 0) {
+                        if (key == 3072) epsg = value                       // ProjectedCSTypeGeoKey
+                        else if (key == 2048 && epsg == 4326) epsg = value  // GeographicTypeGeoKey
+                    }
+                }
+                i += 4
+            }
+        }
+
+        // Pixel→world origin + scale.
+        var originX = 0.0; var originY = 0.0; var sx = 0.0; var sy = 0.0
+        if (pixelScale.size >= 2 && tiepoint.size >= 6) {
+            sx = pixelScale[0]; sy = pixelScale[1]
+            originX = tiepoint[3] - tiepoint[0] * sx
+            originY = tiepoint[4] + tiepoint[1] * sy
+        } else if (transform.size >= 16) {
+            originX = transform[3]; originY = transform[7]
+            sx = transform[0]; sy = -transform[5]
+        } else {
+            return null
+        }
+
+        val wX = originX; val eX = originX + width * sx
+        val nY = originY; val sY = originY - height * sy
+
+        fun lonLat(x: Double, y: Double): Pair<Double, Double> {
+            if (epsg == 3857 || epsg == 900913 || epsg == 102100) {
+                val lon = x / 6378137.0 * 180.0 / Math.PI
+                val lat = (2.0 * atan(exp(y / 6378137.0)) - Math.PI / 2.0) * 180.0 / Math.PI
+                return lon to lat
+            }
+            return x to y // assume degrees (EPSG:4326)
+        }
+        val (west, north) = lonLat(wX, nY)
+        val (east, south) = lonLat(eX, sY)
+        if (abs(north) > 90 || abs(south) > 90 || abs(east) > 180 || abs(west) > 180 ||
+            north <= south || east == west
+        ) return null
+        return Box(north, south, east, west)
+    }
+}
+
 class RasterOverlayStore(context: Context) {
     private val dir = File(context.filesDir, "raster_overlays").apply { mkdirs() }
     private val metaFile = File(dir, "rasters.json")
@@ -129,6 +251,87 @@ class RasterOverlayStore(context: Context) {
             false
         }
     }
+
+    /** Import a georeferenced TIFF. Parses bounds from the GeoTIFF tags and
+     *  decodes the raster (NGA tiff) to a PNG placed by its corner box.
+     *  Returns false if the file isn't georeferenced or can't be decoded. */
+    suspend fun importGeoTIFF(source: File, displayName: String): Boolean {
+        _isImporting.value = true; _lastError.value = null
+        return try {
+            val bytes = withContext(Dispatchers.IO) { source.readBytes() }
+            val box = GeoTIFFParser.bounds(bytes)
+            if (box == null) {
+                _lastError.value = "That TIFF isn't georeferenced (no GeoTIFF tags), or its projection isn't supported (WGS84 / Web Mercator only)."
+                _isImporting.value = false; return false
+            }
+            val bmp = withContext(Dispatchers.IO) { decodeTiff(bytes) }
+            if (bmp == null) {
+                _lastError.value = "Couldn't decode that TIFF (only 8-bit grayscale / RGB / RGBA with uncompressed, LZW, Deflate or PackBits is supported)."
+                _isImporting.value = false; return false
+            }
+            val id = UUID.randomUUID().toString()
+            val out = File(dir, "$id.png")
+            withContext(Dispatchers.IO) { out.outputStream().use { bmp.compress(Bitmap.CompressFormat.PNG, 100, it) } }
+            bmp.recycle()
+            _overlays.value = _overlays.value + RasterOverlay(
+                id = id, name = displayName.substringBeforeLast('.'), fileName = out.name,
+                north = box.north, south = box.south, east = box.east, west = box.west,
+                createdAt = System.currentTimeMillis(),
+            )
+            persist()
+            _isImporting.value = false
+            true
+        } catch (e: Exception) {
+            _lastError.value = "GeoTIFF import failed: ${e.message}"
+            _isImporting.value = false
+            false
+        }
+    }
+
+    /** Decode a (Geo)TIFF raster to an ARGB Bitmap. v1 supports 8-bit
+     *  grayscale / RGB / RGBA. Strided downsample caps the long edge so a
+     *  huge orthophoto can't OOM the device. Returns null when unsupported. */
+    private fun decodeTiff(bytes: ByteArray): Bitmap? = runCatching {
+        val tiff = TiffReader.readTiff(bytes)
+        val fd = tiff.fileDirectory
+        val bits = fd.bitsPerSample?.firstOrNull() ?: 8
+        if (bits != 8) return@runCatching null
+        if (fd.photometricInterpretation == 3) return@runCatching null // palette (colormap) not supported
+        val rasters = fd.readRasters()
+        val w = rasters.width; val h = rasters.height
+        if (w <= 0 || h <= 0) return@runCatching null
+        val samples = rasters.samplesPerPixel
+
+        val maxDim = 4096
+        val step = maxOf(1, maxOf(w, h) / maxDim)
+        val outW = (w + step - 1) / step
+        val outH = (h + step - 1) / step
+        val pixels = IntArray(outW * outH)
+
+        var oy = 0; var y = 0
+        while (y < h && oy < outH) {
+            var ox = 0; var x = 0
+            while (x < w && ox < outW) {
+                val px = rasters.getPixel(x, y)
+                val argb = when {
+                    samples >= 4 -> {
+                        val a = px[3].toInt() and 0xFF
+                        (a shl 24) or ((px[0].toInt() and 0xFF) shl 16) or ((px[1].toInt() and 0xFF) shl 8) or (px[2].toInt() and 0xFF)
+                    }
+                    samples == 3 ->
+                        (0xFF shl 24) or ((px[0].toInt() and 0xFF) shl 16) or ((px[1].toInt() and 0xFF) shl 8) or (px[2].toInt() and 0xFF)
+                    else -> {
+                        val v = px[0].toInt() and 0xFF
+                        (0xFF shl 24) or (v shl 16) or (v shl 8) or v
+                    }
+                }
+                pixels[oy * outW + ox] = argb
+                ox++; x += step
+            }
+            oy++; y += step
+        }
+        Bitmap.createBitmap(pixels, outW, outH, Bitmap.Config.ARGB_8888)
+    }.getOrNull()
 
     /** Returns (kmlBytes, resourceName→bytes). For plain KML, resources is empty. */
     private fun unzipKmz(source: File, displayName: String): Pair<ByteArray, Map<String, ByteArray>> {

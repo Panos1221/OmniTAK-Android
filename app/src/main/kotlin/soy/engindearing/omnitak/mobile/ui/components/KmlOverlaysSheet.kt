@@ -87,8 +87,11 @@ fun KmlOverlaysSheet(onDismiss: () -> Unit) {
     val mbtiles by mbStore.overlays.collectAsState()
     val imagery by rasterStore.overlays.collectAsState()
     val importing by store.isImporting.collectAsState()
+    val rasterImporting by rasterStore.isImporting.collectAsState()
     val status by store.status.collectAsState()
-    val error by store.lastError.collectAsState()
+    val kmlError by store.lastError.collectAsState()
+    val rasterError by rasterStore.lastError.collectAsState()
+    val error = kmlError ?: rasterError
 
     var editingId by remember { mutableStateOf<String?>(null) }
     var confirmDeleteAll by remember { mutableStateOf(false) }
@@ -108,6 +111,12 @@ fun KmlOverlaysSheet(onDismiss: () -> Unit) {
                     val ok = if (lower.endsWith(".gpkg")) mbStore.importGPKG(tmp, name) else mbStore.importMBTiles(tmp, name)
                     if (ok) {
                         mbStore.overlays.value.lastOrNull()?.takeIf { it.hasBounds }?.let {
+                            KmlOverlayEvents.requestZoomBounds(it.north, it.south, it.east, it.west)
+                        }
+                    }
+                } else if (lower.endsWith(".tif") || lower.endsWith(".tiff")) {
+                    if (rasterStore.importGeoTIFF(tmp, name)) {
+                        rasterStore.overlays.value.lastOrNull()?.let {
                             KmlOverlayEvents.requestZoomBounds(it.north, it.south, it.east, it.west)
                         }
                     }
@@ -144,7 +153,7 @@ fun KmlOverlaysSheet(onDismiss: () -> Unit) {
                 overlays = overlays,
                 imagery = imagery,
                 mbtiles = mbtiles,
-                importing = importing,
+                importing = importing || rasterImporting,
                 status = status,
                 error = error,
                 onImport = { picker.launch(arrayOf("*/*")) },
@@ -209,7 +218,7 @@ private fun OverlayList(
         ) {
             Icon(Icons.Filled.FileDownload, contentDescription = null, tint = Color(0xFF4FA8FF))
             Spacer(Modifier.width(14.dp))
-            Text("Import KML / KMZ / MBTiles / GPKG", color = Color(0xFF4FA8FF), fontSize = 16.sp, maxLines = 1)
+            Text("Import KML / KMZ / GeoTIFF / MBTiles / GPKG", color = Color(0xFF4FA8FF), fontSize = 15.sp, maxLines = 1)
         }
 
         if (importing) {
