@@ -172,12 +172,29 @@ fun AddServerScreen(onDone: () -> Unit) {
         Column(
             modifier = Modifier
                 .fillMaxSize()
+                // BUG-C (closed-test, May 2026) — the focused field used to
+                // disappear behind the keyboard. Root cause was a double
+                // keyboard inset: the sticky bottomBar already applies
+                // imePadding, so Scaffold reports a keyboard-aware `inner`.
+                // The content Column ALSO applied .imePadding(), reserving
+                // ~2x the keyboard height at the bottom of the scroll
+                // viewport and pushing the focused field into the dead zone.
+                // `inner` is the single source of truth — no second imePadding.
                 .padding(inner)
-                .imePadding()
                 .verticalScroll(rememberScrollState())
                 .padding(20.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
+            // BUG-C — orient the user before the long form. Manual entry here
+            // vs. the Quick Connect (⚡) enrollment flow on the Servers screen.
+            Text(
+                "Fill in your server's details below. Has your server's admin " +
+                    "set up auto-enrollment? Use Quick Connect (⚡) on the " +
+                    "Servers screen instead to fetch a certificate automatically.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.65f),
+            )
+
             OutlinedTextField(
                 value = name,
                 onValueChange = { name = it },
@@ -327,7 +344,10 @@ fun AddServerScreen(onDone: () -> Unit) {
                 color = MaterialTheme.colorScheme.onBackground,
             )
             Text(
-                "Required for OpenTAKserver and most CoT servers with auth.",
+                "A username/password login — separate from the client " +
+                    "certificate above. Required for OpenTAKServer and most " +
+                    "CoT servers with basic auth. Leave blank if your server " +
+                    "only uses certificates.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.65f),
             )
