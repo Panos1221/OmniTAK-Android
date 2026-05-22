@@ -35,6 +35,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
@@ -75,13 +76,19 @@ fun ServersScreen(onAdd: () -> Unit, onQuickConnect: () -> Unit = {}) {
                 },
                 actions = {
                     // Quick Connect — request a client cert from the server's
-                    // enrollment endpoint instead of importing a pre-issued .p12
-                    IconButton(onClick = onQuickConnect) {
+                    // enrollment endpoint instead of importing a pre-issued .p12.
+                    // BUG-C (closed-test, May 2026) — the icon-only bolt was
+                    // not discoverable; testers couldn't tell it was for cert
+                    // enrollment vs. the + (manual add). Show a visible label.
+                    TextButton(onClick = onQuickConnect) {
                         Icon(
                             Icons.Filled.Bolt,
-                            contentDescription = "Quick Connect (enroll)",
+                            contentDescription = null,
                             tint = TacticalAccent,
+                            modifier = Modifier.size(18.dp),
                         )
+                        Spacer(Modifier.width(4.dp))
+                        Text("Quick Connect", color = TacticalAccent)
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
@@ -157,7 +164,9 @@ private fun EmptyServers(modifier: Modifier = Modifier) {
         )
         Spacer(Modifier.height(8.dp))
         Text(
-            "Tap the + button to add your first server.",
+            "Tap + to enter a server manually, or Quick Connect (⚡) to " +
+                "auto-enroll a certificate from a TAK Server's enrollment " +
+                "endpoint.",
             style = MaterialTheme.typography.bodyLarge,
             color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f),
         )
