@@ -45,6 +45,12 @@ fun CesiumMapView(
     onContactTap: (CoTEvent) -> Unit,
     onCameraChanged: (LatLng, Double) -> Unit,
     modifier: Modifier = Modifier,
+    // Tick counters from the on-screen map controls. Incrementing one fires
+    // the matching camera command on the globe. Mirror the TacticalMap
+    // (2D) wiring so the +/- zoom and "center on me" buttons work on 3D too.
+    zoomInTrigger: Int = 0,
+    zoomOutTrigger: Int = 0,
+    recenterTrigger: Int = 0,
 ) {
     val density = LocalDensity.current.density
     val mainHandler = remember { Handler(Looper.getMainLooper()) }
@@ -125,6 +131,34 @@ fun CesiumMapView(
         },
         update = { pushEntities() },
     )
+
+    // Map-control buttons → globe camera. The JS guards no-op until the
+    // viewer exists, but gate on `ready` too so a stray early tick is dropped.
+    // Skip the initial 0 so the first composition doesn't fire a command.
+    DisposableEffect(zoomInTrigger) {
+        if (zoomInTrigger > 0 && ready.value) {
+            webViewRef.value?.evaluateJavascript("window.OmniBridge.zoomIn();", null)
+        }
+        onDispose { }
+    }
+    DisposableEffect(zoomOutTrigger) {
+        if (zoomOutTrigger > 0 && ready.value) {
+            webViewRef.value?.evaluateJavascript("window.OmniBridge.zoomOut();", null)
+        }
+        onDispose { }
+    }
+    DisposableEffect(recenterTrigger) {
+        if (recenterTrigger > 0 && ready.value) {
+            val lat = selfLatState.value
+            val lon = selfLonState.value
+            if (lat != null && lon != null && !lat.isNaN() && !lon.isNaN()) {
+                webViewRef.value?.evaluateJavascript(
+                    "window.OmniBridge.centerOnSelf({lat:$lat,lon:$lon});", null,
+                )
+            }
+        }
+        onDispose { }
+    }
 
     DisposableEffect(Unit) {
         onDispose {

@@ -315,6 +315,11 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
             onCameraChanged = { target, zoom ->
                 app.mapCameraStore.update(target.latitude, target.longitude, zoom)
             },
+            // Same control ticks the 2D map uses — make +/- and "center on
+            // me" drive the globe (VC 77: buttons did nothing on 3D).
+            zoomInTrigger = zoomInTick,
+            zoomOutTrigger = zoomOutTick,
+            recenterTrigger = recenterTick,
         )
         } else {
         TacticalMap(
