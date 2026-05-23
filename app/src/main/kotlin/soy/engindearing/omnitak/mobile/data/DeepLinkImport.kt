@@ -34,7 +34,24 @@ data class ImportedServerConfig(
     val useTLS: Boolean,
     val username: String?,
     val password: String?,
-)
+    // CSR enrollment port (TAK default 8446). Used only when username +
+    // password are present and the server speaks TLS — see [needsEnrollment].
+    val enrollmentPort: Int = 8446,
+    // Trust-all during enrollment by default so a single QR works for both
+    // self-signed and publicly-trusted (Let's Encrypt) endpoints. Override
+    // with trust=ca / trustselfsigned=false on the link for strict validation.
+    val trustSelfSigned: Boolean = true,
+) {
+    /**
+     * A TLS server with username + password can't connect with bare creds —
+     * TAK Servers gate the streaming port behind mutual TLS. When we have
+     * both, the right move is to CSR-enroll a client cert first (same flow
+     * as the Quick Connect screen) rather than add a cert-less server that
+     * will be rejected at the handshake.
+     */
+    val needsEnrollment: Boolean
+        get() = useTLS && !username.isNullOrBlank() && !password.isNullOrEmpty()
+}
 
 object DeepLinkImport {
     /** Accept any URI we recognise as a server-onboarding payload. */
@@ -73,6 +90,14 @@ object DeepLinkImport {
         val name = uri.getQueryParameter("name")?.takeIf { it.isNotBlank() }
             ?: host
 
+        val enrollmentPort = (uri.getQueryParameter("enrollmentport")
+            ?: uri.getQueryParameter("enrollport"))
+            ?.toIntOrNull()?.takeIf { it in 1..65535 } ?: 8446
+
+        val trustRaw = (uri.getQueryParameter("trustselfsigned")
+            ?: uri.getQueryParameter("trust"))?.lowercase()
+        val trustSelfSigned = trustRaw !in setOf("false", "ca", "system", "0", "no")
+
         return ImportedServerConfig(
             name = name,
             host = host,
@@ -80,6 +105,8 @@ object DeepLinkImport {
             useTLS = useTLS,
             username = username,
             password = password,
+            enrollmentPort = enrollmentPort,
+            trustSelfSigned = trustSelfSigned,
         )
     }
 
