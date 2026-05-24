@@ -226,6 +226,15 @@ class OmniTAKApp : Application() {
         )
     }
 
+    /** Multi-server mission / data-package sync over the Marti REST API.
+     *  Aggregates across every enabled TLS+cert server (iOS parity). */
+    val missionSyncManager: soy.engindearing.omnitak.mobile.domain.MissionSyncManager by lazy {
+        soy.engindearing.omnitak.mobile.domain.MissionSyncManager(
+            serverManager = serverManager,
+            certVault = certVault,
+        )
+    }
+
     /** UAS / drone control (GAP-XXX). Single active drone connection
      *  at a time. Multi-drone is a fast-follow once we have a UI for it. */
     /** Registry of all connected UAS — supports multi-drone ops. The

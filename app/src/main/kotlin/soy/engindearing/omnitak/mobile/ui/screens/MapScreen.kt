@@ -8,6 +8,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Brush
 import androidx.compose.material.icons.filled.Chat
+import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material.icons.filled.AddLocation
 import androidx.compose.material.icons.filled.FlightTakeoff
 import androidx.compose.material.icons.filled.GridOn
@@ -83,6 +84,8 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
     val app = LocalContext.current.applicationContext as OmniTAKApp
     val active by app.serverManager.activeServer.collectAsState()
     val connState by app.serverManager.connectionState.collectAsState()
+    val allServers by app.serverManager.servers.collectAsState()
+    val connectedIds by app.serverManager.connectedServerIds.collectAsState()
     val msgReceived by app.serverManager.messagesReceived.collectAsState()
     val msgSent by app.serverManager.messagesSent.collectAsState()
     val contacts by app.contactStore.contacts.collectAsState()
@@ -967,6 +970,10 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
                 // there). Hamburger goes to Settings.
                 onServerTap = { onOpenTab("servers") },
                 onMenuTap = { onOpenTab("settings") },
+                // One flag per enabled server → "N/M ●●●" multi-server badge.
+                serverConnectedFlags = allServers
+                    .filter { it.enabled }
+                    .map { connectedIds.contains(it.id) },
             )
         }
 
@@ -1007,6 +1014,7 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
                 ToolEntry("layers", Icons.Filled.Layers, "Layers"),
                 ToolEntry("adsb", Icons.Filled.Flight, if (adsbActive) "ADSB on" else "ADSB"),
                 ToolEntry("chat", Icons.Filled.Chat, "Chat"),
+                ToolEntry("missionsync", Icons.Filled.Sync, "Mission Sync"),
                 ToolEntry("teams", Icons.Filled.Groups, "Teams"),
                 ToolEntry(
                     "nav",
@@ -1041,6 +1049,7 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
                         }
                     }
                     "chat" -> onOpenTab("chat")
+                    "missionsync" -> onOpenTab("missionsync")
                     "teams" -> teamsPanelOpen = true
                     "nav" -> {
                         if (!locationGranted) {

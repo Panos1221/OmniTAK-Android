@@ -46,6 +46,11 @@ fun ATAKStatusBar(
     onServerTap: () -> Unit,
     onMenuTap: () -> Unit,
     modifier: Modifier = Modifier,
+    // Multi-server indicator: one flag per enabled server (true = connected).
+    // When >1 server is enabled this replaces the single dot with a
+    // "N/M ●●●" cluster so the operator can see at a glance how many of
+    // their servers are live. Empty/size-1 falls back to the single dot.
+    serverConnectedFlags: List<Boolean> = emptyList(),
 ) {
     Row(
         modifier = modifier
@@ -54,7 +59,11 @@ fun ATAKStatusBar(
             .padding(horizontal = 12.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        ConnectionDot(isConnected = isConnected)
+        if (serverConnectedFlags.size > 1) {
+            MultiServerIndicator(flags = serverConnectedFlags)
+        } else {
+            ConnectionDot(isConnected = isConnected)
+        }
         Spacer(Modifier.width(8.dp))
 
         Row(
@@ -119,6 +128,36 @@ private fun ConnectionDot(isConnected: Boolean) {
             .clip(CircleShape)
             .background(if (isConnected) TacticalAccent else Color(0xFFE53935)),
     )
+}
+
+/**
+ * Multi-server status cluster: "N/M" connected count followed by one small
+ * dot per enabled server (green = connected, red = down). Shown on the map
+ * status bar when the operator has more than one TAK server enabled.
+ */
+@Composable
+private fun MultiServerIndicator(flags: List<Boolean>) {
+    val connected = flags.count { it }
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Text(
+            "$connected/${flags.size}",
+            color = if (connected > 0) TacticalAccent else Color(0xFFE53935),
+            fontFamily = FontFamily.Monospace,
+            fontWeight = FontWeight.Bold,
+            fontSize = 12.sp,
+        )
+        Spacer(Modifier.width(5.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(3.dp)) {
+            flags.forEach { up ->
+                Box(
+                    modifier = Modifier
+                        .size(6.dp)
+                        .clip(CircleShape)
+                        .background(if (up) TacticalAccent else Color(0xFFE53935)),
+                )
+            }
+        }
+    }
 }
 
 @Composable

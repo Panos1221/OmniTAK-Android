@@ -87,7 +87,7 @@ object ChatXml {
      * not a chat message or is malformed. Direct-message detection
      * uses the chatroom name against ATAK's canonical broadcast label.
      */
-    fun parse(xml: String, selfUid: String? = null): ChatMessage? {
+    fun parse(xml: String, selfUid: String? = null, serverId: String? = null): ChatMessage? {
         val factory = XmlPullParserFactory.newInstance().apply { isNamespaceAware = false }
         val parser = factory.newPullParser()
         parser.setInput(StringReader(xml))
@@ -151,13 +151,16 @@ object ChatXml {
             chatroom.equals(ChatRoom.BROADCAST, ignoreCase = true) ||
             chatroom.lowercase().contains("all chat")
 
+        // Group chat (All Chat Rooms) is a single merged room across servers;
+        // DMs are scoped per server so the same callsign on two servers stays
+        // in two distinct threads (multi-server parity with iOS).
         val conversationId = if (isGroup) {
             ChatRoom.ALL_USERS
         } else if (selfUid != null) {
-            ChatRoom.directConversationId(finalSenderUid, selfUid)
+            ChatRoom.directConversationId(finalSenderUid, selfUid, serverId)
         } else {
-            // Without a self-uid, fall back to grouping by peer.
-            "DM-${finalSenderUid}"
+            // Without a self-uid, fall back to grouping by peer (still per-server).
+            if (serverId != null) "DM-$serverId-$finalSenderUid" else "DM-$finalSenderUid"
         }
 
         return ChatMessage(
@@ -171,6 +174,7 @@ object ChatXml {
             timeIso = eventTime ?: DateTimeFormatter.ISO_INSTANT.format(Instant.now()),
             status = ChatStatus.RECEIVED,
             isFromSelf = selfUid != null && finalSenderUid == selfUid,
+            serverId = serverId,
         )
     }
 

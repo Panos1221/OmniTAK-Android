@@ -16,6 +16,7 @@ import soy.engindearing.omnitak.mobile.data.TAKConnection
 import soy.engindearing.omnitak.mobile.data.TAKServer
 import soy.engindearing.omnitak.mobile.data.TAKServerStore
 import soy.engindearing.omnitak.mobile.data.UserPrefsStore
+import java.util.concurrent.ConcurrentHashMap
 
 /**
  * Application-scoped TAK server registry. Exposes [servers] and
@@ -47,47 +48,81 @@ class ServerManager(
     private val _activeServer = MutableStateFlow<TAKServer?>(null)
     val activeServer: StateFlow<TAKServer?> = _activeServer.asStateFlow()
 
+    // Aggregate connection state across all servers. Kept for back-compat
+    // with the map status bar / FGS lifecycle / single-server callers:
+    //  - any Connected  → Connected (single server's name, or "N servers")
+    //  - else any Connecting → Connecting
+    //  - else any Failed → Failed
+    //  - else Disconnected
     private val _connectionState = MutableStateFlow<ConnectionState>(ConnectionState.Disconnected)
     val connectionState: StateFlow<ConnectionState> = _connectionState.asStateFlow()
+
+    // Per-server connection state, keyed by TAKServer.id. The Servers screen
+    // and the map's multi-server indicator read this so every enabled server
+    // shows its own live status, not just whichever one is "active".
+    private val _serverStates = MutableStateFlow<Map<String, ConnectionState>>(emptyMap())
+    val serverStates: StateFlow<Map<String, ConnectionState>> = _serverStates.asStateFlow()
+
+    // The subset of [_serverStates] that is currently Connected. Drives the
+    // "N/M ●●●" map indicator and is the broadcast target set for sendCoT.
+    private val _connectedServerIds = MutableStateFlow<Set<String>>(emptySet())
+    val connectedServerIds: StateFlow<Set<String>> = _connectedServerIds.asStateFlow()
 
     // GAP-030c — real ATAK-style status-bar counters. The status bar
     // chips ↓ / ↑ on MapScreen previously read hardcoded zeros, which
     // made the app look silent even when CoT was flowing both ways.
+    // Now aggregated across all connected servers.
     private val _messagesReceived = MutableStateFlow(0)
     val messagesReceived: StateFlow<Int> = _messagesReceived.asStateFlow()
 
     private val _messagesSent = MutableStateFlow(0)
     val messagesSent: StateFlow<Int> = _messagesSent.asStateFlow()
 
-    private var currentConnection: TAKConnection? = null
-    private var connectionCollectorJob: kotlinx.coroutines.Job? = null
-    private var receivedCollectorJob: kotlinx.coroutines.Job? = null
+    // One live socket per enabled server (iOS: TAKService.serverConnections).
+    // ConcurrentHashMap because reconcile runs on the store-collector
+    // coroutine while connect/disconnect can be called from the UI thread.
+    private val connections = ConcurrentHashMap<String, TAKConnection>()
+    private val stateJobs = ConcurrentHashMap<String, kotlinx.coroutines.Job>()
+    private val receivedJobs = ConcurrentHashMap<String, kotlinx.coroutines.Job>()
+    // Single PLI broadcaster — self-position fans out to every connected
+    // server via the broadcast path of sendCoT, so one broadcaster covers all.
     private var pliBroadcaster: SelfPositionBroadcaster? = null
 
     init { scope.launch { hydrate() } }
 
-    /** Tear down any existing connection and open a new one to [server]. */
+    /**
+     * Open a connection to [server] alongside any others. Idempotent — a
+     * second call for an already-connected server is a no-op (matches iOS
+     * where every enabled server is connected at once, not one-at-a-time).
+     */
     fun connect(server: TAKServer) {
-        disconnect()
+        if (connections.containsKey(server.id)) return
+        // Reset the shared ↓/↑ counters only when going from zero live
+        // sockets to the first one, so adding a 2nd server doesn't zero them.
+        if (connections.isEmpty()) {
+            _messagesReceived.value = 0
+            _messagesSent.value = 0
+        }
         val conn = TAKConnection(server, certVault)
-        currentConnection = conn
-        // Reset per-session counters so the status bar reflects this
-        // connection only, not the cumulative app lifetime.
-        _messagesReceived.value = 0
-        _messagesSent.value = 0
-        connectionCollectorJob = scope.launch {
+        connections[server.id] = conn
+        stateJobs[server.id] = scope.launch {
             conn.state.collect { state ->
-                _connectionState.value = state
-                if (state is ConnectionState.Connected) startPliBroadcast() else stopPliBroadcast()
+                _serverStates.value = _serverStates.value + (server.id to state)
+                recomputeAggregate()
+                // PLI broadcaster lives as long as ≥1 server is connected.
+                if (_connectedServerIds.value.isNotEmpty()) startPliBroadcast()
+                else stopPliBroadcast()
             }
         }
-        receivedCollectorJob = scope.launch {
+        receivedJobs[server.id] = scope.launch {
             conn.received.collect { xml ->
                 _messagesReceived.value = _messagesReceived.value + 1
                 // A frame is either a chat event or a contact/marker event,
                 // depending on the CoT type. Parsing chat first is cheap
                 // (string probe) and avoids double-ingesting as a contact.
-                val chat = ChatXml.parse(xml)
+                // Tag the source server so chat attribution + per-server DM
+                // scoping work (multi-server parity with iOS).
+                val chat = ChatXml.parse(xml, serverId = server.id)
                 if (chat != null) {
                     chatStore?.ingest(chat)
                 } else {
@@ -99,37 +134,86 @@ class ServerManager(
     }
 
     /**
-     * Re-open a connection if there's an enabled active server but no
-     * live socket. Called from MainActivity's ON_RESUME hook so that
-     * coming back from the background (where Android may have killed
-     * the read loop after Doze / app-standby) recovers without the
-     * operator needing to tap play. Issue #6.
+     * Connect every enabled server that isn't already on the wire, and drop
+     * any live connection whose server was disabled or removed. Called on
+     * cold-launch hydrate and whenever the server list changes so the set of
+     * live sockets always matches the set of enabled servers.
+     */
+    private fun reconcileConnections(servers: List<TAKServer>) {
+        servers.filter { it.enabled }.forEach { s ->
+            if (!connections.containsKey(s.id)) connect(s)
+        }
+        val enabledIds = servers.filter { it.enabled }.map { it.id }.toSet()
+        connections.keys.filterNot { it in enabledIds }.forEach { disconnect(it) }
+    }
+
+    /**
+     * Re-open connections for any enabled server with no live socket.
+     * Called from MainActivity's ON_RESUME hook so that coming back from
+     * the background (where Android may have killed read loops after Doze /
+     * app-standby) recovers without the operator tapping play. Issue #6.
      */
     fun reconnectIfNeeded() {
-        val state = _connectionState.value
-        if (state is ConnectionState.Connected || state is ConnectionState.Connecting) return
-        val target = _activeServer.value ?: return
-        if (!target.enabled) return
-        connect(target)
+        reconcileConnections(_servers.value)
     }
 
-    /** Send a CoT XML payload on the active connection. */
-    suspend fun sendCoT(xml: String): Boolean {
-        val ok = currentConnection?.send(xml) ?: false
-        if (ok) _messagesSent.value = _messagesSent.value + 1
-        return ok
+    /**
+     * Send a CoT XML payload. With [serverId] null the frame is broadcast to
+     * every connected server (group chat, PPLI, markers); with a specific id
+     * it routes to just that server (DM replies stay on their origin server).
+     * Returns true if at least one server accepted the write.
+     */
+    suspend fun sendCoT(xml: String, serverId: String? = null): Boolean {
+        val targets = if (serverId != null) {
+            listOfNotNull(connections[serverId])
+        } else {
+            connections.values.toList()
+        }
+        if (targets.isEmpty()) return false
+        var anyOk = false
+        for (conn in targets) {
+            if (conn.send(xml)) anyOk = true
+        }
+        if (anyOk) _messagesSent.value = _messagesSent.value + 1
+        return anyOk
     }
 
-    /** Disconnect the current connection if any. */
+    /** Disconnect a single server by id, leaving the others connected. */
+    fun disconnect(serverId: String) {
+        connections.remove(serverId)?.disconnect()
+        stateJobs.remove(serverId)?.cancel()
+        receivedJobs.remove(serverId)?.cancel()
+        _serverStates.value = _serverStates.value - serverId
+        recomputeAggregate()
+        if (_connectedServerIds.value.isEmpty()) stopPliBroadcast()
+    }
+
+    /** Disconnect every live connection. */
     fun disconnect() {
-        stopPliBroadcast()
-        currentConnection?.disconnect()
-        currentConnection = null
-        connectionCollectorJob?.cancel()
-        connectionCollectorJob = null
-        receivedCollectorJob?.cancel()
-        receivedCollectorJob = null
-        _connectionState.value = ConnectionState.Disconnected
+        connections.keys.toList().forEach { disconnect(it) }
+    }
+
+    /**
+     * Fold the per-server state map into the single aggregate the status bar
+     * and FGS lifecycle read, and refresh the connected-id set.
+     */
+    private fun recomputeAggregate() {
+        val states = _serverStates.value
+        _connectedServerIds.value = states
+            .filterValues { it is ConnectionState.Connected }
+            .keys.toSet()
+
+        val connected = states.values.filterIsInstance<ConnectionState.Connected>()
+        _connectionState.value = when {
+            connected.size == 1 -> connected.first()
+            connected.size > 1 ->
+                ConnectionState.Connected("${connected.size} servers", connected.all { it.useTLS })
+            states.values.any { it is ConnectionState.Connecting } ->
+                states.values.first { it is ConnectionState.Connecting }
+            states.values.any { it is ConnectionState.Failed } ->
+                states.values.first { it is ConnectionState.Failed }
+            else -> ConnectionState.Disconnected
+        }
     }
 
     private fun startPliBroadcast() {
@@ -154,26 +238,25 @@ class ServerManager(
     }
 
     private suspend fun hydrate() {
-        var initial: List<TAKServer> = emptyList()
+        var initialized = false
         store.servers.collect { loaded ->
             _servers.value = loaded
-            if (initial.isEmpty() && loaded.isNotEmpty()) {
-                initial = loaded
+            if (!initialized && loaded.isNotEmpty()) {
+                initialized = true
+                // Pick a sensible default-target ("active") server once. The
+                // active server is just which one new DMs route to by default;
+                // every enabled server is connected regardless.
                 val activeId = peekActiveId()
                 val active = loaded.firstOrNull { it.id == activeId }
                     ?: loaded.firstOrNull { it.enabled }
                     ?: loaded.firstOrNull()
                 _activeServer.value = active
-                // Resume the previously-active enabled server on cold
-                // launch. Without this the operator has to hit play after
-                // every app restart even though the server entry is still
-                // saved. The `currentConnection == null` guard means
-                // DataPackageBootstrap can race ahead and we won't
-                // double-connect on a fresh-import launch.
-                if (active != null && active.enabled && currentConnection == null) {
-                    connect(active)
-                }
             }
+            // Keep the live socket set equal to the enabled set — connect
+            // every enabled server at once on cold launch, and react to
+            // adds/removes/toggles persisted from anywhere. Idempotent, so a
+            // racing DataPackageBootstrap import won't double-connect.
+            reconcileConnections(loaded)
         }
     }
 
@@ -185,19 +268,15 @@ class ServerManager(
 
         val updated = _servers.value + server
         _servers.value = updated
-        val becomingActive = server.enabled &&
-            (_activeServer.value == null || _activeServer.value?.enabled != true)
-        if (becomingActive) {
+        // First enabled server becomes the default DM-target ("active").
+        if (server.enabled && (_activeServer.value == null || _activeServer.value?.enabled != true)) {
             _activeServer.value = server
             persistActive(server.id)
         }
         persist(updated)
-        // Auto-connect when this server becomes active and nothing is on the wire.
-        // Users expect "I added a server, it works" — the explicit play button is
-        // for switching between configured servers, not for first-use bootstrap.
-        if (becomingActive && currentConnection == null) {
-            connect(server)
-        }
+        // Enabled servers go on the wire immediately, alongside any others.
+        // Users expect "I added a server, it works" — no manual play needed.
+        reconcileConnections(updated)
         return server
     }
 
@@ -219,6 +298,8 @@ class ServerManager(
             persistActive(next?.id)
         }
         persist(updated)
+        disconnect(id)
+        reconcileConnections(updated)
     }
 
     fun toggleEnabled(id: String) {
@@ -226,28 +307,22 @@ class ServerManager(
             if (it.id == id) it.copy(enabled = !it.enabled) else it
         }
         _servers.value = updated
-
         val toggled = updated.firstOrNull { it.id == id }
-        val wasActive = _activeServer.value?.id == id
-        if (wasActive) {
-            if (toggled?.enabled == true) {
-                _activeServer.value = toggled
-            } else {
-                disconnect()
-                val next = updated.firstOrNull { it.enabled }
-                _activeServer.value = next
-                persistActive(next?.id)
-            }
+
+        // Keep the "active" default-target pointed at an enabled server: hand
+        // off when the active one is disabled, adopt one when none is active.
+        if (toggled?.enabled == false && _activeServer.value?.id == id) {
+            val next = updated.firstOrNull { it.enabled }
+            _activeServer.value = next
+            persistActive(next?.id)
+        } else if (toggled?.enabled == true &&
+            (_activeServer.value == null || _activeServer.value?.enabled != true)) {
+            _activeServer.value = toggled
+            persistActive(toggled.id)
         }
         persist(updated)
-        // Switch ON should put the server on the wire, not just permit it.
-        if (toggled?.enabled == true && currentConnection == null) {
-            if (!wasActive) {
-                _activeServer.value = toggled
-                persistActive(toggled.id)
-            }
-            connect(toggled)
-        }
+        // Connect newly-enabled / disconnect newly-disabled servers.
+        reconcileConnections(updated)
     }
 
     fun setActive(id: String) {

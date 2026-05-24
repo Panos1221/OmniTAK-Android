@@ -240,6 +240,9 @@ fun AppNav() {
             composable("mesh/device-settings") {
                 MeshDeviceSettingsScreen(onDone = { nav.popBackStack() })
             }
+            composable("missionsync") {
+                soy.engindearing.omnitak.mobile.ui.screens.MissionSyncScreen(onBack = { nav.popBackStack() })
+            }
             composable("settings") { SettingsScreen() }
             composable("about") { AboutScreen() }
         }
