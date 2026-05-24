@@ -21,7 +21,7 @@ android {
         applicationId = "soy.engindearing.omnitak.mobile"
         minSdk = 26
         targetSdk = 35
-        versionCode = 80
+        versionCode = 81
         versionName = "0.32.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
