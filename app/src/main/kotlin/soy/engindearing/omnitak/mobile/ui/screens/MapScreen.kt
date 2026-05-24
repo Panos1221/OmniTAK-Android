@@ -83,6 +83,8 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
     val app = LocalContext.current.applicationContext as OmniTAKApp
     val active by app.serverManager.activeServer.collectAsState()
     val connState by app.serverManager.connectionState.collectAsState()
+    val allServers by app.serverManager.servers.collectAsState()
+    val connectedIds by app.serverManager.connectedServerIds.collectAsState()
     val msgReceived by app.serverManager.messagesReceived.collectAsState()
     val msgSent by app.serverManager.messagesSent.collectAsState()
     val contacts by app.contactStore.contacts.collectAsState()
@@ -967,6 +969,10 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
                 // there). Hamburger goes to Settings.
                 onServerTap = { onOpenTab("servers") },
                 onMenuTap = { onOpenTab("settings") },
+                // One flag per enabled server → "N/M ●●●" multi-server badge.
+                serverConnectedFlags = allServers
+                    .filter { it.enabled }
+                    .map { connectedIds.contains(it.id) },
             )
         }
 

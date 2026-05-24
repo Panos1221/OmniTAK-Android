@@ -65,7 +65,9 @@ fun ServersScreen(onAdd: () -> Unit, onQuickConnect: () -> Unit = {}) {
     val manager = app.serverManager
     val servers by manager.servers.collectAsState()
     val active by manager.activeServer.collectAsState()
-    val connState by manager.connectionState.collectAsState()
+    // Per-server live state — every card reflects its own connection, not
+    // just whichever server happens to be "active" (multi-server).
+    val serverStates by manager.serverStates.collectAsState()
 
     Scaffold(
         containerColor = TacticalBackground,
@@ -118,21 +120,20 @@ fun ServersScreen(onAdd: () -> Unit, onQuickConnect: () -> Unit = {}) {
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
                 items(items = servers, key = { it.id }) { server ->
-                    val connectedToThis = active?.id == server.id && (
-                        connState is ConnectionState.Connected || connState is ConnectionState.Connecting
-                    )
+                    val thisState = serverStates[server.id] ?: ConnectionState.Disconnected
+                    val connectedToThis = thisState is ConnectionState.Connected ||
+                        thisState is ConnectionState.Connecting
                     ServerCard(
                         server = server,
                         isActive = active?.id == server.id,
-                        connState = if (active?.id == server.id) connState else ConnectionState.Disconnected,
+                        connState = thisState,
                         onTap = { manager.setActive(server.id) },
                         onToggle = { manager.toggleEnabled(server.id) },
                         onDelete = { manager.deleteServer(server.id) },
                         onConnectToggle = {
-                            if (connectedToThis) manager.disconnect() else {
-                                manager.setActive(server.id)
-                                manager.connect(server)
-                            }
+                            // Connect/disconnect just this server — others stay up.
+                            if (connectedToThis) manager.disconnect(server.id)
+                            else manager.connect(server)
                         },
                     )
                 }

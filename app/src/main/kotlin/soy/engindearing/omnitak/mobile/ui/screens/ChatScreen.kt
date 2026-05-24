@@ -79,6 +79,14 @@ fun ChatScreen(initialConversationId: String? = null) {
     val prefs by app.userPrefsStore.prefs.collectAsState(initial = UserPrefs())
     val chatScope = rememberCoroutineScope()
 
+    // Multi-server: resolve a serverId → display name so chat can badge which
+    // server a message/thread came from. Badges only show when >1 server is
+    // configured, otherwise they're noise.
+    val servers by app.serverManager.servers.collectAsState()
+    val serverNames = remember(servers) { servers.associate { it.id to it.name } }
+    val multiServer = servers.size > 1
+    val serverNameFor: (String?) -> String? = { id -> id?.let { serverNames[it] } }
+
     // GAP-124 — when arriving with an initial convo id (eg. from the
     // node-detail sheet's "Message" button), open that conversation
     // straight away instead of dropping the user on the conversation list.
@@ -97,6 +105,8 @@ fun ChatScreen(initialConversationId: String? = null) {
                 app.chatStore.markRead(id)
                 selectedConversation = id
             },
+            multiServer = multiServer,
+            serverNameFor = serverNameFor,
         )
     } else {
         val convo = conversations[selectedConversation]
@@ -112,6 +122,8 @@ fun ChatScreen(initialConversationId: String? = null) {
             selfCallsign = prefs.callsign,
             onBack = { selectedConversation = null },
             onSend = { text -> sendChat(app, convo, prefs, text, chatScope) },
+            multiServer = multiServer,
+            serverNameFor = serverNameFor,
         )
     }
 }
@@ -121,6 +133,8 @@ fun ChatScreen(initialConversationId: String? = null) {
 private fun ConversationListView(
     conversations: List<ChatConversation>,
     onSelect: (String) -> Unit,
+    multiServer: Boolean,
+    serverNameFor: (String?) -> String?,
 ) {
     Scaffold(
         containerColor = TacticalBackground,
@@ -154,7 +168,12 @@ private fun ConversationListView(
                 .padding(inner),
         ) {
             items(conversations, key = { it.id }) { convo ->
-                ConversationRow(convo = convo, onClick = { onSelect(convo.id) })
+                ConversationRow(
+                    convo = convo,
+                    onClick = { onSelect(convo.id) },
+                    serverBadgeName = if (multiServer) serverNameFor(convo.serverId) else null,
+                    serverId = convo.serverId,
+                )
                 HorizontalDivider(color = TacticalSurface)
             }
         }
@@ -162,7 +181,12 @@ private fun ConversationListView(
 }
 
 @Composable
-private fun ConversationRow(convo: ChatConversation, onClick: () -> Unit) {
+private fun ConversationRow(
+    convo: ChatConversation,
+    onClick: () -> Unit,
+    serverBadgeName: String?,
+    serverId: String?,
+) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -171,12 +195,18 @@ private fun ConversationRow(convo: ChatConversation, onClick: () -> Unit) {
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Column(modifier = Modifier.weight(1f)) {
-            Text(
-                convo.title,
-                color = MaterialTheme.colorScheme.onBackground,
-                fontWeight = FontWeight.SemiBold,
-                style = MaterialTheme.typography.bodyLarge,
-            )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    convo.title,
+                    color = MaterialTheme.colorScheme.onBackground,
+                    fontWeight = FontWeight.SemiBold,
+                    style = MaterialTheme.typography.bodyLarge,
+                )
+                if (serverBadgeName != null) {
+                    Spacer(Modifier.width(6.dp))
+                    ChatServerBadge(name = serverBadgeName, serverId = serverId)
+                }
+            }
             Spacer(Modifier.height(2.dp))
             Text(
                 convo.lastMessagePreview ?: if (convo.isGroup) "Broadcast chat" else "No messages yet",
@@ -212,6 +242,8 @@ private fun ConversationDetailView(
     selfCallsign: String,
     onBack: () -> Unit,
     onSend: (String) -> Unit,
+    multiServer: Boolean,
+    serverNameFor: (String?) -> String?,
 ) {
     var draft by remember { mutableStateOf("") }
     val listState = rememberLazyListState()
@@ -265,7 +297,11 @@ private fun ConversationDetailView(
             verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {
             items(messages, key = { it.id }) { msg ->
-                MessageBubble(msg = msg, selfUid = selfUid)
+                MessageBubble(
+                    msg = msg,
+                    selfUid = selfUid,
+                    serverBadgeName = if (multiServer) serverNameFor(msg.serverId) else null,
+                )
             }
         }
 
@@ -316,7 +352,7 @@ private fun ConversationDetailView(
 }
 
 @Composable
-private fun MessageBubble(msg: ChatMessage, selfUid: String) {
+private fun MessageBubble(msg: ChatMessage, selfUid: String, serverBadgeName: String?) {
     val isFromSelf = msg.isFromSelf || msg.senderUid == selfUid
     val bubbleColor = if (isFromSelf) TacticalAccent.copy(alpha = 0.25f) else TacticalSurface
     val alignment = if (isFromSelf) Alignment.End else Alignment.Start
@@ -326,13 +362,22 @@ private fun MessageBubble(msg: ChatMessage, selfUid: String) {
         horizontalAlignment = alignment,
     ) {
         if (!isFromSelf) {
-            Text(
-                msg.senderCallsign,
-                color = TacticalAccent,
-                style = MaterialTheme.typography.labelSmall,
-                fontFamily = FontFamily.Monospace,
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier.padding(start = 10.dp, bottom = 2.dp),
-            )
+            ) {
+                Text(
+                    msg.senderCallsign,
+                    color = TacticalAccent,
+                    style = MaterialTheme.typography.labelSmall,
+                    fontFamily = FontFamily.Monospace,
+                )
+                // Which server this message arrived on (multi-server).
+                if (serverBadgeName != null) {
+                    Spacer(Modifier.width(6.dp))
+                    ChatServerBadge(name = serverBadgeName, serverId = msg.serverId)
+                }
+            }
         }
         Box(
             modifier = Modifier
@@ -356,6 +401,47 @@ private fun MessageBubble(msg: ChatMessage, selfUid: String) {
             }
         }
     }
+}
+
+/**
+ * Small colored chip naming which TAK server a message/thread belongs to.
+ * The hue is derived deterministically from the serverId so a given server
+ * always reads the same color across bubbles, rows and the contact list —
+ * matching iOS's ChatServerBadge.
+ */
+@Composable
+private fun ChatServerBadge(name: String, serverId: String?) {
+    val color = serverBadgeColor(serverId)
+    Box(
+        modifier = Modifier
+            .clip(RoundedCornerShape(4.dp))
+            .background(color.copy(alpha = 0.22f))
+            .padding(horizontal = 5.dp, vertical = 1.dp),
+    ) {
+        Text(
+            name,
+            color = color,
+            style = MaterialTheme.typography.labelSmall,
+            fontWeight = FontWeight.SemiBold,
+            maxLines = 1,
+        )
+    }
+}
+
+private val SERVER_BADGE_PALETTE = listOf(
+    Color(0xFF4FC3F7), // light blue
+    Color(0xFF81C784), // green
+    Color(0xFFFFB74D), // orange
+    Color(0xFFBA68C8), // purple
+    Color(0xFF4DD0E1), // cyan
+    Color(0xFFE57373), // red
+    Color(0xFFFFD54F), // amber
+)
+
+private fun serverBadgeColor(serverId: String?): Color {
+    if (serverId == null) return Color(0xFF90A4AE) // blue-grey = broadcast/all servers
+    val idx = (serverId.hashCode() and 0x7fffffff) % SERVER_BADGE_PALETTE.size
+    return SERVER_BADGE_PALETTE[idx]
 }
 
 private fun statusSuffix(status: ChatStatus, isFromSelf: Boolean): String {
@@ -450,11 +536,14 @@ private fun sendChat(
         timeIso = now,
         status = ChatStatus.SENDING,
         isFromSelf = true,
+        serverId = convo.serverId,
     )
     app.chatStore.markOutgoing(message)
 
     scope.launch {
-        val sent = app.serverManager.sendCoT(generated.xml)
+        // Route to the conversation's origin server for per-server DMs;
+        // group/broadcast rooms (serverId == null) fan out to all servers.
+        val sent = app.serverManager.sendCoT(generated.xml, serverId = convo.serverId)
         app.chatStore.updateMessageStatus(
             conversationId = convo.id,
             messageId = generated.messageId,

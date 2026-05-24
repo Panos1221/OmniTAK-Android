@@ -120,6 +120,9 @@ class ChatStore {
             lastMessagePreview = message.text,
             lastActivityIso = message.timeIso,
             unread = (current?.unread ?: 0) + if (incrementUnread) 1 else 0,
+            // Per-server DM scoping: remember which server this thread is on
+            // so replies route back to it. Group/broadcast rooms stay null.
+            serverId = current?.serverId ?: if (!isGroup) message.serverId else null,
         )
         _conversations.value = _conversations.value + (message.conversationId to next)
     }

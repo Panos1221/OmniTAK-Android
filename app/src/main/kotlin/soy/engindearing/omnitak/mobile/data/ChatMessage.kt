@@ -21,6 +21,12 @@ data class ChatMessage(
     val timeIso: String,
     val status: ChatStatus = ChatStatus.RECEIVED,
     val isFromSelf: Boolean = false,
+    /**
+     * Source server (received) / target server (sent), = [TAKServer.id].
+     * null for mesh chat and for messages predating multi-server. Drives the
+     * per-message server badge and per-server DM conversation scoping.
+     */
+    val serverId: String? = null,
 )
 
 data class ChatParticipant(
@@ -36,6 +42,13 @@ data class ChatConversation(
     val lastMessagePreview: String? = null,
     val lastActivityIso: String? = null,
     val unread: Int = 0,
+    /**
+     * TAK server this (per-server) DM thread belongs to, = [TAKServer.id].
+     * null for the merged All-Chat broadcast room and for mesh chat, which
+     * broadcast to every connected server. Used to route DM replies back to
+     * their origin server (multi-server parity with iOS).
+     */
+    val serverId: String? = null,
 )
 
 object ChatRoom {
@@ -44,8 +57,18 @@ object ChatRoom {
     const val ALL_USERS = "All Chat Users"
     const val BROADCAST = "BROADCAST"
 
-    fun directConversationId(uidA: String, uidB: String): String {
+    /**
+     * Deterministic DM bucket. When [serverId] is given the bucket is scoped
+     * per server (DM-{serverId}-{uidA}-{uidB}) so a DM with the same callsign
+     * on two different TAK servers stays in two separate threads — matches
+     * iOS's per-server DM scoping.
+     */
+    fun directConversationId(uidA: String, uidB: String, serverId: String? = null): String {
         val sorted = listOf(uidA, uidB).sorted()
-        return "DM-${sorted[0]}-${sorted[1]}"
+        return if (serverId != null) {
+            "DM-$serverId-${sorted[0]}-${sorted[1]}"
+        } else {
+            "DM-${sorted[0]}-${sorted[1]}"
+        }
     }
 }
