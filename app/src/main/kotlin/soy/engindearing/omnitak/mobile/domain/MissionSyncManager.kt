@@ -1,0 +1,148 @@
+package soy.engindearing.omnitak.mobile.domain
+
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.withContext
+import soy.engindearing.omnitak.mobile.data.CertVault
+import soy.engindearing.omnitak.mobile.data.TAKServer
+import soy.engindearing.omnitak.mobile.data.TakDataPackageInfo
+import soy.engindearing.omnitak.mobile.data.TakMissionInfo
+import soy.engindearing.omnitak.mobile.data.TakRestApiClient
+
+/**
+ * Multi-server mission / data-package sync, driven entirely by the real TAK
+ * Marti REST API ([TakRestApiClient]) — no stubs. The Android counterpart to
+ * iOS's MissionSyncManager.
+ *
+ * Servers come from [ServerManager] (single source of truth): every ENABLED,
+ * TLS, cert-bearing server participates at once. Each is probed + fetched in
+ * parallel; the screen aggregates across all of them. Connection status is
+ * derived from a live reachability probe on every refresh, not a sticky flag,
+ * so it always reflects reality.
+ */
+class MissionSyncManager(
+    private val serverManager: ServerManager,
+    private val certVault: CertVault?,
+) {
+
+    private val _sessions = MutableStateFlow<List<ServerSyncSession>>(emptyList())
+    val sessions: StateFlow<List<ServerSyncSession>> = _sessions.asStateFlow()
+
+    private val _isRefreshing = MutableStateFlow(false)
+    val isRefreshing: StateFlow<Boolean> = _isRefreshing.asStateFlow()
+
+    private val _lastRefresh = MutableStateFlow<Long?>(null)
+    val lastRefresh: StateFlow<Long?> = _lastRefresh.asStateFlow()
+
+    /** Enrolled, enabled, TLS servers — the only ones that can do mTLS sync. */
+    private fun enabledServers(): List<TAKServer> =
+        serverManager.servers.value.filter { it.enabled && it.useTLS && it.certificateName != null }
+
+    /**
+     * Refresh every enabled server in parallel. Existing data is preserved and
+     * rows flip to [MissionServerStatus.Checking] while in flight, so the UI
+     * never blanks mid-refresh.
+     */
+    suspend fun refreshAll() {
+        val servers = enabledServers()
+        if (servers.isEmpty()) {
+            _sessions.value = emptyList()
+            return
+        }
+        _isRefreshing.value = true
+        val prior = _sessions.value.associateBy { it.serverId }
+        _sessions.value = servers.map { sv ->
+            prior[sv.id]?.copy(status = MissionServerStatus.Checking)
+                ?: ServerSyncSession(sv.id, sv.name, sv.host, MissionServerStatus.Checking)
+        }
+
+        val results = coroutineScope {
+            servers.map { sv -> async(Dispatchers.IO) { sync(sv) } }.awaitAll()
+        }
+        _sessions.value = results.sortedBy { it.serverName.lowercase() }
+        _isRefreshing.value = false
+        _lastRefresh.value = System.currentTimeMillis()
+    }
+
+    /** Refresh a single server (tap-to-retry on its row). */
+    suspend fun refresh(serverId: String) {
+        val sv = enabledServers().firstOrNull { it.id == serverId } ?: return
+        _sessions.value = _sessions.value.map {
+            if (it.serverId == serverId) it.copy(status = MissionServerStatus.Checking) else it
+        }
+        val updated = withContext(Dispatchers.IO) { sync(sv) }
+        _sessions.value = if (_sessions.value.any { it.serverId == serverId }) {
+            _sessions.value.map { if (it.serverId == serverId) updated else it }
+        } else {
+            (_sessions.value + updated).sortedBy { it.serverName.lowercase() }
+        }
+    }
+
+    /**
+     * Probe + fetch one server (blocking; call on Dispatchers.IO). Missions and
+     * data packages are fetched independently and tolerated per-endpoint — taky
+     * has no `/Marti/api/missions`, so missions come back empty while its data
+     * packages still load.
+     */
+    private fun sync(server: TAKServer): ServerSyncSession {
+        val client = TakRestApiClient(server, certVault)
+        val now = System.currentTimeMillis()
+        val base = ServerSyncSession(server.id, server.name, server.host, MissionServerStatus.Checking, lastChecked = now)
+        return try {
+            client.checkReachability()
+            val missions = runCatching { client.getMissions() }.getOrDefault(emptyList())
+            val packages = runCatching { client.getDataPackages() }.getOrDefault(emptyList())
+            base.copy(
+                status = MissionServerStatus.Online,
+                missions = missions,
+                dataPackages = packages,
+                lastChecked = System.currentTimeMillis(),
+            )
+        } catch (t: Throwable) {
+            base.copy(status = MissionServerStatus.Offline(t.message ?: t.javaClass.simpleName))
+        }
+    }
+}
+
+// MARK: - Per-server status + session + aggregated rows
+
+sealed interface MissionServerStatus {
+    data object Checking : MissionServerStatus
+    data object Online : MissionServerStatus
+    data class Offline(val reason: String) : MissionServerStatus
+
+    val isOnline: Boolean get() = this is Online
+}
+
+data class ServerSyncSession(
+    val serverId: String,
+    val serverName: String,
+    val host: String,
+    val status: MissionServerStatus,
+    val missions: List<TakMissionInfo> = emptyList(),
+    val dataPackages: List<TakDataPackageInfo> = emptyList(),
+    val lastChecked: Long? = null,
+) {
+    val itemCount: Int get() = missions.size + dataPackages.size
+}
+
+data class AggregatedMission(
+    val serverId: String,
+    val serverName: String,
+    val mission: TakMissionInfo,
+) {
+    val id: String get() = "$serverId:${mission.name}"
+}
+
+data class AggregatedPackage(
+    val serverId: String,
+    val serverName: String,
+    val pkg: TakDataPackageInfo,
+) {
+    val id: String get() = "$serverId:${pkg.hash}"
+}

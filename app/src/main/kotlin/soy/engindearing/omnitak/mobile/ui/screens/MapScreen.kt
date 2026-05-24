@@ -8,6 +8,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Brush
 import androidx.compose.material.icons.filled.Chat
+import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material.icons.filled.AddLocation
 import androidx.compose.material.icons.filled.FlightTakeoff
 import androidx.compose.material.icons.filled.GridOn
@@ -1013,6 +1014,7 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
                 ToolEntry("layers", Icons.Filled.Layers, "Layers"),
                 ToolEntry("adsb", Icons.Filled.Flight, if (adsbActive) "ADSB on" else "ADSB"),
                 ToolEntry("chat", Icons.Filled.Chat, "Chat"),
+                ToolEntry("missionsync", Icons.Filled.Sync, "Mission Sync"),
                 ToolEntry("teams", Icons.Filled.Groups, "Teams"),
                 ToolEntry(
                     "nav",
@@ -1047,6 +1049,7 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
                         }
                     }
                     "chat" -> onOpenTab("chat")
+                    "missionsync" -> onOpenTab("missionsync")
                     "teams" -> teamsPanelOpen = true
                     "nav" -> {
                         if (!locationGranted) {
