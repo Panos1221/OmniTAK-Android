@@ -185,6 +185,9 @@ dependencies {
     // runTest / StandardTestDispatcher for coroutine-driven tests
     // (e.g. MeshtasticCoTBridge enabled toggle).
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.8.1")
+    // Real org.json impl so JVM tests can exercise JSONObject/JSONArray
+    // (e.g. CesiumEntityJson serialization). Android stubs them otherwise.
+    testImplementation("org.json:json:20240303")
 
     // Instrumented tests — symbology validation runs on a real device or
     // emulator because MapLibre's SurfaceView renders through native GL

@@ -12,6 +12,7 @@ import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material.icons.filled.AddLocation
 import androidx.compose.material.icons.filled.FlightTakeoff
 import androidx.compose.material.icons.filled.GridOn
+import androidx.compose.material.icons.filled.LocalFireDepartment
 import androidx.compose.material.icons.filled.RadioButtonUnchecked
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Explore
@@ -134,6 +135,12 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
     var radialAnchor by remember { mutableStateOf<Offset?>(null) }
     var radialLatLng by remember { mutableStateOf<LatLng?>(null) }
     var markerSheetLatLng by remember { mutableStateOf<LatLng?>(null) }
+    // #29 — FEMA / IC marker palette. Tap a FEMA action → camera-center is
+    // captured here → palette sheet picks an icon → drop emits the CoT
+    // event with the FEMA cotType + iconsetpath. Independent of the
+    // generic markerSheetLatLng pipeline so the affiliation-based UI
+    // doesn't have to know about FEMA-specific fields.
+    var femaPaletteLatLng by remember { mutableStateOf<LatLng?>(null) }
     var editingMarker by remember { mutableStateOf<CoTEvent?>(null) }
     var recenterTick by remember { mutableStateOf(0) }
     var zoomInTick by remember { mutableStateOf(0) }
@@ -833,6 +840,45 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
                         }
                     }
                 },
+                onUploadToServer = run {
+                    val anyEnabledTls = app.serverManager.servers.collectAsState().value
+                        .any { it.enabled && it.useTLS && it.certificateName != null }
+                    if (!anyEnabledTls || selectedEvents.isEmpty()) {
+                        null
+                    } else {
+                        {
+                            lassoActionsOpen = false
+                            val ctx = appContext
+                            val ts = System.currentTimeMillis()
+                            val pkgName = "lasso-${selectedEvents.size}-$ts"
+                            scope.launch {
+                                val file = withContext(Dispatchers.IO) {
+                                    soy.engindearing.omnitak.mobile.domain.LassoExporters
+                                        .writeMissionPackage(
+                                            context = ctx,
+                                            name = pkgName,
+                                            events = selectedEvents,
+                                        )
+                                }
+                                val creator = app.userPrefsStore.ensureSelfUid()
+                                val outcome = app.missionSyncManager.uploadDataPackage(
+                                    zipBytes = file.readBytes(),
+                                    filename = file.name,
+                                    creatorUid = creator,
+                                )
+                                val msg = when (outcome) {
+                                    is soy.engindearing.omnitak.mobile.domain.UploadOutcome.Hash ->
+                                        "Uploaded → ${outcome.serverName} · hash ${outcome.hash.take(10)}…"
+                                    soy.engindearing.omnitak.mobile.domain.UploadOutcome.NoServer ->
+                                        "No enrolled TAK server to upload to"
+                                    is soy.engindearing.omnitak.mobile.domain.UploadOutcome.Failed ->
+                                        "Upload failed: ${outcome.reason}"
+                                }
+                                toast(msg)
+                            }
+                        }
+                    }
+                },
                 onExportKML = {
                     lassoActionsOpen = false
                     if (selectedEvents.isEmpty()) {
@@ -1015,6 +1061,7 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
                 ToolEntry("adsb", Icons.Filled.Flight, if (adsbActive) "ADSB on" else "ADSB"),
                 ToolEntry("chat", Icons.Filled.Chat, "Chat"),
                 ToolEntry("missionsync", Icons.Filled.Sync, "Mission Sync"),
+                ToolEntry("fema", Icons.Filled.LocalFireDepartment, "FEMA / IC"),
                 ToolEntry("teams", Icons.Filled.Groups, "Teams"),
                 ToolEntry(
                     "nav",
@@ -1050,6 +1097,12 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
                     }
                     "chat" -> onOpenTab("chat")
                     "missionsync" -> onOpenTab("missionsync")
+                    "fema" -> {
+                        val lat = app.mapCameraStore.lastTargetLat
+                        val lon = app.mapCameraStore.lastTargetLon
+                        femaPaletteLatLng = if (lat != null && lon != null) LatLng(lat, lon)
+                        else LatLng(47.6588, -117.4260)
+                    }
                     "teams" -> teamsPanelOpen = true
                     "nav" -> {
                         if (!locationGranted) {
@@ -1295,6 +1348,52 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
                 markerSheetLatLng = null
                 editingMarker = null
             },
+        )
+
+        soy.engindearing.omnitak.mobile.ui.components.FemaMarkerPaletteSheet(
+            visible = femaPaletteLatLng != null,
+            latLng = femaPaletteLatLng,
+            onConfirm = { picked ->
+                val ll = femaPaletteLatLng
+                if (ll != null) {
+                    val uid = "local-fema-${System.currentTimeMillis()}"
+                    app.contactStore.ingest(
+                        soy.engindearing.omnitak.mobile.data.CoTEvent(
+                            uid = uid,
+                            type = picked.icon.cotType,
+                            lat = ll.latitude,
+                            lon = ll.longitude,
+                            hae = 0.0,
+                            callsign = picked.name,
+                            remarks = picked.remarks,
+                            iconsetPath = picked.icon.iconsetPath,
+                        )
+                    )
+                    // Broadcast to every enabled server so peers with the
+                    // FEMA catalog see the right glyph; receivers without
+                    // it fall back to the friendly-installation render
+                    // ATAK/iTAK does for `a-f-G-I-*`.
+                    scope.launch {
+                        val xml = soy.engindearing.omnitak.mobile.domain.CotBuilders
+                            .rebuildEvent(
+                                soy.engindearing.omnitak.mobile.data.CoTEvent(
+                                    uid = uid,
+                                    type = picked.icon.cotType,
+                                    lat = ll.latitude,
+                                    lon = ll.longitude,
+                                    callsign = picked.name,
+                                    remarks = picked.remarks,
+                                    iconsetPath = picked.icon.iconsetPath,
+                                ),
+                                destUids = emptyList(),
+                            )
+                        runCatching { app.serverManager.sendCoT(xml) }
+                    }
+                    toast("Dropped ${picked.icon.label} “${picked.name}”")
+                }
+                femaPaletteLatLng = null
+            },
+            onDismiss = { femaPaletteLatLng = null },
         )
 
         if (drawingKind != null) {

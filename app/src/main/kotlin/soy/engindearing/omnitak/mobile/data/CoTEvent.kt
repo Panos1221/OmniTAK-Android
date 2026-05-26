@@ -38,6 +38,12 @@ data class CoTEvent(
     val callsign: String? = null,
     val remarks: String = "",
     val rawXml: String? = null,
+    // Optional ATAK `<usericon iconsetpath="...">` value. FEMA / IC
+    // markers carry `COT_MAPPING_FEMA/<category>/<kind>` here so peers
+    // with the FEMA catalog render the right glyph; receivers without
+    // it fall back to the friendly-ground-installation default that
+    // [type] declares. See `FemaIconCatalog` and #29 / iOS PR for #13.
+    val iconsetPath: String? = null,
 ) {
     val affiliation: CoTAffiliation
         get() {

@@ -358,26 +358,27 @@ private fun settingsFieldColors() = TextFieldDefaults.colors(
 )
 
 /**
- * Standard ATAK CoT team colors. The exact UPPERCASE strings are what
- * ATAK clients expect in `<__group name="..." role="..."/>` — anything
- * else gets rendered as the default cyan team. Hex values are tuned for
- * readability against the OmniTAK dark surface.
+ * Standard ATAK CoT team colors. Title Case matches ATAK / OpenTakServer
+ * (`<__group name="Cyan" role="Team Member"/>`) — OTS's DB keys teams by
+ * the canonical capitalized name and rejects all-caps variants in its web
+ * UI. Hex values are tuned for readability against the OmniTAK dark
+ * surface.
  */
 private val ATAK_TEAM_COLORS: List<Pair<String, Color>> = listOf(
-    "WHITE" to Color(0xFFFFFFFF),
-    "YELLOW" to Color(0xFFFFEB3B),
-    "ORANGE" to Color(0xFFFF9800),
-    "MAGENTA" to Color(0xFFE91E63),
-    "RED" to Color(0xFFF44336),
-    "MAROON" to Color(0xFF8B0000),
-    "PURPLE" to Color(0xFF9C27B0),
-    "DARK BLUE" to Color(0xFF1A237E),
-    "BLUE" to Color(0xFF2196F3),
-    "CYAN" to Color(0xFF00BCD4),
-    "TEAL" to Color(0xFF009688),
-    "GREEN" to Color(0xFF4CAF50),
-    "DARK GREEN" to Color(0xFF1B5E20),
-    "BROWN" to Color(0xFF6D4C41),
+    "White" to Color(0xFFFFFFFF),
+    "Yellow" to Color(0xFFFFEB3B),
+    "Orange" to Color(0xFFFF9800),
+    "Magenta" to Color(0xFFE91E63),
+    "Red" to Color(0xFFF44336),
+    "Maroon" to Color(0xFF8B0000),
+    "Purple" to Color(0xFF9C27B0),
+    "Dark Blue" to Color(0xFF1A237E),
+    "Blue" to Color(0xFF2196F3),
+    "Cyan" to Color(0xFF00BCD4),
+    "Teal" to Color(0xFF009688),
+    "Green" to Color(0xFF4CAF50),
+    "Dark Green" to Color(0xFF1B5E20),
+    "Brown" to Color(0xFF6D4C41),
 )
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -385,7 +386,7 @@ private val ATAK_TEAM_COLORS: List<Pair<String, Color>> = listOf(
 private fun TeamColorDropdown(value: String, onSelect: (String) -> Unit) {
     var expanded by remember { mutableStateOf(false) }
     val current = ATAK_TEAM_COLORS.firstOrNull { it.first.equals(value, ignoreCase = true) }
-        ?: ("CYAN" to Color(0xFF00BCD4))
+        ?: ("Cyan" to Color(0xFF00BCD4))
 
     ExposedDropdownMenuBox(
         expanded = expanded,

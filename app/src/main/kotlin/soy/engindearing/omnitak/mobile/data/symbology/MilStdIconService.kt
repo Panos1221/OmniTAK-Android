@@ -88,6 +88,13 @@ object MilStdIconService {
         CoTTypeDefinition("a-u-G-U", "SUGPU------.svg", "Unknown Ground", "Unknown ground unit", "unknown"),
         CoTTypeDefinition("a-u-G-U-C-I", "SUGPUCI----.svg", "Unknown Infantry", "Unknown infantry unit", "unknown"),
         CoTTypeDefinition("a-u-A", "SUA---------.svg", "Unknown Air", "Unknown aircraft", "unknown"),
+        // Unknown UAS — the default targets for FAA Remote ID broadcasts.
+        // Multirotor and fixed-wing UAS pre-loaded in the floor so RID
+        // tracks render with the correct multirotor / fixed-wing glyph
+        // even before the JSON catalogue loads, and the unit tests on the
+        // CesiumEntityJson bridge are stable without Application.onCreate.
+        CoTTypeDefinition("a-u-A-M-H-Q", "SUAPMHQ----.svg", "Unknown UAS Multirotor", "Multirotor UAS detected via FAA Remote ID", "unknown"),
+        CoTTypeDefinition("a-u-A-M-F-Q", "SUAPMFQ----.svg", "Unknown UAS Fixed Wing", "Fixed-wing UAS detected via FAA Remote ID", "unknown"),
     )
 
     /**

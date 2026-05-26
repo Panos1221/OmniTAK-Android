@@ -16,10 +16,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.viewinterop.AndroidView
-import org.json.JSONArray
 import org.json.JSONObject
 import org.maplibre.android.geometry.LatLng
-import soy.engindearing.omnitak.mobile.data.CoTAffiliation
 import soy.engindearing.omnitak.mobile.data.CoTEvent
 
 /**
@@ -68,7 +66,7 @@ fun CesiumMapView(
     fun pushEntities() {
         val wv = webViewRef.value ?: return
         if (!ready.value) return
-        val json = buildEntitiesJson(
+        val json = buildCesiumEntitiesJson(
             contactsState.value, selfLatState.value, selfLonState.value, selfCallsignState.value,
         )
         wv.evaluateJavascript("window.OmniBridge.setEntities($json);", null)
@@ -168,45 +166,3 @@ fun CesiumMapView(
     }
 }
 
-private fun buildEntitiesJson(
-    contacts: List<CoTEvent>,
-    selfLat: Double?,
-    selfLon: Double?,
-    selfCallsign: String,
-): String {
-    val arr = JSONArray()
-    if (selfLat != null && selfLon != null && !selfLat.isNaN() && !selfLon.isNaN()) {
-        arr.put(
-            JSONObject().apply {
-                put("uid", "__self__")
-                put("lat", selfLat)
-                put("lon", selfLon)
-                put("callsign", selfCallsign)
-                put("affiliation", "f")
-                put("kind", "self")
-            },
-        )
-    }
-    for (c in contacts) {
-        if (c.lat.isNaN() || c.lon.isNaN()) continue
-        arr.put(
-            JSONObject().apply {
-                put("uid", c.uid)
-                put("lat", c.lat)
-                put("lon", c.lon)
-                if (c.hae != 0.0) put("hae", c.hae)
-                c.callsign?.let { put("callsign", it) }
-                put("affiliation", affChar(c.affiliation))
-                put("kind", "contact")
-            },
-        )
-    }
-    return arr.toString()
-}
-
-private fun affChar(a: CoTAffiliation): String = when (a) {
-    CoTAffiliation.FRIEND -> "f"
-    CoTAffiliation.HOSTILE -> "h"
-    CoTAffiliation.NEUTRAL -> "n"
-    else -> "u"
-}

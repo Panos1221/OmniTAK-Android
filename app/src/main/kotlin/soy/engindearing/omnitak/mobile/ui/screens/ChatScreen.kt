@@ -79,6 +79,12 @@ fun ChatScreen(initialConversationId: String? = null) {
     val prefs by app.userPrefsStore.prefs.collectAsState(initial = UserPrefs())
     val chatScope = rememberCoroutineScope()
 
+    // Persist the canonical EUD UID on first chat-tab open even if PPLI
+    // hasn't run yet (no server connected, no GPS fix). This is the same
+    // UID PPLI uses — sending two different UIDs to a TAK server makes
+    // ATAK render the operator as two separate contacts (#9).
+    LaunchedEffect(Unit) { app.userPrefsStore.ensureSelfUid() }
+
     // Multi-server: resolve a serverId → display name so chat can badge which
     // server a message/thread came from. Badges only show when >1 server is
     // configured, otherwise they're noise.
@@ -118,7 +124,7 @@ fun ChatScreen(initialConversationId: String? = null) {
         ConversationDetailView(
             conversation = convo,
             messages = messages,
-            selfUid = selfUidFor(prefs),
+            selfUid = prefs.selfUid,
             selfCallsign = prefs.callsign,
             onBack = { selectedConversation = null },
             onSend = { text -> sendChat(app, convo, prefs, text, chatScope) },
@@ -460,14 +466,6 @@ private fun formatTime(iso: String): String = runCatching {
     LOCAL_TIME_FMT.format(Instant.parse(iso))
 }.getOrElse { iso }
 
-/**
- * Derive a stable self-UID from the operator's callsign + team so it
- * survives app restarts without needing a separate setting. Real
- * device UIDs come from the presence CoT once that lands in a later slice.
- */
-private fun selfUidFor(prefs: UserPrefs): String =
-    "OMNITAK-ANDROID-${prefs.callsign}-${prefs.team}"
-
 private fun sendChat(
     app: OmniTAKApp,
     convo: ChatConversation,
@@ -475,8 +473,26 @@ private fun sendChat(
     text: String,
     scope: kotlinx.coroutines.CoroutineScope,
 ) {
-    val senderUid = selfUidFor(prefs)
+    // Single EUD UID across PPLI + GeoChat + markers. Reuses the one
+    // SelfPositionBroadcaster mints on first PPLI; if we send chat
+    // before any PPLI has run (offline-typed message, fresh install)
+    // ensureSelfUid lazily generates + persists one so the wire never
+    // carries an ad-hoc identifier. Fixes #9 (two-contact ghost on
+    // receiving ATAK clients).
     val now = DateTimeFormatter.ISO_INSTANT.format(Instant.now())
+    scope.launch {
+        sendChatInner(app, convo, prefs, text, now)
+    }
+}
+
+private suspend fun sendChatInner(
+    app: OmniTAKApp,
+    convo: ChatConversation,
+    prefs: UserPrefs,
+    text: String,
+    now: String,
+) {
+    val senderUid = app.userPrefsStore.ensureSelfUid()
 
     // GAP-122 / GAP-124 — Mesh conversations route through
     // MeshtasticManager (portnum 1) instead of the TAK server's CoT
@@ -502,14 +518,12 @@ private fun sendChat(
             isFromSelf = true,
         )
         app.chatStore.markOutgoing(outgoing)
-        scope.launch {
-            val sent = app.meshtastic.sendMeshChat(text, channelIndex, toNodeId)
-            app.chatStore.updateMessageStatus(
-                conversationId = convo.id,
-                messageId = msgId,
-                status = if (sent) ChatStatus.SENT else ChatStatus.FAILED,
-            )
-        }
+        val sent = app.meshtastic.sendMeshChat(text, channelIndex, toNodeId)
+        app.chatStore.updateMessageStatus(
+            conversationId = convo.id,
+            messageId = msgId,
+            status = if (sent) ChatStatus.SENT else ChatStatus.FAILED,
+        )
         return
     }
 
@@ -540,14 +554,12 @@ private fun sendChat(
     )
     app.chatStore.markOutgoing(message)
 
-    scope.launch {
-        // Route to the conversation's origin server for per-server DMs;
-        // group/broadcast rooms (serverId == null) fan out to all servers.
-        val sent = app.serverManager.sendCoT(generated.xml, serverId = convo.serverId)
-        app.chatStore.updateMessageStatus(
-            conversationId = convo.id,
-            messageId = generated.messageId,
-            status = if (sent) ChatStatus.SENT else ChatStatus.FAILED,
-        )
-    }
+    // Route to the conversation's origin server for per-server DMs;
+    // group/broadcast rooms (serverId == null) fan out to all servers.
+    val sent = app.serverManager.sendCoT(generated.xml, serverId = convo.serverId)
+    app.chatStore.updateMessageStatus(
+        conversationId = convo.id,
+        messageId = generated.messageId,
+        status = if (sent) ChatStatus.SENT else ChatStatus.FAILED,
+    )
 }

@@ -81,19 +81,16 @@ object ContactLayer {
                 )
                 markers[c.uid] = marker
             } else {
-                // Position may have moved (live PPLI). Re-add to
-                // refresh — Marker's `position` setter doesn't
-                // always trigger a redraw on 11.x.
-                if (existing.position != ll || existing.icon != icon) {
-                    map.removeMarker(existing)
-                    val marker = map.addMarker(
-                        MarkerOptions()
-                            .position(ll)
-                            .title(c.callsign ?: c.uid)
-                            .icon(icon)
-                    )
-                    markers[c.uid] = marker
-                }
+                // In-place mutation on PPLI ticks. MapLibre 11.8's
+                // Marker.setPosition / setIcon both call
+                // map.updateMarker(this) internally, so the annotation
+                // view is preserved across updates — fixes the
+                // remove+readd flicker the previous workaround caused
+                // (port of iOS PR D #1 / closes #23).
+                if (existing.position != ll) existing.position = ll
+                if (existing.icon != icon) existing.icon = icon
+                val newTitle = c.callsign ?: c.uid
+                if (existing.title != newTitle) existing.title = newTitle
             }
         }
     }

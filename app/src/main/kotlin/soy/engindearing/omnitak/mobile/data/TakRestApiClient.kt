@@ -83,6 +83,97 @@ class TakRestApiClient(
         return parseDataPackages(body)
     }
 
+    /**
+     * `PUT /Marti/api/missions/{name}?creatorUid&tool&description&group&bbox`
+     * Returns the server's view of the freshly-created mission. iOS parity
+     * for issue #14 (commit ffcd48d): Marti tolerates an empty body on
+     * create, but some CIV builds insist on valid JSON, so we ship `{}`.
+     * Body shape on success varies across TAK 5.7 / OTS / taky — when the
+     * server returns 2xx with an unparseable / empty body we synthesise
+     * the response from the create args. Closes #30 slice 1.
+     */
+    fun createMission(
+        name: String,
+        creatorUid: String,
+        tool: String = "public",
+        description: String? = null,
+        groups: List<String> = emptyList(),
+        defaultRole: String? = null,
+        bbox: MissionBbox? = null,
+    ): TakMissionInfo {
+        val q = buildList {
+            add("creatorUid" to creatorUid)
+            add("tool" to tool)
+            if (!description.isNullOrBlank()) add("description" to description)
+            if (!defaultRole.isNullOrBlank()) add("defaultRole" to defaultRole)
+            groups.filter { it.isNotBlank() }.forEach { add("group" to it) }
+            bbox?.let { add("bbox" to it.queryValue) }
+        }
+        val (code, body) = httpRequest(
+            method = "PUT",
+            path = "/Marti/api/missions/${urlSegment(name)}",
+            query = q,
+            body = "{}".toByteArray(Charsets.UTF_8),
+            contentType = "application/json",
+        )
+        if (code !in 200..299) throw ApiException(httpReason(code, body))
+        // Best-effort decode; fall back to a synthesized record so the UI
+        // gets something back when the server returns 200 with empty body.
+        val parsed = runCatching { parseMissions(body).firstOrNull() }.getOrNull()
+        return parsed ?: TakMissionInfo(
+            name = name,
+            description = description,
+            creatorUid = creatorUid,
+            keywords = emptyList(),
+            contentCount = 0,
+        )
+    }
+
+    /**
+     * `POST /Marti/sync/missionupload` — multipart upload of a TAK
+     * Mission Package (.zip). Returns the server's SHA-256 hash from
+     * the plain-text response (`https://server/Marti/sync/content?hash=…`,
+     * or fall back to `hash=…` token form for older Marti builds).
+     */
+    fun uploadDataPackage(
+        zipBytes: ByteArray,
+        filename: String,
+        creatorUid: String,
+    ): String {
+        val boundary = "omnitak-${java.util.UUID.randomUUID()}"
+        val body = buildMultipartPackage(boundary, filename, zipBytes)
+        val (code, response) = httpRequest(
+            method = "POST",
+            path = "/Marti/sync/missionupload",
+            query = listOf(
+                "creatorUid" to creatorUid,
+                "filename" to filename,
+            ),
+            body = body,
+            contentType = "multipart/form-data; boundary=$boundary",
+        )
+        if (code !in 200..299) throw ApiException(httpReason(code, response))
+        return extractHash(response)
+            ?: throw ApiException("Server accepted upload but returned no hash: ${response.take(120)}")
+    }
+
+    /**
+     * `PUT /Marti/api/missions/{name}/contents` — attach a previously
+     * uploaded data-package hash to the named mission. Mission must
+     * already exist; pair with [createMission] + [uploadDataPackage].
+     */
+    fun attachHashToMission(missionName: String, hash: String) {
+        val payload = """{"hashes":["${jsonEscape(hash)}"]}""".toByteArray(Charsets.UTF_8)
+        val (code, body) = httpRequest(
+            method = "PUT",
+            path = "/Marti/api/missions/${urlSegment(missionName)}/contents",
+            query = emptyList(),
+            body = payload,
+            contentType = "application/json",
+        )
+        if (code !in 200..299) throw ApiException(httpReason(code, body))
+    }
+
     // ------------------------------------------------------------------
     // JSON parsing — tolerant of the three envelope shapes.
     // ------------------------------------------------------------------
@@ -143,6 +234,53 @@ class TakRestApiClient(
     // ------------------------------------------------------------------
     // HTTP + mTLS (HttpsURLConnection, no extra deps).
     // ------------------------------------------------------------------
+
+    /**
+     * Generalised mTLS request used by the write endpoints. GET callers
+     * (legacy [httpGet]) keep their narrow signature; write callers use
+     * this so the body + content-type wiring is in one place.
+     */
+    internal fun httpRequest(
+        method: String,
+        path: String,
+        query: List<Pair<String, String>>,
+        body: ByteArray?,
+        contentType: String?,
+    ): Pair<Int, String> {
+        val url = URL(baseUrl(path) + encodeQuery(query))
+        val conn = (url.openConnection() as HttpsURLConnection).apply {
+            connectTimeout = CONNECT_TIMEOUT_MS
+            readTimeout = WRITE_READ_TIMEOUT_MS
+            requestMethod = method
+            doInput = true
+            doOutput = body != null
+            setRequestProperty("Accept", "application/json")
+            if (contentType != null) setRequestProperty("Content-Type", contentType)
+            val user = server.username
+            val pass = server.password
+            if (!user.isNullOrBlank() && !pass.isNullOrBlank()) {
+                val raw = "$user:$pass".toByteArray(Charsets.UTF_8)
+                setRequestProperty("Authorization", "Basic " + Base64.encodeToString(raw, Base64.NO_WRAP))
+            }
+            val ctx = SSLContext.getInstance("TLS")
+            ctx.init(loadKeyManagers(), arrayOf(TrustAll), SecureRandom())
+            sslSocketFactory = ctx.socketFactory
+            hostnameVerifier = AcceptAllHostnames
+        }
+        return try {
+            conn.connect()
+            if (body != null) conn.outputStream.use { it.write(body) }
+            val code = conn.responseCode
+            val stream = if (code in 200..299) conn.inputStream else conn.errorStream
+            val text = stream?.bufferedReader(Charsets.UTF_8)?.use { it.readText() } ?: ""
+            code to text
+        } catch (t: Throwable) {
+            Log.w(TAG, "$method $path failed: ${t.javaClass.simpleName}: ${t.message}")
+            throw ApiException(t.message ?: t.javaClass.simpleName, t)
+        } finally {
+            conn.disconnect()
+        }
+    }
 
     private fun httpGet(path: String): Pair<Int, String> {
         val conn = (URL(baseUrl(path)).openConnection() as HttpsURLConnection).apply {
@@ -217,7 +355,116 @@ class TakRestApiClient(
         const val SECURE_API_PORT = 8443
         private const val CONNECT_TIMEOUT_MS = 10_000
         private const val READ_TIMEOUT_MS = 20_000
+        // Write endpoints (mission upload in particular) can carry
+        // multi-MB payloads. Bump the read timeout for those without
+        // affecting the snappier list reads.
+        private const val WRITE_READ_TIMEOUT_MS = 60_000
+
+        // ---- Exposed `internal` for unit-test instrumentation ----
+
+        /**
+         * Marti `missionupload` returns a URL like
+         * `https://server/Marti/sync/content?hash=ABC123…` on success.
+         * Older builds emit `Hash: ABC123` headers — handle both.
+         * Returns null when no hash can be parsed.
+         */
+        internal fun extractHash(body: String): String? {
+            val trimmed = body.trim()
+            if (trimmed.isEmpty()) return null
+            // Try URL query parse first.
+            runCatching {
+                val url = URL(trimmed)
+                val q = url.query.orEmpty()
+                q.split('&').forEach { pair ->
+                    val (k, v) = pair.split('=', limit = 2).let { it[0] to it.getOrNull(1).orEmpty() }
+                    if (k.equals("hash", ignoreCase = true) && v.isNotBlank()) return v
+                }
+            }
+            // Fallback: any `hash=...` token anywhere in the response.
+            val idx = trimmed.lowercase().indexOf("hash=")
+            if (idx >= 0) {
+                val tail = trimmed.substring(idx + "hash=".length)
+                val token = tail.takeWhile { it != '&' && !it.isWhitespace() }
+                if (token.isNotBlank()) return token
+            }
+            return null
+        }
+
+        /**
+         * URL-encode the path segment between slashes — mission names
+         * can contain spaces, slashes, and unicode that must round-trip
+         * through Marti without rewriting the route.
+         */
+        internal fun urlSegment(raw: String): String =
+            java.net.URLEncoder.encode(raw, Charsets.UTF_8).replace("+", "%20")
+
+        internal fun encodeQuery(pairs: List<Pair<String, String>>): String {
+            if (pairs.isEmpty()) return ""
+            val sb = StringBuilder("?")
+            pairs.forEachIndexed { i, (k, v) ->
+                if (i > 0) sb.append('&')
+                sb.append(java.net.URLEncoder.encode(k, Charsets.UTF_8))
+                    .append('=')
+                    .append(java.net.URLEncoder.encode(v, Charsets.UTF_8))
+            }
+            return sb.toString()
+        }
+
+        internal fun jsonEscape(raw: String): String =
+            buildString {
+                raw.forEach { c ->
+                    when (c) {
+                        '\\' -> append("\\\\")
+                        '"' -> append("\\\"")
+                        '\n' -> append("\\n")
+                        '\r' -> append("\\r")
+                        '\t' -> append("\\t")
+                        else -> if (c.code < 0x20) append("\\u%04x".format(c.code)) else append(c)
+                    }
+                }
+            }
+
+        /**
+         * Build the `multipart/form-data` body Marti's missionupload
+         * endpoint expects: one `assetfile` part containing the .zip
+         * with `application/x-zip-compressed` content-type.
+         */
+        internal fun buildMultipartPackage(
+            boundary: String,
+            filename: String,
+            zipBytes: ByteArray,
+        ): ByteArray {
+            val crlf = "\r\n"
+            val header = StringBuilder()
+                .append("--").append(boundary).append(crlf)
+                .append("Content-Disposition: form-data; name=\"assetfile\"; filename=\"")
+                .append(filename.replace("\"", "")).append('"').append(crlf)
+                .append("Content-Type: application/x-zip-compressed").append(crlf)
+                .append(crlf)
+                .toString()
+                .toByteArray(Charsets.UTF_8)
+            val footer = (crlf + "--" + boundary + "--" + crlf).toByteArray(Charsets.UTF_8)
+            val out = java.io.ByteArrayOutputStream(header.size + zipBytes.size + footer.size)
+            out.write(header)
+            out.write(zipBytes)
+            out.write(footer)
+            return out.toByteArray()
+        }
     }
+}
+
+/**
+ * Bounding box for [TakRestApiClient.createMission]. Marti expects
+ * `bbox=minLat,minLon,maxLat,maxLon` (no spaces) in WGS-84 degrees.
+ */
+data class MissionBbox(
+    val minLat: Double,
+    val minLon: Double,
+    val maxLat: Double,
+    val maxLon: Double,
+) {
+    val queryValue: String
+        get() = "$minLat,$minLon,$maxLat,$maxLon"
 }
 
 // MARK: - Marti API models (minimal subset the sync UI needs)
