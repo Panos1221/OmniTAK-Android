@@ -77,7 +77,12 @@ class CSREnrollmentService(
      */
     data class Result(
         val certificateName: String,
-        val certificatePassword: String
+        val certificatePassword: String,
+        // Filename of the PEM-encoded CA chain persisted alongside the
+        // .p12 (e.g. `ca-host-username.pem`). Plumb this onto the new
+        // TAKServer so subsequent connections pin against it instead of
+        // accepting any server cert (#38 / GAP-106).
+        val caCertificateName: String?,
     )
 
     /**
@@ -112,7 +117,32 @@ class CSREnrollmentService(
         val certName = "${sanitize(config.host)}-${config.username}.p12"
         val saved = certVault.importBytes(certName, p12Bytes)
             ?: throw EnrollmentException("Failed to write enrolled cert to vault")
-        return Result(certificateName = saved, certificatePassword = String(p12Password))
+
+        // Pin against the enrollment CA chain on every future connect.
+        // `importBytes` returning null means the IO write failed — log
+        // and proceed without a pin rather than aborting the whole
+        // enrollment, since the client cert is already on disk and the
+        // operator can still connect (falling back to system trust).
+        val savedCa = if (response.caChain.isNotEmpty()) {
+            val caBytes = CaTrust.encodePemChain(response.caChain)
+            val caName = "ca-${sanitize(config.host)}-${config.username}.pem"
+            certVault.importBytes(caName, caBytes).also { written ->
+                if (written != null) {
+                    Log.i(TAG, "CA chain pinned as '$written' (${response.caChain.size} cert)")
+                } else {
+                    Log.w(TAG, "CA chain write failed — server will use system trust on connect")
+                }
+            }
+        } else {
+            Log.w(TAG, "Server returned 0 CA certs — no pin will be persisted")
+            null
+        }
+
+        return Result(
+            certificateName = saved,
+            certificatePassword = String(p12Password),
+            caCertificateName = savedCa,
+        )
     }
 
     // ------------------------------------------------------------------

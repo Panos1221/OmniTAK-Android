@@ -23,7 +23,6 @@ import java.net.InetSocketAddress
 import java.net.Socket
 import java.security.KeyStore
 import java.security.SecureRandom
-import java.security.cert.X509Certificate
 import javax.net.ssl.KeyManager
 import javax.net.ssl.KeyManagerFactory
 import javax.net.ssl.SSLContext
@@ -128,9 +127,10 @@ class TAKConnection(
      * TLS otherwise. TAK servers default to mTLS — without a client cert the
      * server closes the connection at handshake (PEER_DID_NOT_RETURN_A_CERTIFICATE).
      *
-     * Server-side trust still uses [TrustAllX509Manager] because TAK servers
-     * almost always present a self-signed CA. CA-import / pinning is the next
-     * GAP after this one.
+     * Server-side trust resolves in this order (#38 / GAP-106):
+     *   1. CA pin written during Quick Connect enrollment (preferred).
+     *   2. System trust store — for legacy `.p12` imports without a pin.
+     * No trust-all path remains.
      */
     private fun openTlsSocket(): Socket {
         val keyManagers = loadClientKeyManagers()
@@ -139,15 +139,51 @@ class TAKConnection(
         } else {
             Log.i(TAG, "TLS with client cert ${server.certificateName} (mTLS)")
         }
-        Log.w(TAG, "⚠ DEV-MODE server trust: accepting any server certificate. Add CA trust before shipping.")
+        val trustManager = loadServerTrustManager()
         val ctx = SSLContext.getInstance("TLS")
-        ctx.init(keyManagers, arrayOf<TrustManager>(TrustAllX509Manager()), SecureRandom())
+        ctx.init(keyManagers, arrayOf<TrustManager>(trustManager), SecureRandom())
         val s = ctx.socketFactory.createSocket() as SSLSocket
         s.tcpNoDelay = true
         s.soTimeout = READ_TIMEOUT_MS
         s.connect(InetSocketAddress(server.host, server.port), CONNECT_TIMEOUT_MS.toInt())
         s.startHandshake()
         return s
+    }
+
+    /**
+     * Build the server-trust X509TrustManager for this connection.
+     *
+     * Prefers the enrollment-time CA pin (TAKServer.caCertificateName →
+     * CertVault → CaTrust.trustManagerFor). Falls back to the system
+     * trust store when no pin exists or the pin file fails to load —
+     * legacy `.p12` imports from before Quick Connect existed end up on
+     * this branch.
+     *
+     * Never returns a trust-all manager. If a server presents a cert
+     * the pinned CA didn't sign (or the system bundle doesn't trust),
+     * the handshake fails — that's the point.
+     */
+    private fun loadServerTrustManager(): X509TrustManager {
+        val caName = server.caCertificateName
+        val vault = certVault
+        if (caName != null && vault != null) {
+            val bytes = vault.read(caName)
+            if (bytes != null) {
+                val chain = runCatching { CaTrust.decodePemChain(bytes) }.getOrElse {
+                    Log.w(TAG, "CA pin '$caName' parse failed: ${it.javaClass.simpleName}: ${it.message}")
+                    emptyList()
+                }
+                if (chain.isNotEmpty()) {
+                    Log.i(TAG, "TLS trust: pinned CA(s) from '$caName' (${chain.size} cert)")
+                    return CaTrust.trustManagerFor(chain)
+                }
+                Log.w(TAG, "CA pin '$caName' present but yielded no certs — falling back to system trust")
+            } else {
+                Log.w(TAG, "CA pin '$caName' missing from vault — falling back to system trust")
+            }
+        }
+        Log.i(TAG, "TLS trust: system trust store (no CA pin for this server)")
+        return CaTrust.systemTrustManager()
     }
 
     /**
@@ -203,12 +239,6 @@ class TAKConnection(
     private fun cleanup() {
         runCatching { socket?.close() }
         socket = null
-    }
-
-    private class TrustAllX509Manager : X509TrustManager {
-        override fun checkClientTrusted(chain: Array<X509Certificate>, authType: String) {}
-        override fun checkServerTrusted(chain: Array<X509Certificate>, authType: String) {}
-        override fun getAcceptedIssuers(): Array<X509Certificate> = emptyArray()
     }
 
     companion object {
