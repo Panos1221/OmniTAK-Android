@@ -84,7 +84,9 @@ fun MeshDeviceSettingsScreen(onDone: () -> Unit) {
     val store = app.meshDeviceConfigStore
     val mesh = app.meshtastic
     val saved by store.config.collectAsState(initial = MeshDeviceConfig())
-    val connection by mesh.state.collectAsState()
+    // Transport-aware — TCP or BLE, whichever is the active link.
+    // Was `mesh.state` (TCP-only) which left BLE radios stranded (#36).
+    val connection by mesh.activeConnectionState.collectAsState()
     val scope = rememberCoroutineScope()
 
     // Local draft buffer — text fields edit this, "Save draft" commits

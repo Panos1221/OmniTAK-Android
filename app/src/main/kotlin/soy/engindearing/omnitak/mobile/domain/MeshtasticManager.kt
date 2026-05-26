@@ -4,13 +4,18 @@ import android.content.Context
 import android.util.Log
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import java.io.ByteArrayOutputStream
 import soy.engindearing.omnitak.mobile.data.AdminMessageParser
@@ -90,6 +95,27 @@ class MeshtasticManager(private val context: Context? = null) {
     /** BLE-specific state, lazily wired when the user opens the BLE tab. */
     fun bleState(): StateFlow<ConnectionState>? = bleClientOrNull()?.state
     fun bleBytesReceived(): StateFlow<Long>? = bleClientOrNull()?.bytesReceived
+
+    /**
+     * Transport-aware connection state. Tracks whichever transport
+     * [_activeTransport] currently points at — TCP, BLE, or neither.
+     *
+     * Screens that don't care which transport is live (e.g. Device
+     * Settings, which just needs to know whether *any* radio is
+     * reachable to enable the push button) should observe this rather
+     * than [state] (TCP-only). Fixes #36 where a BLE-connected radio
+     * showed as "No device connected" in Device Settings.
+     */
+    @OptIn(ExperimentalCoroutinesApi::class)
+    val activeConnectionState: StateFlow<ConnectionState> =
+        _activeTransport.flatMapLatest { transport ->
+            when (transport) {
+                MeshConnectionType.TCP -> tcpClient.state
+                MeshConnectionType.BLUETOOTH ->
+                    bleClientOrNull()?.state ?: flowOf(ConnectionState.Disconnected)
+                null -> flowOf(ConnectionState.Disconnected)
+            }
+        }.stateIn(scope, SharingStarted.Eagerly, ConnectionState.Disconnected)
 
     /** Eagerly construct the BLE client (if a Context is available) so
      *  the BLE tab can observe its state flows even before any
