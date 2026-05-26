@@ -199,13 +199,25 @@ class MilStdIconServiceTest {
     // ---- Drone story regression -----------------------------------------
 
     @Test
-    fun `unknown UAS multirotor falls back to unknown air via truncation`() {
-        // a-u-A-M-H-Q (Remote ID drone classification) isn't in the
-        // hardcoded floor verbatim, but a-u-A is — should truncate to
-        // it, not the generic unknown-ground default. After Phase C's
-        // catalogue loads at runtime, this same input resolves to the
-        // catalogue entry SUAPMHQ----- directly.
-        assertEquals("SUA---------", MilStdIconService.getSidc("a-u-A-M-H-Q"))
+    fun `unknown UAS multirotor resolves to the multirotor SIDC in the floor`() {
+        // a-u-A-M-H-Q is the Remote ID multirotor classification. It now
+        // lives in the hardcoded floor so RID tracks render with the
+        // correct multirotor glyph without depending on Phase C's JSON
+        // catalogue loading first.
+        assertEquals("SUAPMHQ----", MilStdIconService.getSidc("a-u-A-M-H-Q"))
+    }
+
+    @Test
+    fun `unknown UAS fixed wing resolves to the fixed-wing SIDC in the floor`() {
+        assertEquals("SUAPMFQ----", MilStdIconService.getSidc("a-u-A-M-F-Q"))
+    }
+
+    @Test
+    fun `unknown UAS without a multirotor or fixed-wing suffix truncates to unknown air`() {
+        // A future RID classification we don't have an entry for yet
+        // should still resolve to something — truncation walks back to
+        // a-u-A and the generic unknown-air SIDC.
+        assertEquals("SUA---------", MilStdIconService.getSidc("a-u-A-M-X-Q"))
     }
 
     // ---- Phase C — runtime catalogue replacement ------------------------
