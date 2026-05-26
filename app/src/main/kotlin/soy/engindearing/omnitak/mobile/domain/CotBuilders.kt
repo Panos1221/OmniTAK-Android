@@ -68,6 +68,12 @@ object CotBuilders {
         val callsignAttr = event.callsign?.let { """ callsign="${xmlEscape(it)}"""" } ?: ""
         val remarks = if (event.remarks.isNotBlank())
             "<remarks>${xmlEscape(event.remarks)}</remarks>" else ""
+        // ATAK / iTAK render FEMA markers (and any custom-glyph marker)
+        // off the `iconsetpath` detail — emit it when present so peers
+        // with the catalog show the right symbol (#29).
+        val userIcon = event.iconsetPath?.takeIf { it.isNotBlank() }?.let {
+            """<usericon iconsetpath="${xmlEscape(it)}"/>"""
+        } ?: ""
 
         return """
             <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
@@ -76,6 +82,7 @@ object CotBuilders {
               <point lat="${event.lat}" lon="${event.lon}" hae="${event.hae}" ce="${event.ce}" le="${event.le}"/>
               <detail>
                 <contact$callsignAttr/>
+                $userIcon
                 $remarks
                 $dests
               </detail>
