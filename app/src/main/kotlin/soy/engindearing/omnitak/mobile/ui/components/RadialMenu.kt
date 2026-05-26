@@ -29,7 +29,6 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import soy.engindearing.omnitak.mobile.ui.theme.TacticalAccent
-import soy.engindearing.omnitak.mobile.ui.theme.TacticalBackground
 import kotlin.math.cos
 import kotlin.math.roundToInt
 import kotlin.math.sin
@@ -103,7 +102,6 @@ fun RadialMenu(
                         scaleY = scale
                     }
                     .clip(CircleShape)
-                    .background(TacticalBackground)
                     .border(2.dp, ringTint, CircleShape)
                     .clickable(enabled = action.enabled) {
                         onSelect(action)
@@ -127,7 +125,7 @@ fun RadialMenu(
                 .offset { IntOffset(cx, cy) }
                 .size(48.dp)
                 .clip(CircleShape)
-                .background(TacticalBackground)
+                .border(2.dp, TacticalAccent, CircleShape)
                 .clickable(onClick = onDismiss),
             contentAlignment = Alignment.Center,
         ) {
