@@ -6,6 +6,7 @@ import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 
 private val Context.userPrefsDataStore by preferencesDataStore(name = "user_prefs")
@@ -165,6 +166,24 @@ class UserPrefsStore(private val context: Context) {
     /** Convenience writer for the layers-dialog mesh visibility toggle. */
     suspend fun setMeshNodesLayerVisible(value: Boolean) {
         update { it.copy(meshNodesLayerVisible = value) }
+    }
+
+    /**
+     * Read the stable EUD UID, generating + persisting one on first
+     * call. Every wire CoT event tied to this device — PPLI, GeoChat,
+     * markers — has to share this UID; sending two different ones makes
+     * receiving ATAK render the operator as two separate contacts
+     * (#9).
+     *
+     * Format `ANDROID-<uuid>` matches what SelfPositionBroadcaster has
+     * been minting since 0.1; existing installs keep their value.
+     */
+    suspend fun ensureSelfUid(): String {
+        val current = prefs.first()
+        if (current.selfUid.isNotBlank()) return current.selfUid
+        val generated = "ANDROID-${java.util.UUID.randomUUID()}"
+        update { it.copy(selfUid = generated) }
+        return generated
     }
 
     private fun readFrom(p: androidx.datastore.preferences.core.Preferences): UserPrefs = UserPrefs(
