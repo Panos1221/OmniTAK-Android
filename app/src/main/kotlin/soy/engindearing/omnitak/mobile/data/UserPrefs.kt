@@ -31,7 +31,7 @@ enum class MapProvider { OSM_RASTER, SATELLITE_HINT, TOPO_HINT, WMTS_CUSTOM }
  */
 data class UserPrefs(
     val callsign: String = "OMNI-1",
-    val team: String = "CYAN",
+    val team: String = "Cyan",
     // Persistent EUD identifier broadcast in every PPLI CoT event. Empty
     // until the first connection generates one (`ANDROID-<uuid>`); after
     // that it never changes so TAK servers see a stable contact across
@@ -45,7 +45,7 @@ data class UserPrefs(
     val selfLon: Double = Double.NaN,
     val distanceUnit: DistanceUnit = DistanceUnit.METRIC,
     val coordFormat: CoordFormat = CoordFormat.LATLON_DECIMAL,
-    val mapProvider: MapProvider = MapProvider.OSM_RASTER,
+    val mapProvider: MapProvider = MapProvider.TOPO_HINT,
     // GAP-107 — XYZ tile URL template the operator pasted in. Used when
     // mapProvider == WMTS_CUSTOM. Format: https://host/{z}/{x}/{y}.png
     val customTileUrl: String = "",
@@ -169,7 +169,7 @@ class UserPrefsStore(private val context: Context) {
 
     private fun readFrom(p: androidx.datastore.preferences.core.Preferences): UserPrefs = UserPrefs(
         callsign = p[KEY_CALLSIGN] ?: "OMNI-1",
-        team = p[KEY_TEAM] ?: "CYAN",
+        team = normalizeTeam(p[KEY_TEAM]),
         selfUid = p[KEY_SELF_UID] ?: "",
         selfLat = p[KEY_SELF_LAT]?.toDoubleOrNull() ?: Double.NaN,
         selfLon = p[KEY_SELF_LON]?.toDoubleOrNull() ?: Double.NaN,
@@ -178,7 +178,7 @@ class UserPrefsStore(private val context: Context) {
         coordFormat = p[KEY_COORD]?.let { runCatching { CoordFormat.valueOf(it) }.getOrNull() }
             ?: CoordFormat.LATLON_DECIMAL,
         mapProvider = p[KEY_MAP]?.let { runCatching { MapProvider.valueOf(it) }.getOrNull() }
-            ?: MapProvider.OSM_RASTER,
+            ?: MapProvider.TOPO_HINT,
         customTileUrl = p[KEY_CUSTOM_TILE_URL] ?: "",
         autoPublishMeshToTak = p[KEY_AUTO_PUBLISH_MESH] ?: true,
         meshNodesLayerVisible = p[KEY_MESH_LAYER_VISIBLE] ?: true,
@@ -195,4 +195,19 @@ class UserPrefsStore(private val context: Context) {
         toolbarItemIds = p[KEY_TOOLBAR_ITEMS]?.split(",")?.filter { it.isNotBlank() } ?: emptyList(),
         toolbarCoachmarkSeen = p[KEY_TOOLBAR_COACH] ?: false,
     )
+
+    // ATAK / OpenTakServer canonical team names are Title Case ("Cyan",
+    // "Dark Blue"). OmniTAK shipped an ALLCAPS picker through 0.32.0, so
+    // legacy installs still have ALLCAPS in DataStore — normalize on read
+    // so wire emission (`<__group name="...">`) matches the server's DB
+    // keying and OTS's web UI stops rejecting our PPLI.
+    private fun normalizeTeam(raw: String?): String {
+        val trimmed = raw?.trim().orEmpty()
+        if (trimmed.isEmpty()) return "Cyan"
+        return trimmed.split(' ')
+            .filter { it.isNotEmpty() }
+            .joinToString(" ") { word ->
+                word.lowercase().replaceFirstChar { it.titlecase() }
+            }
+    }
 }
