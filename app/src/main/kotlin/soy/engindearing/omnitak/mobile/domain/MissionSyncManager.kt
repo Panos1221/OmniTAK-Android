@@ -69,6 +69,55 @@ class MissionSyncManager(
         _lastRefresh.value = System.currentTimeMillis()
     }
 
+    /**
+     * Upload a TAK Mission Package (.zip) to the first online,
+     * cert-enrolled, TLS server. Returns [UploadOutcome.Hash] with the
+     * Marti-assigned SHA on success, [UploadOutcome.NoServer] when no
+     * enrolled+enabled+TLS server is configured, or
+     * [UploadOutcome.Failed] with the server's reason on HTTP errors.
+     *
+     * Slice 3 of #30 — paired with [LassoExporters.writeMissionPackage]
+     * so the existing "Add to Data Package" button can also hand off to
+     * the TAK server instead of (or in addition to) the local share
+     * sheet. Returns just the hash; attaching it to a specific named
+     * mission is the slice-2 authoring flow.
+     */
+    suspend fun uploadDataPackage(
+        zipBytes: ByteArray,
+        filename: String,
+        creatorUid: String,
+    ): UploadOutcome {
+        val candidates = enabledServers()
+        if (candidates.isEmpty()) return UploadOutcome.NoServer
+        return withContext(Dispatchers.IO) {
+            for (server in candidates) {
+                val client = TakRestApiClient(server, certVault)
+                val attempt = runCatching {
+                    client.checkReachability()
+                    client.uploadDataPackage(zipBytes, filename, creatorUid)
+                }
+                val hash = attempt.getOrNull()
+                if (hash != null) {
+                    return@withContext UploadOutcome.Hash(
+                        hash = hash,
+                        serverId = server.id,
+                        serverName = server.name,
+                    )
+                }
+            }
+            // Last attempt's failure is the most informative one; the
+            // earlier ones were probably the same network condition.
+            val lastFailure = candidates.last().let { sv ->
+                runCatching {
+                    TakRestApiClient(sv, certVault).uploadDataPackage(zipBytes, filename, creatorUid)
+                }.exceptionOrNull()
+            }
+            UploadOutcome.Failed(
+                reason = lastFailure?.message ?: "All ${candidates.size} server(s) refused the upload"
+            )
+        }
+    }
+
     /** Refresh a single server (tap-to-retry on its row). */
     suspend fun refresh(serverId: String) {
         val sv = enabledServers().firstOrNull { it.id == serverId } ?: return
@@ -145,4 +194,15 @@ data class AggregatedPackage(
     val pkg: TakDataPackageInfo,
 ) {
     val id: String get() = "$serverId:${pkg.hash}"
+}
+
+/**
+ * Result of [MissionSyncManager.uploadDataPackage]. Wire-shape design
+ * goal: caller can pattern-match for a snappy toast — no exception
+ * juggling at the UI layer.
+ */
+sealed interface UploadOutcome {
+    data class Hash(val hash: String, val serverId: String, val serverName: String) : UploadOutcome
+    data object NoServer : UploadOutcome
+    data class Failed(val reason: String) : UploadOutcome
 }

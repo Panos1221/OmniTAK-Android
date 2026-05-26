@@ -15,6 +15,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.FileUpload
+import androidx.compose.material.icons.filled.CloudUpload
 import androidx.compose.material.icons.filled.Inventory2
 import androidx.compose.material.icons.filled.Send
 import androidx.compose.material.icons.filled.HighlightOff
@@ -56,6 +57,10 @@ fun LassoActionsSheet(
     onSendToContacts: () -> Unit,
     onBulkDelete: () -> Unit,
     onClear: () -> Unit,
+    // Non-null when at least one enrolled+enabled TLS server is
+    // configured; null hides the row so we don't dangle a button
+    // operators can't use. #30 slice 3.
+    onUploadToServer: (() -> Unit)? = null,
 ) {
     val sheet = rememberModalBottomSheetState()
     ModalBottomSheet(
@@ -97,6 +102,15 @@ fun LassoActionsSheet(
                 onClick = onAddToDataPackage,
             )
             HorizontalDivider(modifier = Modifier.padding(start = 76.dp), color = Color.White.copy(alpha = 0.08f))
+
+            onUploadToServer?.let { upload ->
+                ActionRow(
+                    icon = Icons.Filled.CloudUpload,
+                    title = "Upload to TAK Server…",
+                    onClick = upload,
+                )
+                HorizontalDivider(modifier = Modifier.padding(start = 76.dp), color = Color.White.copy(alpha = 0.08f))
+            }
 
             ActionRow(
                 icon = Icons.Filled.FileUpload,

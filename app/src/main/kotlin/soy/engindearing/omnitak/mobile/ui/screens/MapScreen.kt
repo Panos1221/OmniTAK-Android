@@ -840,6 +840,45 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
                         }
                     }
                 },
+                onUploadToServer = run {
+                    val anyEnabledTls = app.serverManager.servers.collectAsState().value
+                        .any { it.enabled && it.useTLS && it.certificateName != null }
+                    if (!anyEnabledTls || selectedEvents.isEmpty()) {
+                        null
+                    } else {
+                        {
+                            lassoActionsOpen = false
+                            val ctx = appContext
+                            val ts = System.currentTimeMillis()
+                            val pkgName = "lasso-${selectedEvents.size}-$ts"
+                            scope.launch {
+                                val file = withContext(Dispatchers.IO) {
+                                    soy.engindearing.omnitak.mobile.domain.LassoExporters
+                                        .writeMissionPackage(
+                                            context = ctx,
+                                            name = pkgName,
+                                            events = selectedEvents,
+                                        )
+                                }
+                                val creator = app.userPrefsStore.ensureSelfUid()
+                                val outcome = app.missionSyncManager.uploadDataPackage(
+                                    zipBytes = file.readBytes(),
+                                    filename = file.name,
+                                    creatorUid = creator,
+                                )
+                                val msg = when (outcome) {
+                                    is soy.engindearing.omnitak.mobile.domain.UploadOutcome.Hash ->
+                                        "Uploaded → ${outcome.serverName} · hash ${outcome.hash.take(10)}…"
+                                    soy.engindearing.omnitak.mobile.domain.UploadOutcome.NoServer ->
+                                        "No enrolled TAK server to upload to"
+                                    is soy.engindearing.omnitak.mobile.domain.UploadOutcome.Failed ->
+                                        "Upload failed: ${outcome.reason}"
+                                }
+                                toast(msg)
+                            }
+                        }
+                    }
+                },
                 onExportKML = {
                     lassoActionsOpen = false
                     if (selectedEvents.isEmpty()) {
