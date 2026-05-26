@@ -1,0 +1,249 @@
+package soy.engindearing.omnitak.mobile.ui.components
+
+import android.content.Context
+import android.util.Log
+import org.json.JSONArray
+import org.json.JSONObject
+import org.maplibre.android.maps.MapLibreMap
+import org.maplibre.android.maps.Style
+import org.maplibre.android.style.expressions.Expression
+import org.maplibre.android.style.layers.PropertyFactory.iconAllowOverlap
+import org.maplibre.android.style.layers.PropertyFactory.iconIgnorePlacement
+import org.maplibre.android.style.layers.PropertyFactory.iconImage
+import org.maplibre.android.style.layers.PropertyFactory.iconSize
+import org.maplibre.android.style.layers.PropertyFactory.textAllowOverlap
+import org.maplibre.android.style.layers.PropertyFactory.textAnchor
+import org.maplibre.android.style.layers.PropertyFactory.textColor
+import org.maplibre.android.style.layers.PropertyFactory.textField
+import org.maplibre.android.style.layers.PropertyFactory.textHaloColor
+import org.maplibre.android.style.layers.PropertyFactory.textHaloWidth
+import org.maplibre.android.style.layers.PropertyFactory.textIgnorePlacement
+import org.maplibre.android.style.layers.PropertyFactory.textOffset
+import org.maplibre.android.style.layers.PropertyFactory.textSize
+import org.maplibre.android.style.layers.SymbolLayer
+import org.maplibre.android.style.sources.GeoJsonSource
+import soy.engindearing.omnitak.mobile.data.CoTEvent
+import soy.engindearing.omnitak.mobile.data.symbology.MilStdIconCache
+import soy.engindearing.omnitak.mobile.data.symbology.MilStdIconService
+
+/**
+ * Experimental GeoJSON-source-driven contacts layer. Holds a single
+ * [GeoJsonSource] of feature points + one [SymbolLayer] that draws
+ * the MIL-STD-2525 icon for each contact via a data-driven
+ * `icon-image` expression. One GL upload per [update] call instead
+ * of N marker mutations — the path TAKAware, ATAK, and most
+ * production map clients use to handle hundreds of CoT contacts.
+ *
+ * History to be aware of: an earlier GeoJsonSource + CircleLayer
+ * attempt was reverted in commit 0813351 because the Adreno 610
+ * fragment pipeline silently failed to paint registered layers
+ * (the layer was queryable but never drew pixels). LocationComponent
+ * — which uses [Style.addImage] with a bitmap — has always rendered
+ * correctly on the same driver, so we exercise the same image
+ * registration path here. If this layer also fails to paint on
+ * Adreno 610, the user-prefs toggle [UserPrefs.experimentalSymbolLayer]
+ * lets the operator fall back to the working Marker-annotation
+ * [ContactLayer] without a rebuild.
+ *
+ * Lifecycle contract:
+ *  1. Caller invokes [installInto] once after the [Style] is loaded,
+ *     passing the [Context] used for SVG rasterisation. Registers
+ *     the source + layer + a pre-warmed set of base SIDC images.
+ *  2. Caller invokes [update] with the current contacts collection
+ *     whenever the contact store changes. Each unique SIDC seen for
+ *     the first time is rasterised and registered via [Style.addImage]
+ *     on the fly; subsequent updates reuse the registered image.
+ *  3. The instance is single-style-scoped. If the map style is
+ *     re-loaded the caller must construct a fresh instance and
+ *     re-install.
+ */
+class ContactSymbolLayer {
+
+    companion object {
+        private const val TAG = "ContactSymbolLayer"
+
+        // Source + layer ids — exposed for tests and for callers
+        // that need to query the style by id (e.g. visibility
+        // toggling without recreating the layer).
+        const val SOURCE_ID = "omnitak-contacts-source"
+        const val SYMBOL_LAYER_ID = "omnitak-contacts-symbols"
+        const val LABEL_LAYER_ID = "omnitak-contacts-labels"
+
+        // Feature property keys.
+        const val PROP_UID = "uid"
+        const val PROP_SIDC = "sidc"
+        const val PROP_CALLSIGN = "callsign"
+        const val PROP_AFFILIATION = "affiliation"
+        const val PROP_TYPE = "cotType"
+
+        // Pixel size the cache rasterises at. 64 matches the legacy
+        // Marker path and is the canonical milsymbol size.
+        private const val ICON_PIXEL_SIZE = 64
+
+        // Image name prefix in [Style.addImage]. Keyed by SIDC so
+        // each distinct symbol is uploaded exactly once per style.
+        const val ICON_IMAGE_PREFIX = "milstd-"
+    }
+
+    private var installed: Boolean = false
+    private val registeredSidcs: MutableSet<String> = mutableSetOf()
+
+    /**
+     * Wire the source + layer into [style] and pre-warm the cache
+     * with a small set of common SIDCs so the first contact sighting
+     * doesn't pay the SVG rasterisation cost on the rendering frame.
+     * Idempotent — calling on the same style twice is a no-op.
+     */
+    fun installInto(style: Style, context: Context) {
+        if (installed) return
+        installed = true
+
+        // Empty FeatureCollection — populated by the first [update] call.
+        val source = GeoJsonSource(SOURCE_ID, emptyFeatureCollectionJson())
+        style.addSource(source)
+
+        val symbolLayer = SymbolLayer(SYMBOL_LAYER_ID, SOURCE_ID).withProperties(
+            iconImage(Expression.concat(Expression.literal(ICON_IMAGE_PREFIX), Expression.get(PROP_SIDC))),
+            // Slight visual scale-down so the 64 px raster reads as a
+            // map marker, not a sticker. Matches the legacy MarkerOptions
+            // sizing on the Annotation path.
+            iconSize(0.6f),
+            iconAllowOverlap(true),
+            iconIgnorePlacement(true),
+        )
+        style.addLayer(symbolLayer)
+
+        val labelLayer = SymbolLayer(LABEL_LAYER_ID, SOURCE_ID).withProperties(
+            textField(Expression.get(PROP_CALLSIGN)),
+            textSize(10f),
+            textColor("#FFFFFF"),
+            textHaloColor("#000000"),
+            textHaloWidth(1.2f),
+            textOffset(arrayOf(0f, 1.4f)),
+            textAnchor("top"),
+            textAllowOverlap(false),
+            textIgnorePlacement(false),
+        )
+        style.addLayer(labelLayer)
+
+        // Pre-warm common SIDCs so the first sighting of a friend
+        // / hostile / unknown / multirotor doesn't rasterize on the
+        // render frame. Adding these to the style up front also
+        // exercises the same code path on the Adreno 610 driver
+        // that LocationComponent's foregroundName uses — if any of
+        // these fail to register, we know the GL bug applies and
+        // can fall back to the Marker path before any contacts
+        // even arrive.
+        for (cotType in PRE_WARM_COT_TYPES) {
+            registerSidcImage(style, context, MilStdIconService.getSidc(cotType))
+        }
+    }
+
+    /**
+     * Push the current contacts list to the GeoJsonSource. Any SIDC
+     * not yet registered in [Style] is rasterised + added before the
+     * source is updated. Contacts with NaN lat/lon are skipped.
+     *
+     * @return number of distinct SIDCs newly registered on this call
+     *   (useful for tests + diagnostics).
+     */
+    fun update(map: MapLibreMap, context: Context, contacts: Collection<CoTEvent>): Int {
+        val style = map.style ?: return 0
+        if (!installed) {
+            Log.w(TAG, "update() before installInto() — no-op")
+            return 0
+        }
+
+        // First pass: make sure every SIDC referenced by the
+        // FeatureCollection has its image registered. Skip rows
+        // with bad coordinates.
+        var newlyRegistered = 0
+        val features = JSONArray()
+        for (c in contacts) {
+            if (c.lat.isNaN() || c.lon.isNaN()) continue
+            val sidc = MilStdIconService.getSidc(c.type)
+            if (registerSidcImage(style, context, sidc)) newlyRegistered++
+            features.put(featureJson(c, sidc))
+        }
+
+        val fc = JSONObject().apply {
+            put("type", "FeatureCollection")
+            put("features", features)
+        }
+        val source = style.getSourceAs<GeoJsonSource>(SOURCE_ID)
+        source?.setGeoJson(fc.toString())
+        return newlyRegistered
+    }
+
+    /**
+     * Register the icon for [sidc] in [style] if it isn't already.
+     * Returns true if this call added a new image; false if it was
+     * already present.
+     */
+    private fun registerSidcImage(style: Style, context: Context, sidc: String): Boolean {
+        if (sidc in registeredSidcs) return false
+        val cotType = cotTypeForSidc(sidc)
+        val bitmap = MilStdIconCache.bitmapFor(context, cotType, ICON_PIXEL_SIZE)
+            ?: MilStdIconCache.bitmapFor(context, "a-u-A", ICON_PIXEL_SIZE)
+            ?: run {
+                // Both the specific SIDC and the unknown-air fallback
+                // failed to rasterise — should be unreachable since
+                // the floor 108-entry asset bundle is part of the apk.
+                // Log + skip so a missing-asset regression doesn't
+                // crash the layer.
+                Log.w(TAG, "no bitmap available for sidc=$sidc; skipping addImage")
+                return false
+            }
+        style.addImage(ICON_IMAGE_PREFIX + sidc, bitmap)
+        registeredSidcs.add(sidc)
+        return true
+    }
+
+    /**
+     * Reverse-resolve a SIDC back to a plausible CoT type so we can
+     * call [MilStdIconCache.bitmapFor] (which takes cotType, not
+     * SIDC). Uses the service's existing reverse map when present;
+     * falls back to plain "a-u-A" so we still register something.
+     */
+    private fun cotTypeForSidc(sidc: String): String {
+        return MilStdIconService.getDefinitionBySidc(sidc)?.value ?: "a-u-A"
+    }
+
+    private fun featureJson(c: CoTEvent, sidc: String): JSONObject {
+        return JSONObject().apply {
+            put("type", "Feature")
+            put("geometry", JSONObject().apply {
+                put("type", "Point")
+                put("coordinates", JSONArray().apply {
+                    put(c.lon)
+                    put(c.lat)
+                })
+            })
+            put("properties", JSONObject().apply {
+                put(PROP_UID, c.uid)
+                put(PROP_SIDC, sidc)
+                put(PROP_CALLSIGN, c.callsign ?: c.uid)
+                put(PROP_AFFILIATION, c.affiliation.code.toString())
+                put(PROP_TYPE, c.type)
+            })
+        }
+    }
+
+    private fun emptyFeatureCollectionJson(): String =
+        """{"type":"FeatureCollection","features":[]}"""
+}
+
+/** CoT types whose icons we register at install time so the first
+ *  sighting doesn't rasterise on the render frame. Chosen to cover
+ *  the common contact mix: friend/hostile/neutral/unknown ground +
+ *  the RID UAS multirotor + fixed-wing default. */
+private val PRE_WARM_COT_TYPES: List<String> = listOf(
+    "a-f-G-U",
+    "a-h-G-U",
+    "a-n-G-U",
+    "a-u-G-U",
+    "a-f-G-U-C-I",
+    "a-u-A",
+    "a-u-A-M-H-Q",
+    "a-u-A-M-F-Q",
+)

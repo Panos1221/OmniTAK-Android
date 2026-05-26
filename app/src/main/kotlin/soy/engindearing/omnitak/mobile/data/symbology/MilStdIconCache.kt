@@ -29,6 +29,14 @@ import java.io.IOException
 object MilStdIconCache {
 
     private const val TAG = "MilStdIconCache"
+    // 64 px is the canonical milsymbol render size used by ATAK and
+    // matches the Marker annotation overlay's natural sizing. Larger
+    // values give more legible interior detail (rotor caret on
+    // SUAPMHQ multirotor, wing detail on fixed-wing UAS) but
+    // exacerbate cold-cache churn on every size change and visually
+    // dominate neighbouring contacts. Revisit alongside the
+    // [ContactSymbolLayer] migration when high-density CoT rendering
+    // is properly engineered.
     private const val DEFAULT_SIZE_PX = 64
 
     private data class Key(val sidc: String, val sizePx: Int)
