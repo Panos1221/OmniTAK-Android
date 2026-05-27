@@ -9,6 +9,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import soy.engindearing.omnitak.mobile.data.AdminResponse
@@ -84,6 +85,13 @@ class OmniTAKApp : Application() {
             }
         }
 
+        // Seed the in-memory camera cache from DataStore so MapScreen's
+        // cold-start read gets the persisted view before first composition.
+        appScope.launch {
+            val saved = userPrefsStore.prefs.first()
+            mapCameraStore.seedFromPrefs(saved)
+        }
+
         // Phase 2 of the gy6 plan — FAA Remote ID BLE scanner.
         // Lifecycle is driven by `remoteIdScanEnabled` so operators can
         // opt out of the always-on BLE scan (battery cost). When a
@@ -129,7 +137,7 @@ class OmniTAKApp : Application() {
     private val appScope = CoroutineScope(Dispatchers.Default + SupervisorJob())
     val contactStore: ContactStore by lazy { ContactStore() }
     val drawingStore: DrawingStore by lazy { DrawingStore() }
-    val mapCameraStore: MapCameraStore by lazy { MapCameraStore() }
+    val mapCameraStore: MapCameraStore by lazy { MapCameraStore(userPrefsStore) }
     val chatStore: ChatStore by lazy {
         ChatStore().also { store ->
             // GAP-122 — Mesh primary channel always visible so users can

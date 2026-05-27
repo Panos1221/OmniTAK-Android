@@ -1,22 +1,29 @@
 package soy.engindearing.omnitak.mobile.domain
 
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import soy.engindearing.omnitak.mobile.data.UserPrefs
+import soy.engindearing.omnitak.mobile.data.UserPrefsStore
+
 /**
- * App-scoped persistence for the map camera position so the operator's
- * pan/zoom survives bottom-nav switches between Map and other tabs.
+ * App-scoped persistence for the map camera position.
  *
- * `remember { MapView(...) }` inside [TacticalMap] is destroyed each
- * time MapScreen leaves the composition (Compose Navigation drops the
- * composable, even with `saveState = true`, because plain `remember`
- * isn't backed by SavedStateHandle). Without a state holder above the
- * NavHost the map snaps back to its default center every time the user
- * dips into Settings / Servers / Chat — that's what Discord testers
- * called "map re-centering to Spokane when exiting setting or other
- * menus." (See repo issue #7.)
+ * In-memory fields survive bottom-nav tab switches (Issue #7).
+ * DataStore writes survive full process death — the operator's last
+ * pan/zoom is restored on cold start instead of reverting to a
+ * hardcoded developer default (P-E TAK Discord report 2026-05-27).
  *
- * Survives tab switches but not process death — that's deliberate. If
- * we ever want it durable across cold launches, persist into UserPrefs.
+ * Writes are debounced 500 ms so rapid camera movement during a pan
+ * gesture doesn't hammer DataStore on every idle event.
  */
-class MapCameraStore {
+class MapCameraStore(private val userPrefsStore: UserPrefsStore) {
+
+    // In-memory cache. Populated from DataStore at app startup via
+    // [seedFromPrefs], then kept current by [update]. MapScreen reads
+    // synchronously from here; DataStore writes happen asynchronously.
     var lastTargetLat: Double? = null
         private set
     var lastTargetLon: Double? = null
@@ -24,9 +31,56 @@ class MapCameraStore {
     var lastZoom: Double? = null
         private set
 
+    private val scope = CoroutineScope(Dispatchers.IO)
+    private var debounceJob: Job? = null
+
+    /**
+     * Seed the in-memory cache from previously persisted prefs.
+     * Call once at startup (e.g. in OmniTAKApp.onCreate) before
+     * MapScreen first composes. Safe to call multiple times — a
+     * populated cache is never overwritten by a later seed call.
+     */
+    fun seedFromPrefs(prefs: UserPrefs) {
+        val (lat, lon, zoom) = extractCamera(prefs) ?: return
+        if (lastTargetLat == null) {
+            lastTargetLat = lat
+            lastTargetLon = lon
+            lastZoom      = zoom
+        }
+    }
+
+    /**
+     * Record a new camera position. Updates the in-memory cache
+     * immediately and debounce-persists to DataStore after 500 ms so
+     * rapid pan/zoom gestures coalesce into a single write.
+     */
     fun update(lat: Double, lon: Double, zoom: Double) {
         lastTargetLat = lat
         lastTargetLon = lon
-        lastZoom = zoom
+        lastZoom      = zoom
+
+        debounceJob?.cancel()
+        debounceJob = scope.launch {
+            delay(500)
+            userPrefsStore.setLastCamera(lat, lon, zoom)
+        }
+    }
+
+    companion object {
+        /**
+         * Extract a valid camera triple from [prefs], or null if any
+         * component is missing. All three values must be present and
+         * finite for the saved view to be usable.
+         *
+         * Exposed as a companion function so the priority-resolution
+         * logic can be tested without an Android context.
+         */
+        fun extractCamera(prefs: UserPrefs): Triple<Double, Double, Double>? {
+            val lat  = prefs.lastCameraLat  ?: return null
+            val lon  = prefs.lastCameraLon  ?: return null
+            val zoom = prefs.lastCameraZoom ?: return null
+            if (!lat.isFinite() || !lon.isFinite() || !zoom.isFinite()) return null
+            return Triple(lat, lon, zoom)
+        }
     }
 }

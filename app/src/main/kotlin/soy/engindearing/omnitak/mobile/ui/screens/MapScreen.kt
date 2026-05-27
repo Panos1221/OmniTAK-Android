@@ -80,6 +80,11 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
+// Cold-start fallback when there is no persisted camera and no GPS fix yet.
+// World-level zoom centered on 0°N 0°E — neutral for every operator globally.
+private val FALLBACK_GLOBAL_VIEW = LatLng(0.0, 0.0)
+private const val FALLBACK_GLOBAL_ZOOM = 2.0
+
 @Composable
 fun MapScreen(onOpenTab: (String) -> Unit = {}) {
     val app = LocalContext.current.applicationContext as OmniTAKApp
@@ -334,15 +339,22 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
         } else {
         TacticalMap(
             modifier = Modifier.fillMaxSize(),
-            // Restore the operator's last pan/zoom across bottom-nav
-            // switches. Falls back to TacticalMap's own default on first
-            // run / fresh process. Issue #7.
+            // Cold-start camera priority:
+            //   1. Persisted view (DataStore via MapCameraStore) — operator's last pan/zoom.
+            //   2. Self-fix — center on GPS position if available and no saved view.
+            //   3. Neutral global fallback — world-level zoom, no developer home-town.
+            // Spokane hardcode removed (P-E TAK Discord report 2026-05-27).
             initialCenter = run {
-                val lat = app.mapCameraStore.lastTargetLat
-                val lon = app.mapCameraStore.lastTargetLon
-                if (lat != null && lon != null) LatLng(lat, lon) else LatLng(47.6588, -117.4260)
+                val camLat = app.mapCameraStore.lastTargetLat
+                val camLon = app.mapCameraStore.lastTargetLon
+                when {
+                    camLat != null && camLon != null -> LatLng(camLat, camLon)
+                    selfFix != null -> LatLng(selfFix!!.lat, selfFix!!.lon)
+                    else -> FALLBACK_GLOBAL_VIEW
+                }
             },
-            initialZoom = app.mapCameraStore.lastZoom ?: 11.0,
+            initialZoom = app.mapCameraStore.lastZoom
+                ?: if (selfFix != null) 12.0 else FALLBACK_GLOBAL_ZOOM,
             onCameraIdle = { target, zoom ->
                 app.mapCameraStore.update(target.latitude, target.longitude, zoom)
             },
@@ -1101,7 +1113,7 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
                         val lat = app.mapCameraStore.lastTargetLat
                         val lon = app.mapCameraStore.lastTargetLon
                         femaPaletteLatLng = if (lat != null && lon != null) LatLng(lat, lon)
-                        else LatLng(47.6588, -117.4260)
+                        else selfFix?.let { LatLng(it.lat, it.lon) } ?: FALLBACK_GLOBAL_VIEW
                     }
                     "teams" -> teamsPanelOpen = true
                     "nav" -> {
