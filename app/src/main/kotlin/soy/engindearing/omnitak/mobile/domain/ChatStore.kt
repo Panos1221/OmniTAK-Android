@@ -50,6 +50,17 @@ class ChatStore {
     }
 
     /**
+     * Seed a full [ChatConversation] if no entry exists for its id yet.
+     * Used by ChatScreen to promote a contact stub (built from ContactStore)
+     * into a real backing conversation with participant metadata so that
+     * the send path can resolve the recipient UID and callsign.
+     */
+    fun upsertConversationIfMissing(conversation: ChatConversation) {
+        if (_conversations.value.containsKey(conversation.id)) return
+        _conversations.value = _conversations.value + (conversation.id to conversation)
+    }
+
+    /**
      * GAP-123 — create the conversation if missing, OR rename it if the
      * existing title is still the placeholder we seeded before the radio
      * told us its real channel name. Used when admin-port channel reads
