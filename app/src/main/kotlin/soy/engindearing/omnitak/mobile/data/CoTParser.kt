@@ -7,8 +7,9 @@ import java.io.StringReader
 /**
  * Lightweight XmlPullParser-based CoT event parser. Only pulls the
  * fields OmniTAK renders today (uid, type, time, stale, point, contact
- * callsign). Silently returns null on malformed input rather than
- * throwing — the read loop can't afford to die on a single bad event.
+ * callsign, __group team name/role). Silently returns null on malformed
+ * input rather than throwing — the read loop can't afford to die on a
+ * single bad event.
  *
  * Usage:
  *   CoTParser.parse("<event …><point …/><detail><contact callsign=…/></detail></event>")
@@ -29,6 +30,8 @@ object CoTParser {
         var ce: Double = 9_999_999.0
         var le: Double = 9_999_999.0
         var callsign: String? = null
+        var teamName: String? = null
+        var teamRole: String? = null
 
         var ev = parser.eventType
         while (ev != XmlPullParser.END_DOCUMENT) {
@@ -50,6 +53,13 @@ object CoTParser {
                     "contact" -> {
                         callsign = parser.getAttributeValue(null, "callsign") ?: callsign
                     }
+                    // TAK team assignment — <__group name="Red" role="Team Member"/>
+                    // present under <detail> on PPLI events. When present it overrides
+                    // the MIL-STD affiliation color so the contact matches Civtak/iTAK.
+                    "__group" -> {
+                        teamName = parser.getAttributeValue(null, "name") ?: teamName
+                        teamRole = parser.getAttributeValue(null, "role") ?: teamRole
+                    }
                 }
             }
             ev = parser.next()
@@ -68,6 +78,8 @@ object CoTParser {
             staleIso = staleIso,
             callsign = callsign,
             rawXml = xml,
+            teamName = teamName,
+            teamRole = teamRole,
         )
     }.getOrNull()
 }
