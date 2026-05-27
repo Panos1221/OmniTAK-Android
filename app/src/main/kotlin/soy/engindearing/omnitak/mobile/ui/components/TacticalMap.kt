@@ -147,20 +147,6 @@ fun TacticalMap(
                     currentLongPress?.invoke(latLng, Offset(screen.x, screen.y))
                     true
                 }
-                // Annotation-API markers (created by ContactLayer)
-                // would otherwise pop their default InfoWindow on tap
-                // and swallow the gesture before our contact-tap
-                // hit-test runs. Intercept here, look up the matching
-                // CoTEvent by marker title (= UID or callsign), and
-                // dispatch the same callback the geographic tap uses.
-                map.setOnMarkerClickListener { marker ->
-                    val cb = currentContactTap ?: return@setOnMarkerClickListener true
-                    val match = currentContacts.firstOrNull { c ->
-                        marker.title == (c.callsign ?: c.uid)
-                    }
-                    if (match != null) cb(match)
-                    true
-                }
                 map.addOnMapClickListener { latLng ->
                     // Mode-specific tap handler wins when provided
                     // (e.g. measurement mode eats taps to add points).
@@ -646,15 +632,7 @@ private const val TACTICAL_STYLE_OVERLAYS = """,
         "circle-radius": 10,
         "circle-stroke-width": 2,
         "circle-stroke-color": "#0A1628",
-        "circle-color": [
-          "match",
-          ["get", "affiliation"],
-          "f", "#4ADE80",
-          "h", "#F44336",
-          "n", "#FFC107",
-          "u", "#B39DDB",
-          "#B39DDB"
-        ]
+        "circle-color": ["coalesce", ["get", "color"], "#B39DDB"]
       }
     },
     {
