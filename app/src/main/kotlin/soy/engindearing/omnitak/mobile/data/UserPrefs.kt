@@ -88,6 +88,12 @@ data class UserPrefs(
     val toolbarItemIds: List<String> = emptyList(),
     /** One-time flag for the "press & hold to customize" coachmark. */
     val toolbarCoachmarkSeen: Boolean = false,
+    // Camera persistence — last map view the operator panned/zoomed to.
+    // All three must be non-null together to constitute a valid saved view.
+    // Null on first install (fresh device → self-fix or global fallback).
+    val lastCameraLat: Double? = null,
+    val lastCameraLon: Double? = null,
+    val lastCameraZoom: Double? = null,
 )
 
 class UserPrefsStore(private val context: Context) {
@@ -115,6 +121,10 @@ class UserPrefsStore(private val context: Context) {
     private val KEY_CESIUM_GLOBE = booleanPreferencesKey("cesium_globe_enabled")
     private val KEY_TOOLBAR_ITEMS = stringPreferencesKey("toolbar_item_ids")
     private val KEY_TOOLBAR_COACH = booleanPreferencesKey("toolbar_coachmark_seen")
+    // Camera persistence keys (issue: map resets to Spokane on cold start)
+    private val KEY_CAMERA_LAT  = stringPreferencesKey("last_camera_lat")
+    private val KEY_CAMERA_LON  = stringPreferencesKey("last_camera_lon")
+    private val KEY_CAMERA_ZOOM = stringPreferencesKey("last_camera_zoom")
 
     val prefs: Flow<UserPrefs> = context.userPrefsDataStore.data.map { p -> readFrom(p) }
 
@@ -144,6 +154,11 @@ class UserPrefsStore(private val context: Context) {
             p[KEY_CESIUM_GLOBE] = next.cesiumGlobeEnabled
             p[KEY_TOOLBAR_ITEMS] = next.toolbarItemIds.joinToString(",")
             p[KEY_TOOLBAR_COACH] = next.toolbarCoachmarkSeen
+            // Camera persistence — write only when the value is present so a
+            // null (first install) doesn't clobber a previously saved view.
+            if (next.lastCameraLat != null)  p[KEY_CAMERA_LAT]  = next.lastCameraLat.toString()
+            if (next.lastCameraLon != null)  p[KEY_CAMERA_LON]  = next.lastCameraLon.toString()
+            if (next.lastCameraZoom != null) p[KEY_CAMERA_ZOOM] = next.lastCameraZoom.toString()
         }
     }
 
@@ -155,6 +170,11 @@ class UserPrefsStore(private val context: Context) {
     /** Mark the customize-toolbar coachmark as seen. */
     suspend fun setToolbarCoachmarkSeen(value: Boolean) {
         update { it.copy(toolbarCoachmarkSeen = value) }
+    }
+
+    /** Persist the last camera view so it survives cold starts. */
+    suspend fun setLastCamera(lat: Double, lon: Double, zoom: Double) {
+        update { it.copy(lastCameraLat = lat, lastCameraLon = lon, lastCameraZoom = zoom) }
     }
 
     /** Convenience writer for the Meshtastic auto-publish toggle so the
@@ -213,6 +233,9 @@ class UserPrefsStore(private val context: Context) {
         cesiumGlobeEnabled = p[KEY_CESIUM_GLOBE] ?: false,
         toolbarItemIds = p[KEY_TOOLBAR_ITEMS]?.split(",")?.filter { it.isNotBlank() } ?: emptyList(),
         toolbarCoachmarkSeen = p[KEY_TOOLBAR_COACH] ?: false,
+        lastCameraLat  = p[KEY_CAMERA_LAT]?.toDoubleOrNull(),
+        lastCameraLon  = p[KEY_CAMERA_LON]?.toDoubleOrNull(),
+        lastCameraZoom = p[KEY_CAMERA_ZOOM]?.toDoubleOrNull(),
     )
 
     // ATAK / OpenTakServer canonical team names are Title Case ("Cyan",

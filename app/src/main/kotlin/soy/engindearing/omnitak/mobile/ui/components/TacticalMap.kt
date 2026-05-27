@@ -45,8 +45,8 @@ import soy.engindearing.omnitak.mobile.data.MapProvider
  */
 @Composable
 fun TacticalMap(
-    initialCenter: LatLng = LatLng(47.6588, -117.4260),  // Spokane, WA
-    initialZoom: Double = 11.0,
+    initialCenter: LatLng = LatLng(0.0, 0.0),  // neutral world default — callers should pass a real center
+    initialZoom: Double = 2.0,
     styleJson: String = TACTICAL_STYLE_DARK_MATTER,
     onMapLongPress: ((LatLng, Offset) -> Unit)? = null,
     onContactTap: ((CoTEvent) -> Unit)? = null,
