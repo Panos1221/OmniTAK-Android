@@ -433,6 +433,7 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
             panTargetTick = panTargetTick,
             followMeActive = followMeActive,
             useMilStdSelfSymbol = userPrefs.useMilStdSelfSymbol,
+            selfTeamColor = userPrefs.team,
             onStyleReady = { _, style ->
                 soy.engindearing.omnitak.mobile.ui.components.KmlOverlayRenderer
                     .apply(style, kmlOverlays, app.kmlOverlayStore)

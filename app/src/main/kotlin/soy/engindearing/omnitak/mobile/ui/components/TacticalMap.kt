@@ -28,6 +28,7 @@ import soy.engindearing.omnitak.mobile.data.Aircraft
 import soy.engindearing.omnitak.mobile.data.CoTEvent
 import soy.engindearing.omnitak.mobile.data.Drawing
 import soy.engindearing.omnitak.mobile.data.MapProvider
+import soy.engindearing.omnitak.mobile.data.TakTeamColor
 
 /**
  * MapLibre-backed map surface. Forwards Android lifecycle events to the
@@ -71,6 +72,11 @@ fun TacticalMap(
      *  frame. When false, falls back to the legacy `ic_self_marker`
      *  tinted disc. Sourced from [soy.engindearing.omnitak.mobile.data.UserPrefs.useMilStdSelfSymbol]. */
     useMilStdSelfSymbol: Boolean = true,
+    /** TAK team name used to tint the self-marker — e.g. "Cyan", "Red",
+     *  "Orange". Resolved via [TakTeamColor.forName]; unrecognised names
+     *  fall back to cyan (0xFF00FFFF) to match CivTAK's default for
+     *  unaffiliated friendlies. Sourced from [soy.engindearing.omnitak.mobile.data.UserPrefs.team]. */
+    selfTeamColor: String = "Cyan",
     onCameraIdle: ((LatLng, Double) -> Unit)? = null,
     /** Fired once the MapLibre map is ready. Issue #16 — lasso uses
      *  this to grab the [MapLibreMap] reference for screen↔geo
@@ -118,7 +124,7 @@ fun TacticalMap(
                     currentGridCenter?.let { GridLayer.update(map, it) }
                     AircraftLayer.update(map, currentAircraft)
                     if (currentLocationEnabled) {
-                        activateLocation(map, style, context, useMilStdSelfSymbol)
+                        activateLocation(map, style, context, useMilStdSelfSymbol, selfTeamColor)
                     }
                     // Cold-start 3D: if the persisted pref has terrain on,
                     // apply the tilt once the style (+ terrain source) is
@@ -186,7 +192,7 @@ fun TacticalMap(
             mapView.getMapAsync { map ->
                 val style = map.style
                 if (style != null && !map.locationComponent.isLocationComponentActivated) {
-                    activateLocation(map, style, context, useMilStdSelfSymbol)
+                    activateLocation(map, style, context, useMilStdSelfSymbol, selfTeamColor)
                 }
                 if (map.locationComponent.isLocationComponentActivated) {
                     safeEnableLocation(map)
@@ -410,7 +416,13 @@ private fun activateLocation(
     style: Style,
     context: android.content.Context,
     useMilStdSelfSymbol: Boolean,
+    selfTeamColor: String = "Cyan",
 ) {
+    // Resolve the ARGB tint from the operator's configured TAK team name
+    // ("Cyan", "Red", "Orange", …). Falls back to cyan — CivTAK default
+    // for unaffiliated friendlies — when the name isn't in the palette.
+    val teamArgb: Int = TakTeamColor.forName(selfTeamColor) ?: 0xFF00FFFF.toInt()
+
     // Self-position marker. When [useMilStdSelfSymbol] is true (default),
     // render with a MIL-STD-2525 friendly combat ground symbol
     // (a-f-G-U-C → SFGPUC------) so the operator's own pip reads as part
@@ -420,16 +432,34 @@ private fun activateLocation(
     // tinted-disc drawable.
     val selfBitmap: android.graphics.Bitmap? = if (useMilStdSelfSymbol) {
         soy.engindearing.omnitak.mobile.data.symbology.MilStdIconCache
-            .bitmapFor(context, cotType = "a-f-G-U-C", sizePx = 96)
+            .bitmapFor(context, cotType = "a-f-G-U-C", sizePx = 96)?.let { raw ->
+                // Tint the MIL-STD SVG bitmap with the team color by
+                // drawing it through a SRC_IN PorterDuff color filter.
+                // The SVG renders as a transparent-background ARGB bitmap
+                // so SRC_IN recolors only the opaque glyph pixels —
+                // equivalent to the iOS UIImage.withTintColor approach.
+                val tinted = android.graphics.Bitmap.createBitmap(
+                    raw.width, raw.height, android.graphics.Bitmap.Config.ARGB_8888
+                )
+                val canvas = android.graphics.Canvas(tinted)
+                val paint = android.graphics.Paint().apply {
+                    colorFilter = android.graphics.PorterDuffColorFilter(
+                        teamArgb,
+                        android.graphics.PorterDuff.Mode.SRC_IN,
+                    )
+                }
+                canvas.drawBitmap(raw, 0f, 0f, paint)
+                tinted
+            }
     } else {
         null
     }
 
     val markerOptionsBuilder = LocationComponentOptions.builder(context)
         .pulseEnabled(true)
-        .pulseColor(0xFF4ADE80.toInt())
+        .pulseColor(teamArgb)
         .pulseSingleDuration(2200f)
-        .accuracyColor(0xFF4ADE80.toInt())
+        .accuracyColor(teamArgb)
         .accuracyAlpha(0.18f)
 
     if (selfBitmap != null) {
@@ -446,9 +476,13 @@ private fun activateLocation(
             .foregroundName(SELF_FOREGROUND_IMAGE)
             .bearingName(SELF_FOREGROUND_IMAGE)
     } else {
+        // Legacy tinted-disc fallback — apply the team color as a tint
+        // on the vector drawable so the disc still reflects team identity.
         markerOptionsBuilder
             .foregroundDrawable(R.drawable.ic_self_marker)
             .bearingDrawable(R.drawable.ic_self_marker_bearing)
+            .foregroundTintColor(teamArgb)
+            .bearingTintColor(teamArgb)
     }
 
     val options = LocationComponentActivationOptions.builder(context, style)
