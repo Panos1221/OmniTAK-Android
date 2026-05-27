@@ -186,11 +186,6 @@ class ContactSymbolLayer {
         val bitmap = MilStdIconCache.bitmapFor(context, cotType, ICON_PIXEL_SIZE)
             ?: MilStdIconCache.bitmapFor(context, "a-u-A", ICON_PIXEL_SIZE)
             ?: run {
-                // Both the specific SIDC and the unknown-air fallback
-                // failed to rasterise — should be unreachable since
-                // the floor 108-entry asset bundle is part of the apk.
-                // Log + skip so a missing-asset regression doesn't
-                // crash the layer.
                 Log.w(TAG, "no bitmap available for sidc=$sidc; skipping addImage")
                 return false
             }

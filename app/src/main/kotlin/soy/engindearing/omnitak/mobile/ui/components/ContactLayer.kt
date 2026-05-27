@@ -6,7 +6,6 @@ import org.json.JSONArray
 import org.json.JSONObject
 import org.maplibre.android.maps.MapLibreMap
 import org.maplibre.android.style.sources.GeoJsonSource
-import org.maplibre.geojson.FeatureCollection
 import soy.engindearing.omnitak.mobile.data.CoTAffiliation
 import soy.engindearing.omnitak.mobile.data.CoTEvent
 
@@ -23,6 +22,13 @@ import soy.engindearing.omnitak.mobile.data.CoTEvent
  * report from P-E on TAK Discord 2026-05-27. This path mirrors how AircraftLayer
  * feeds the aircraft-src source and is consistent with the inline-style approach
  * that avoids the MapLibre-Android addLayer GL quirk on Adreno 610.
+ *
+ * NOTE on setGeoJson path: we call `GeoJsonSource.setGeoJson(String)` directly
+ * rather than `setGeoJson(FeatureCollection.fromJson(...))`. The FeatureCollection
+ * overload has a null-guard that silently no-ops when `features()` returns null
+ * (which Gson-based fromJson can produce for malformed input), and then calls
+ * nativeSetFeatureCollection(null) — rendering nothing. The String overload calls
+ * nativeSetGeoJsonString directly, bypassing the Java-layer guard entirely.
  *
  * [previewColor] is kept for callers (e.g. MarkerEditSheet) that need an
  * affiliation color outside the map.
@@ -45,19 +51,24 @@ object ContactLayer {
             Log.w(TAG, "contacts-src not found in style — skipping update")
             return
         }
-        val fc = toFeatureCollection(contacts)
-        src.setGeoJson(FeatureCollection.fromJson(fc.toString()))
+
+        val fcJson = toFeatureCollectionJson(contacts)
+
+        // Use the String overload — goes straight to nativeSetGeoJsonString, bypasses
+        // the FeatureCollection Java-layer null-guard that can silently no-op.
+        src.setGeoJson(fcJson)
+
         if (contacts.isNotEmpty()) {
-            Log.d(TAG, "pushed ${contacts.size} contacts to $SOURCE_ID")
+            Log.i(TAG, "pushed ${contacts.size} contacts to $SOURCE_ID")
         }
     }
 
     fun clear(map: MapLibreMap) {
         val src = map.style?.getSourceAs<GeoJsonSource>(SOURCE_ID) ?: return
-        src.setGeoJson(FeatureCollection.fromJson("""{"type":"FeatureCollection","features":[]}"""))
+        src.setGeoJson("""{"type":"FeatureCollection","features":[]}""")
     }
 
-    private fun toFeatureCollection(contacts: Collection<CoTEvent>): JSONObject {
+    private fun toFeatureCollectionJson(contacts: Collection<CoTEvent>): String {
         val features = JSONArray()
         for (c in contacts) {
             if (c.lat.isNaN() || c.lon.isNaN()) continue
@@ -66,6 +77,7 @@ object ContactLayer {
         return JSONObject()
             .put("type", "FeatureCollection")
             .put("features", features)
+            .toString()
     }
 
     private fun featureFor(c: CoTEvent): JSONObject {
