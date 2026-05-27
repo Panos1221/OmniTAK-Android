@@ -104,6 +104,13 @@ fun TacticalMap(
     val currentStyleReady by rememberUpdatedState(onStyleReady)
     val currentTerrain3d by rememberUpdatedState(terrain3d)
 
+    // ContactSymbolLayer uses Style.addImage (bitmap) + SymbolLayer — the path
+    // LocationComponent uses and that renders on Adreno 610 / SwiftShader when
+    // CircleLayer circle-color expressions silently fail (GL fragment pipeline bug).
+    // Keyed on styleJson so a basemap swap (style reload) gets a fresh instance
+    // with a clean installed=false state.
+    val contactSymbolLayer = remember(styleJson) { ContactSymbolLayer() }
+
     val mapView = remember {
         MapLibre.getInstance(context)
         MapView(context).apply {
@@ -119,6 +126,12 @@ fun TacticalMap(
                     .build()
                 map.setStyle(Style.Builder().fromJson(styleJson)) { style ->
                     ContactLayer.update(map, context, currentContacts)
+                    // Install bitmap-icon symbol layer alongside the inline circle layer.
+                    // The CircleLayer circle-color expression silently fails on Adreno 610
+                    // and SwiftShader — ContactSymbolLayer uses Style.addImage (the same
+                    // path LocationComponent uses) which renders correctly on both drivers.
+                    contactSymbolLayer.installInto(style, context)
+                    contactSymbolLayer.update(map, context, currentContacts)
                     MeasurementLayer.update(map, currentMeasurementPoints)
                     DrawingLayer.update(map, currentDrawings)
                     currentGridCenter?.let { GridLayer.update(map, it) }
@@ -259,7 +272,10 @@ fun TacticalMap(
     // caller's collection reference changes.
     DisposableEffect(mapView, contacts) {
         mapView.getMapAsync { map ->
-            if (map.style != null) ContactLayer.update(map, context, contacts)
+            if (map.style != null) {
+                ContactLayer.update(map, context, contacts)
+                contactSymbolLayer.update(map, context, contacts)
+            }
         }
         onDispose { }
     }
@@ -275,6 +291,8 @@ fun TacticalMap(
             if (map.style != null && map.style?.json != styleJson) {
                 map.setStyle(Style.Builder().fromJson(styleJson)) { style ->
                     ContactLayer.update(map, context, currentContacts)
+                    contactSymbolLayer.installInto(style, context)
+                    contactSymbolLayer.update(map, context, currentContacts)
                     MeasurementLayer.update(map, currentMeasurementPoints)
                     DrawingLayer.update(map, currentDrawings)
                     currentGridCenter?.let { GridLayer.update(map, it) }
@@ -666,7 +684,7 @@ private const val TACTICAL_STYLE_OVERLAYS = """,
         "circle-radius": 10,
         "circle-stroke-width": 2,
         "circle-stroke-color": "#0A1628",
-        "circle-color": ["coalesce", ["get", "color"], "#B39DDB"]
+        "circle-color": ["to-color", ["coalesce", ["get", "color"], "#B39DDB"]]
       }
     },
     {
