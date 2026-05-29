@@ -153,6 +153,30 @@ fun MeshtasticScreen(
                             },
                         )
                         DropdownMenuItem(
+                            text = {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Text(
+                                        "Broadcast over mesh",
+                                        modifier = Modifier.weight(1f),
+                                    )
+                                    if (userPrefs.broadcastOverMesh) {
+                                        Icon(
+                                            Icons.Filled.Check,
+                                            contentDescription = "Enabled",
+                                            tint = TacticalAccent,
+                                        )
+                                    }
+                                }
+                            },
+                            onClick = {
+                                val next = !userPrefs.broadcastOverMesh
+                                coScope.launch {
+                                    app.userPrefsStore.setBroadcastOverMesh(next)
+                                }
+                                menuOpen = false
+                            },
+                        )
+                        DropdownMenuItem(
                             text = { Text("Disconnect") },
                             enabled = anyConnected,
                             onClick = {

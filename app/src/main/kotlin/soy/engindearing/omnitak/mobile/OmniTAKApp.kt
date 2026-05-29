@@ -8,6 +8,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
@@ -25,6 +27,8 @@ import soy.engindearing.omnitak.mobile.domain.DataPackageBootstrap
 import soy.engindearing.omnitak.mobile.domain.DrawingStore
 import soy.engindearing.omnitak.mobile.domain.MapCameraStore
 import soy.engindearing.omnitak.mobile.domain.MeshtasticCoTBridge
+import soy.engindearing.omnitak.mobile.domain.MeshCoTRouter
+import soy.engindearing.omnitak.mobile.domain.SelfPositionBroadcaster
 import soy.engindearing.omnitak.mobile.domain.TAKConnectionService
 import soy.engindearing.omnitak.mobile.domain.MeshtasticManager
 import soy.engindearing.omnitak.mobile.domain.ServerManager
@@ -45,6 +49,12 @@ class OmniTAKApp : Application() {
         // Touches `serverManager` (and through it `userPrefsStore`,
         // `certVault`), so kicking it off here also wakes those lazies.
         DataPackageBootstrap(this, certVault, serverManager).runIfNeeded()
+
+        // Eagerly populate cachedPrefs so non-suspend sinks (cotSink,
+        // mesh broadcast toggles) can read prefs.value immediately.
+        appScope.launch {
+            userPrefsStore.prefs.collect { cachedPrefs.value = it }
+        }
 
         // Issue #5 — start a foreground service while we're holding a
         // connection so Doze doesn't kill the read loop within ~10s of
@@ -92,6 +102,30 @@ class OmniTAKApp : Application() {
             mapCameraStore.seedFromPrefs(saved)
         }
 
+        // Off-grid mesh plan Step 1b — broadcaster is now owned here so it
+        // starts when EITHER a TAK server OR Meshtastic radio is connected.
+        // ServerManager's own startPliBroadcast/stopPliBroadcast is kept
+        // for the server-PPLI path; the app-level broadcaster handles the
+        // COMBINED (server + mesh) lifecycle with mesh TX wired in.
+        // distinctUntilChanged on the derived bool avoids spurious restarts.
+        appScope.launch {
+            combine(
+                serverManager.connectionState,
+                meshtastic.activeConnectionState,
+            ) { serverState, meshState ->
+                serverState is ConnectionState.Connected ||
+                    meshState is ConnectionState.Connected
+            }
+                .distinctUntilChanged()
+                .collect { eitherConnected ->
+                    if (eitherConnected) {
+                        startAppBroadcaster()
+                    } else {
+                        stopAppBroadcaster()
+                    }
+                }
+        }
+
         // Phase 2 of the gy6 plan — FAA Remote ID BLE scanner.
         // Lifecycle is driven by `remoteIdScanEnabled` so operators can
         // opt out of the always-on BLE scan (battery cost). When a
@@ -135,6 +169,10 @@ class OmniTAKApp : Application() {
     // Application-scoped singletons. Screens reach these via
     // LocalContext.current.applicationContext as OmniTAKApp.
     private val appScope = CoroutineScope(Dispatchers.Default + SupervisorJob())
+
+    // Eagerly-cached prefs snapshot for non-suspending sinks (cotSink,
+    // mesh broadcast lambdas). Initialized to defaults until DataStore emits.
+    private val cachedPrefs = MutableStateFlow(soy.engindearing.omnitak.mobile.data.UserPrefs())
     val contactStore: ContactStore by lazy { ContactStore() }
     val drawingStore: DrawingStore by lazy { DrawingStore() }
     val mapCameraStore: MapCameraStore by lazy { MapCameraStore(userPrefsStore) }
@@ -153,7 +191,51 @@ class OmniTAKApp : Application() {
             // Phase 4: portnum-72 ATAK-plugin payloads decode straight
             // into CoT events; route them into the same ingest sink the
             // node-table bridge uses so they surface as map contacts.
-            mgr.cotSink = { event -> contactStore.ingest(event) }
+            // Off-grid Phase 1 Step 3: b-t-f events are GeoChat and must
+            // route to chatStore, not contactStore. Self-echo is dropped
+            // (events from our own UID would double-display — mirrors iOS).
+            mgr.cotSink = { event ->
+                // Drop self-echo: skip events whose UID or callsign matches ours.
+                // Uses cachedPrefs.value (non-suspending) since cotSink is a
+                // plain lambda invoked from a coroutine, not a suspend lambda.
+                val selfUid = cachedPrefs.value.selfUid
+                val selfCallsign = cachedPrefs.value.callsign
+                val isSelf = (selfUid.isNotBlank() && event.uid == selfUid) ||
+                    (selfCallsign.isNotBlank() && event.callsign == selfCallsign)
+                if (!isSelf) {
+                    when (MeshCoTRouter.classify(event)) {
+                        MeshCoTRouter.Destination.CHAT -> {
+                            // Convert b-t-f CoTEvent to ChatMessage and ingest.
+                            // Try rawXml first (full GeoChat parse); fall back to
+                            // building a ChatMessage directly from CoTEvent fields.
+                            val selfUidNow = selfUid.ifBlank { null }
+                            val chatMsg = event.rawXml?.let {
+                                runCatching {
+                                    soy.engindearing.omnitak.mobile.data.ChatXml.parse(it, selfUidNow)
+                                }.getOrNull()
+                            } ?: run {
+                                // Manual ChatMessage from CoTEvent fields.
+                                val senderCallsign = event.callsign ?: event.uid
+                                val convId = soy.engindearing.omnitak.mobile.data.ChatRoom.ALL_USERS
+                                soy.engindearing.omnitak.mobile.data.ChatMessage(
+                                    id = event.uid,
+                                    conversationId = convId,
+                                    senderUid = event.uid,
+                                    senderCallsign = senderCallsign,
+                                    text = event.remarks.ifBlank { "[mesh chat]" },
+                                    timeIso = event.timeIso
+                                        ?: java.time.format.DateTimeFormatter.ISO_INSTANT
+                                            .format(java.time.Instant.now()),
+                                    status = soy.engindearing.omnitak.mobile.data.ChatStatus.RECEIVED,
+                                    isFromSelf = false,
+                                )
+                            }
+                            chatStore.ingest(chatMsg)
+                        }
+                        MeshCoTRouter.Destination.CONTACT -> contactStore.ingest(event)
+                    }
+                }
+            }
             // GAP-109 read-back — admin responses to our get_*_request
             // calls fold into the device-config store on a background
             // coroutine. Screen collects from the store and re-renders.
@@ -217,6 +299,42 @@ class OmniTAKApp : Application() {
         soy.engindearing.omnitak.mobile.data.remoteid.RemoteIdScanner(this)
     }
     val certVault: CertVault by lazy { CertVault(this) }
+
+    // Off-grid mesh plan Step 1b — single app-owned broadcaster instance.
+    // Null until startAppBroadcaster() is called. Thread-safe via @Volatile.
+    @Volatile private var appBroadcaster: SelfPositionBroadcaster? = null
+
+    private fun startAppBroadcaster() {
+        if (appBroadcaster != null) return
+        val fixFlow = locationProvider.fix
+        // Eagerly cache the mesh-broadcast prefs as StateFlows so the
+        // lambda getters in SelfPositionBroadcaster can read .value
+        // without suspending — they're called inside a non-suspending context.
+        val broadcastOverMeshFlow = kotlinx.coroutines.flow.MutableStateFlow(true)
+        val meshIntervalMsFlow = kotlinx.coroutines.flow.MutableStateFlow(30_000L)
+        appScope.launch {
+            userPrefsStore.prefs.collect { p ->
+                broadcastOverMeshFlow.value = p.broadcastOverMesh
+                meshIntervalMsFlow.value = p.meshBroadcastIntervalSecs.coerceIn(30, 60).toLong() * 1000L
+            }
+        }
+        appBroadcaster = SelfPositionBroadcaster(
+            scope = appScope,
+            prefsStore = userPrefsStore,
+            sendCoT = { xml -> serverManager.sendCoT(xml) },
+            locationFix = fixFlow,
+            batteryProvider = ::readDeviceBatteryPercent,
+            sendToMesh = { event -> meshtastic.sendCoTOverMesh(event) },
+            meshConnected = { meshtastic.activeConnectionState.value is ConnectionState.Connected },
+            meshBroadcastEnabled = { broadcastOverMeshFlow.value },
+            meshThrottleMs = meshIntervalMsFlow.value,
+        ).also { it.start() }
+    }
+
+    private fun stopAppBroadcaster() {
+        appBroadcaster?.stop()
+        appBroadcaster = null
+    }
     val locationProvider: LocationProvider by lazy { LocationProvider(this) }
     val serverManager: ServerManager by lazy {
         ServerManager(

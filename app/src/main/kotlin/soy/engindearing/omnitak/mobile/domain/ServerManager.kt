@@ -216,23 +216,18 @@ class ServerManager(
         }
     }
 
+    // Off-grid mesh plan Step 1b: PPLI broadcaster ownership moved to
+    // OmniTAKApp so it starts when EITHER a server OR mesh radio is
+    // connected. ServerManager's PLI methods are retained as stubs to
+    // preserve the call sites (stateJobs collectors call them); they are
+    // intentional no-ops — the app-level broadcaster handles everything.
     private fun startPliBroadcast() {
-        if (pliBroadcaster != null || userPrefsStore == null) return
-        // GAP-030b — thread the live FusedLocationProviderClient fix
-        // through so PPLI carries real GPS instead of a SF default.
-        // Empty StateFlow when no provider is wired (older callers/tests).
-        val fixFlow = locationProvider?.fix
-            ?: kotlinx.coroutines.flow.MutableStateFlow(null)
-        pliBroadcaster = SelfPositionBroadcaster(
-            scope = scope,
-            prefsStore = userPrefsStore,
-            sendCoT = { xml -> sendCoT(xml) },
-            locationFix = fixFlow,
-            batteryProvider = batteryProvider,
-        ).also { it.start() }
+        // Intentional no-op: broadcaster is owned by OmniTAKApp.
+        // Left in place so callers in stateJobs collectors compile without change.
     }
 
     private fun stopPliBroadcast() {
+        // Intentional no-op: broadcaster is owned by OmniTAKApp.
         pliBroadcaster?.stop()
         pliBroadcaster = null
     }
