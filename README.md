@@ -1,5 +1,7 @@
 # OmniTAK-Android
 
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
+
 Open-source TAK (Team Awareness Kit) client for Android, built with Kotlin + Jetpack Compose.
 
 OmniTAK speaks Cursor-on-Target (CoT) over TLS to any TAK Server, supports tactical map rendering via MapLibre, ADS-B traffic display, Meshtastic radios, drawing tools, and more — designed for search-and-rescue, civil defense, and outdoor operations.
@@ -118,6 +120,8 @@ Contributions welcome. See [CONTRIBUTING.md](CONTRIBUTING.md). For larger change
 ## License
 
 Apache License 2.0. See [LICENSE](LICENSE).
+
+**Free to use, modify, and share, with no separate permission needed.** Apache 2.0 covers personal, volunteer, commercial, and government use at no cost. It only asks that you keep the existing copyright and license notice in place, and note any changes you make to the source. Translations and other contributions are welcome.
 
 OmniTAK-Android uses the following open-source components:
 
