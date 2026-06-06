@@ -291,6 +291,57 @@ fun SettingsScreen() {
                 )
             }
 
+            // External gyb_detect sensor (BLE GATT). Catches WiFi-beacon
+            // Remote ID a phone can't see and streams it over Bluetooth;
+            // merges into the same RID- markers as the on-device scanner.
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        Loc.t("settings.gybDetector"),
+                        color = MaterialTheme.colorScheme.onBackground,
+                        style = MaterialTheme.typography.bodyLarge,
+                    )
+                    Text(
+                        Loc.t("settings.gybDetector.desc"),
+                        color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+                val gybCtx = LocalContext.current
+                val gybNeedsPerm = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
+                val gybPermLauncher = rememberLauncherForActivityResult(
+                    ActivityResultContracts.RequestMultiplePermissions(),
+                ) { result ->
+                    if (result[Manifest.permission.BLUETOOTH_CONNECT] != true) {
+                        mutate { it.copy(gybDetectorEnabled = false) }
+                    }
+                }
+                Switch(
+                    checked = prefs.gybDetectorEnabled,
+                    onCheckedChange = { v ->
+                        if (!v) {
+                            mutate { it.copy(gybDetectorEnabled = false) }
+                        } else {
+                            mutate { it.copy(gybDetectorEnabled = true) }
+                            val granted = !gybNeedsPerm || ContextCompat.checkSelfPermission(
+                                gybCtx, Manifest.permission.BLUETOOTH_CONNECT,
+                            ) == PackageManager.PERMISSION_GRANTED
+                            if (!granted) {
+                                gybPermLauncher.launch(
+                                    arrayOf(
+                                        Manifest.permission.BLUETOOTH_SCAN,
+                                        Manifest.permission.BLUETOOTH_CONNECT,
+                                    )
+                                )
+                            }
+                        }
+                    },
+                )
+            }
+
             // Language — switches the UI language live, no restart. Bound
             // straight to Loc; reading Loc.current here means a switch
             // recomposes the whole screen instantly (iOS parity).

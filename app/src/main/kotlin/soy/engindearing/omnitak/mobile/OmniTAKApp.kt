@@ -169,6 +169,20 @@ class OmniTAKApp : Application() {
                 }
             }
         }
+
+        // Phase 3 — external gyb_detect sensor. When enabled, the manager's
+        // collectors run and parsed drones flow gyb → RemoteIdTrackStore →
+        // RemoteIdToCoTConverter → ContactStore, sharing the `RID-` UID with
+        // the on-device scanner so the same drone never double-plots. Actual
+        // BLE connect/disconnect is driven from Settings.
+        appScope.launch {
+            userPrefsStore.prefs
+                .map { it.gybDetectorEnabled }
+                .distinctUntilChanged()
+                .collect { enabled ->
+                    if (enabled) gybManager.start() else gybManager.stop()
+                }
+        }
     }
 
     // Application-scoped singletons. Screens reach these via
@@ -179,6 +193,17 @@ class OmniTAKApp : Application() {
     // mesh broadcast lambdas). Initialized to defaults until DataStore emits.
     private val cachedPrefs = MutableStateFlow(soy.engindearing.omnitak.mobile.data.UserPrefs())
     val contactStore: ContactStore by lazy { ContactStore() }
+    /** External gyb_detect sensor over BLE GATT (Phase 3 of the gy6 plan).
+     *  Parsed drones merge into ContactStore via the shared RID- UID;
+     *  driven by `gybDetectorEnabled` in [onCreate]. */
+    val gybManager: soy.engindearing.omnitak.mobile.domain.GybManager by lazy {
+        soy.engindearing.omnitak.mobile.domain.GybManager(
+            context = this,
+            cotSink = { event -> contactStore.ingest(event) },
+            cotRemove = { uid -> contactStore.remove(uid) },
+            scope = appScope,
+        )
+    }
     val drawingStore: DrawingStore by lazy { DrawingStore() }
     val mapCameraStore: MapCameraStore by lazy { MapCameraStore(userPrefsStore) }
     val chatStore: ChatStore by lazy {

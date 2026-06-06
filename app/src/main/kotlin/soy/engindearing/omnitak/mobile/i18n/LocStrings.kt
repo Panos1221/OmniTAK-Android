@@ -89,6 +89,8 @@ internal object LocStrings {
         // Drone detection
         "settings.faaRemoteIdScanner" to "FAA Remote ID scanner",
         "settings.faaRemoteId.desc" to "Listen for nearby drones (DJI Mavic, Skydio, Autel) broadcasting FAA Remote ID over Bluetooth. Detected drones appear on the map as unknown-air UAS contacts. Catches the Bluetooth-broadcast subset of Remote ID; WiFi-beacon broadcasts require a gy6 sensor. BLE scanning has a battery cost.",
+        "settings.gybDetector" to "External gyb detector",
+        "settings.gybDetector.desc" to "Pairs with a gyb_detect sensor over Bluetooth to catch WiFi-beacon Remote ID the phone can't see on its own. Detections merge with on-device Remote ID into one marker per drone.",
 
         // Language
         "settings.appLanguage" to "App Language",
@@ -152,6 +154,8 @@ internal object LocStrings {
 
         "settings.faaRemoteIdScanner" to "FAA Remote ID 掃描器",
         "settings.faaRemoteId.desc" to "監聽附近無人機（DJI Mavic、Skydio、Autel）透過藍芽廣播的 FAA Remote ID。偵測到的無人機將以未知空域 UAS 目標顯示在地圖上。可接收藍芽廣播的 Remote ID 子集；WiFi 訊號廣播需搭配 gy6 感測器。藍芽掃描會消耗電池。",
+        "settings.gybDetector" to "外接 gyb 偵測器",
+        "settings.gybDetector.desc" to "透過藍芽搭配 gyb_detect 感測器，接收手機本身收不到的 WiFi 訊號 Remote ID。偵測結果會與裝置內建 Remote ID 合併為每架無人機單一標記。",
 
         "settings.appLanguage" to "應用程式語言",
     )

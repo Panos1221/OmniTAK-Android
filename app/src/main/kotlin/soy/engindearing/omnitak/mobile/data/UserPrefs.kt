@@ -73,6 +73,11 @@ data class UserPrefs(
      *  appear on the map as unknown-air UAS contacts. Default off — opt-in
      *  because BLE scanning has a battery cost. */
     val remoteIdScanEnabled: Boolean = false,
+    /** External gyb_detect sensor over BLE GATT. Catches WiFi-beacon
+     *  Remote ID the phone can't see on its own and streams it over
+     *  Bluetooth; detections merge with on-device Remote ID into one
+     *  `RID-` marker. Default off (opt-in, pairs with a sensor). */
+    val gybDetectorEnabled: Boolean = false,
     /** When true, self-PPLI and GeoChat are also sent over the connected
      *  Meshtastic radio (portnum-72 TAKMessage). Allows two OmniTAK
      *  operators with radios to see each other and chat with NO server. */
@@ -125,6 +130,7 @@ class UserPrefsStore(private val context: Context) {
     private val KEY_FOLLOW_ME = booleanPreferencesKey("follow_me_active")
     private val KEY_MIL_STD_SELF = booleanPreferencesKey("use_milstd_self_symbol")
     private val KEY_REMOTE_ID_SCAN = booleanPreferencesKey("remote_id_scan_enabled")
+    private val KEY_GYB_DETECTOR = booleanPreferencesKey("gyb_detector_enabled")
     private val KEY_BROADCAST_OVER_MESH = booleanPreferencesKey("broadcast_over_mesh")
     private val KEY_MESH_BROADCAST_INTERVAL = intPreferencesKey("mesh_broadcast_interval_secs")
     private val KEY_MAP_3D = booleanPreferencesKey("map_3d_enabled")
@@ -160,6 +166,7 @@ class UserPrefsStore(private val context: Context) {
             p[KEY_FOLLOW_ME] = next.followMeActive
             p[KEY_MIL_STD_SELF] = next.useMilStdSelfSymbol
             p[KEY_REMOTE_ID_SCAN] = next.remoteIdScanEnabled
+            p[KEY_GYB_DETECTOR] = next.gybDetectorEnabled
             p[KEY_BROADCAST_OVER_MESH] = next.broadcastOverMesh
             p[KEY_MESH_BROADCAST_INTERVAL] = next.meshBroadcastIntervalSecs.coerceIn(30, 60)
             p[KEY_MAP_3D] = next.map3dEnabled
@@ -251,6 +258,7 @@ class UserPrefsStore(private val context: Context) {
         followMeActive = p[KEY_FOLLOW_ME] ?: false,
         useMilStdSelfSymbol = p[KEY_MIL_STD_SELF] ?: true,
         remoteIdScanEnabled = p[KEY_REMOTE_ID_SCAN] ?: false,
+        gybDetectorEnabled = p[KEY_GYB_DETECTOR] ?: false,
         broadcastOverMesh = p[KEY_BROADCAST_OVER_MESH] ?: true,
         meshBroadcastIntervalSecs = p[KEY_MESH_BROADCAST_INTERVAL]?.coerceIn(30, 60) ?: 30,
         map3dEnabled = p[KEY_MAP_3D] ?: false,
