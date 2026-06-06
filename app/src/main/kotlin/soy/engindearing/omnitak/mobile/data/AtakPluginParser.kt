@@ -224,10 +224,13 @@ object AtakPluginParser {
             staleIso = staleIso,
             callsign = callsign,
             remarks = detail.remarks ?: "",
+            // Team (group) data — required for off-grid mesh so receivers
+            // can colour-code contacts by team without a server relay.
+            teamName = detail.groupName,
+            teamRole = detail.groupRole,
             // Preserve the protobuf-derived CoT XML so existing CoT
             // pipelines (ContactStore, marker rendering) can mine the
             // structured Detail fields we don't carry on CoTEvent today.
-            // TODO: widen CoTEvent.detail to carry group/takv/track.
             rawXml = cotXml,
         )
     }
@@ -513,6 +516,9 @@ object AtakPluginParser {
         val ce = extractAttr(xml, "point", "ce")?.toDoubleOrNull() ?: 9_999_999.0
         val le = extractAttr(xml, "point", "le")?.toDoubleOrNull() ?: 9_999_999.0
         val callsign = extractAttr(xml, "contact", "callsign")
+        val remarks = extractInnerText("remarks", xml) ?: ""
+        val teamName = extractAttr(xml, "__group", "name")
+        val teamRole = extractAttr(xml, "__group", "role")
         return CoTEvent(
             uid = uid,
             type = type,
@@ -524,6 +530,9 @@ object AtakPluginParser {
             timeIso = time,
             staleIso = stale,
             callsign = callsign,
+            remarks = remarks,
+            teamName = teamName,
+            teamRole = teamRole,
             rawXml = xml,
         )
     }

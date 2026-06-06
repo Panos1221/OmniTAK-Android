@@ -9,6 +9,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import soy.engindearing.omnitak.mobile.data.CoTEvent
 import soy.engindearing.omnitak.mobile.data.SelfFix
 import soy.engindearing.omnitak.mobile.data.UserPrefs
 import soy.engindearing.omnitak.mobile.data.UserPrefsStore
@@ -45,7 +46,15 @@ class SelfPositionBroadcaster internal constructor(
     private val batteryProvider: () -> Int? = { null },
     private val intervalMs: Long = DEFAULT_INTERVAL_MS,
     private val staleSeconds: Long = DEFAULT_STALE_SECONDS,
+    // Off-grid mesh PPLI support — when non-null, self-position is also
+    // sent over the Meshtastic radio at a throttled rate so two operators
+    // with radios and NO server can still see each other.
+    private val sendToMesh: (suspend (CoTEvent) -> Boolean)? = null,
+    private val meshConnected: () -> Boolean = { false },
+    private val meshBroadcastEnabled: () -> Boolean = { true },
+    private val meshThrottleMs: Long = 30_000L,
 ) {
+    @Volatile private var lastMeshSendMs: Long = 0L
     constructor(
         scope: CoroutineScope,
         prefsStore: UserPrefsStore,
@@ -54,6 +63,10 @@ class SelfPositionBroadcaster internal constructor(
         batteryProvider: () -> Int? = { null },
         intervalMs: Long = DEFAULT_INTERVAL_MS,
         staleSeconds: Long = DEFAULT_STALE_SECONDS,
+        sendToMesh: (suspend (CoTEvent) -> Boolean)? = null,
+        meshConnected: () -> Boolean = { false },
+        meshBroadcastEnabled: () -> Boolean = { true },
+        meshThrottleMs: Long = 30_000L,
     ) : this(
         scope = scope,
         prefsFlow = prefsStore.prefs,
@@ -63,6 +76,10 @@ class SelfPositionBroadcaster internal constructor(
         batteryProvider = batteryProvider,
         intervalMs = intervalMs,
         staleSeconds = staleSeconds,
+        sendToMesh = sendToMesh,
+        meshConnected = meshConnected,
+        meshBroadcastEnabled = meshBroadcastEnabled,
+        meshThrottleMs = meshThrottleMs,
     )
 
     private var job: Job? = null
@@ -141,6 +158,32 @@ class SelfPositionBroadcaster internal constructor(
             Log.d(TAG, "PPLI sent — ${prefs.callsign} @ $lat,$lon")
         } else {
             Log.w(TAG, "PPLI send failed (no socket?)")
+        }
+
+        // Off-grid mesh PPLI — throttled to meshThrottleMs so we don’t
+        // flood LoRa bandwidth. wantAck=false is mandatory (LoRa risk).
+        val meshFn = sendToMesh
+        if (meshFn != null && meshConnected() && meshBroadcastEnabled()) {
+            val now = System.currentTimeMillis()
+            if (now - lastMeshSendMs >= meshThrottleMs) {
+                val meshEvent = CoTEvent(
+                    uid = prefs.selfUid.ifBlank { "ANDROID-fallback" },
+                    type = "a-f-G-U-C",
+                    lat = lat,
+                    lon = lon,
+                    hae = hae,
+                    ce = ce,
+                    callsign = prefs.callsign,
+                    teamName = prefs.team,
+                )
+                val meshOk = meshFn(meshEvent)
+                if (meshOk) {
+                    lastMeshSendMs = now
+                    Log.d(TAG, "Mesh PPLI sent — ${prefs.callsign} @ $lat,$lon")
+                } else {
+                    Log.w(TAG, "Mesh PPLI send failed")
+                }
+            }
         }
     }
 

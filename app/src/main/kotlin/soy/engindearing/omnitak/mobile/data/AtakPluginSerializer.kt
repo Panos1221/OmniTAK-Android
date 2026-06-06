@@ -149,6 +149,19 @@ object AtakPluginSerializer {
             appendVarint(out, contact.size.toULong())
             out.write(contact)
         }
+        // 2: group (team name + role) — required so receiving ATAK/OmniTAK
+        // shows the operator's team color. Parser already reads group via
+        // parseGroup (field 1=name, field 2=role). Step 4 of off-grid plan.
+        event.teamName?.takeIf { it.isNotEmpty() }?.let { teamName ->
+            val role = event.teamRole ?: "Team Member"
+            val group = ByteArrayOutputStream().apply {
+                appendString(this, field = 1, value = teamName)
+                appendString(this, field = 2, value = role)
+            }.toByteArray()
+            appendTag(out, field = 2, wire = 2)
+            appendVarint(out, group.size.toULong())
+            out.write(group)
+        }
         // 1: xmlDetail — stash remarks here so parsers that ignore
         // structured submessages still see them.
         if (event.remarks.isNotEmpty()) {

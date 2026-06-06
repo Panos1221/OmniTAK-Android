@@ -3,6 +3,7 @@ package soy.engindearing.omnitak.mobile.data
 import android.content.Context
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.flow.Flow
@@ -72,6 +73,13 @@ data class UserPrefs(
      *  appear on the map as unknown-air UAS contacts. Default off — opt-in
      *  because BLE scanning has a battery cost. */
     val remoteIdScanEnabled: Boolean = false,
+    /** When true, self-PPLI and GeoChat are also sent over the connected
+     *  Meshtastic radio (portnum-72 TAKMessage). Allows two OmniTAK
+     *  operators with radios to see each other and chat with NO server. */
+    val broadcastOverMesh: Boolean = true,
+    /** How often (seconds) PPLI is sent over the mesh. Coerced to 30..60
+     *  so LoRa bandwidth is respected. */
+    val meshBroadcastIntervalSecs: Int = 30,
     /** 3D terrain map mode — tilts the camera and renders DEM relief
      *  (AWS Terrarium tiles). Parity with the iOS Cesium 3D globe
      *  toggle. Default off — 2D top-down is the tactical default. */
@@ -117,6 +125,8 @@ class UserPrefsStore(private val context: Context) {
     private val KEY_FOLLOW_ME = booleanPreferencesKey("follow_me_active")
     private val KEY_MIL_STD_SELF = booleanPreferencesKey("use_milstd_self_symbol")
     private val KEY_REMOTE_ID_SCAN = booleanPreferencesKey("remote_id_scan_enabled")
+    private val KEY_BROADCAST_OVER_MESH = booleanPreferencesKey("broadcast_over_mesh")
+    private val KEY_MESH_BROADCAST_INTERVAL = intPreferencesKey("mesh_broadcast_interval_secs")
     private val KEY_MAP_3D = booleanPreferencesKey("map_3d_enabled")
     private val KEY_CESIUM_GLOBE = booleanPreferencesKey("cesium_globe_enabled")
     private val KEY_TOOLBAR_ITEMS = stringPreferencesKey("toolbar_item_ids")
@@ -150,6 +160,8 @@ class UserPrefsStore(private val context: Context) {
             p[KEY_FOLLOW_ME] = next.followMeActive
             p[KEY_MIL_STD_SELF] = next.useMilStdSelfSymbol
             p[KEY_REMOTE_ID_SCAN] = next.remoteIdScanEnabled
+            p[KEY_BROADCAST_OVER_MESH] = next.broadcastOverMesh
+            p[KEY_MESH_BROADCAST_INTERVAL] = next.meshBroadcastIntervalSecs.coerceIn(30, 60)
             p[KEY_MAP_3D] = next.map3dEnabled
             p[KEY_CESIUM_GLOBE] = next.cesiumGlobeEnabled
             p[KEY_TOOLBAR_ITEMS] = next.toolbarItemIds.joinToString(",")
@@ -186,6 +198,16 @@ class UserPrefsStore(private val context: Context) {
     /** Convenience writer for the layers-dialog mesh visibility toggle. */
     suspend fun setMeshNodesLayerVisible(value: Boolean) {
         update { it.copy(meshNodesLayerVisible = value) }
+    }
+
+    /** Persist the off-grid mesh broadcast toggle. */
+    suspend fun setBroadcastOverMesh(value: Boolean) {
+        update { it.copy(broadcastOverMesh = value) }
+    }
+
+    /** Persist the mesh PPLI broadcast interval (coerced to 30..60 seconds). */
+    suspend fun setMeshBroadcastIntervalSecs(value: Int) {
+        update { it.copy(meshBroadcastIntervalSecs = value.coerceIn(30, 60)) }
     }
 
     /**
@@ -229,6 +251,8 @@ class UserPrefsStore(private val context: Context) {
         followMeActive = p[KEY_FOLLOW_ME] ?: false,
         useMilStdSelfSymbol = p[KEY_MIL_STD_SELF] ?: true,
         remoteIdScanEnabled = p[KEY_REMOTE_ID_SCAN] ?: false,
+        broadcastOverMesh = p[KEY_BROADCAST_OVER_MESH] ?: true,
+        meshBroadcastIntervalSecs = p[KEY_MESH_BROADCAST_INTERVAL]?.coerceIn(30, 60) ?: 30,
         map3dEnabled = p[KEY_MAP_3D] ?: false,
         cesiumGlobeEnabled = p[KEY_CESIUM_GLOBE] ?: false,
         toolbarItemIds = p[KEY_TOOLBAR_ITEMS]?.split(",")?.filter { it.isNotBlank() } ?: emptyList(),
