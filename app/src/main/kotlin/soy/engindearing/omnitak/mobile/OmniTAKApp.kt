@@ -34,6 +34,11 @@ class OmniTAKApp : Application() {
     override fun onCreate() {
         super.onCreate()
 
+        // Restore the operator's UI language (or match the device locale)
+        // before any Activity composes, so the first frame renders in the
+        // right language. Mirrors iOS's LocalizationManager init.
+        soy.engindearing.omnitak.mobile.i18n.Loc.init(this)
+
         // Load the canonical CoT-type → SIDC catalogue from
         // assets/cot_types.json. Silent failure keeps the hardcoded
         // floor active so the map still renders if the asset is

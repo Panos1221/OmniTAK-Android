@@ -53,6 +53,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
 import soy.engindearing.omnitak.mobile.OmniTAKApp
+import soy.engindearing.omnitak.mobile.i18n.Loc
 import soy.engindearing.omnitak.mobile.data.CoordFormat
 import soy.engindearing.omnitak.mobile.data.DistanceUnit
 import soy.engindearing.omnitak.mobile.data.MapProvider
@@ -79,7 +80,7 @@ fun SettingsScreen() {
         containerColor = TacticalBackground,
         topBar = {
             TopAppBar(
-                title = { Text("Settings", color = MaterialTheme.colorScheme.onBackground) },
+                title = { Text(Loc.t("settings.title"), color = MaterialTheme.colorScheme.onBackground) },
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = TacticalBackground,
                     titleContentColor = MaterialTheme.colorScheme.onBackground,
@@ -95,7 +96,7 @@ fun SettingsScreen() {
                 .padding(horizontal = 16.dp, vertical = 12.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
-            SectionHeader("Identity")
+            SectionHeader(Loc.t("settings.section.identity"))
             // GAP-103 — local state insulates the field from DataStore round-trip
             // latency, otherwise every keystroke re-emits prefs.callsign and the
             // cursor jumps. The remember-key resyncs when prefs change externally.
@@ -106,7 +107,7 @@ fun SettingsScreen() {
                     callsignDraft = v
                     mutate { it.copy(callsign = v) }
                 },
-                label = { Text("Callsign") },
+                label = { Text(Loc.t("settings.callsign")) },
                 singleLine = true,
                 colors = settingsFieldColors(),
                 modifier = Modifier.fillMaxWidth(),
@@ -118,7 +119,7 @@ fun SettingsScreen() {
                 onSelect = { v -> mutate { it.copy(team = v) } },
             )
 
-            SectionHeader("Interface")
+            SectionHeader(Loc.t("settings.section.interface"))
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -129,9 +130,9 @@ fun SettingsScreen() {
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Column(modifier = Modifier.weight(1f)) {
-                    Text("Customize Toolbar", color = MaterialTheme.colorScheme.onBackground)
+                    Text(Loc.t("settings.customizeToolbar"), color = MaterialTheme.colorScheme.onBackground)
                     Text(
-                        "Build your own bottom-bar shortcuts",
+                        Loc.t("settings.customizeToolbar.desc"),
                         color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
                         style = MaterialTheme.typography.bodySmall,
                     )
@@ -139,41 +140,41 @@ fun SettingsScreen() {
                 Text("›", color = TacticalAccent, fontWeight = FontWeight.Bold)
             }
 
-            SectionHeader("Units")
+            SectionHeader(Loc.t("settings.section.units"))
             SegmentedRow(
                 options = listOf(
-                    DistanceUnit.METRIC to "Metric",
-                    DistanceUnit.IMPERIAL to "Imperial",
+                    DistanceUnit.METRIC to Loc.t("settings.unit.metric"),
+                    DistanceUnit.IMPERIAL to Loc.t("settings.unit.imperial"),
                 ),
                 selected = prefs.distanceUnit,
                 onSelect = { v -> mutate { it.copy(distanceUnit = v) } },
             )
 
-            SectionHeader("Coordinates")
+            SectionHeader(Loc.t("settings.section.coordinates"))
             SegmentedRow(
                 options = listOf(
-                    CoordFormat.LATLON_DECIMAL to "Lat/Lon",
-                    CoordFormat.LATLON_DMS to "DMS",
-                    CoordFormat.MGRS to "MGRS",
-                    CoordFormat.UTM to "UTM",
+                    CoordFormat.LATLON_DECIMAL to Loc.t("settings.coord.latlon"),
+                    CoordFormat.LATLON_DMS to Loc.t("settings.coord.dms"),
+                    CoordFormat.MGRS to Loc.t("settings.coord.mgrs"),
+                    CoordFormat.UTM to Loc.t("settings.coord.utm"),
                 ),
                 selected = prefs.coordFormat,
                 onSelect = { v -> mutate { it.copy(coordFormat = v) } },
             )
 
-            SectionHeader("Map tiles")
+            SectionHeader(Loc.t("settings.section.mapTiles"))
             SegmentedRow(
                 options = listOf(
-                    MapProvider.OSM_RASTER to "OSM",
-                    MapProvider.SATELLITE_HINT to "Satellite",
-                    MapProvider.TOPO_HINT to "Topo",
-                    MapProvider.WMTS_CUSTOM to "Custom",
+                    MapProvider.OSM_RASTER to Loc.t("settings.map.osm"),
+                    MapProvider.SATELLITE_HINT to Loc.t("settings.map.satellite"),
+                    MapProvider.TOPO_HINT to Loc.t("settings.map.topo"),
+                    MapProvider.WMTS_CUSTOM to Loc.t("settings.map.custom"),
                 ),
                 selected = prefs.mapProvider,
                 onSelect = { v -> mutate { it.copy(mapProvider = v) } },
             )
             Text(
-                "OSM (street), Topo (OpenTopoMap), Satellite (Esri imagery), or a custom WMTS / XYZ tile URL. Picks apply immediately. Offline tile cache lands in a later release.",
+                Loc.t("settings.mapTiles.desc"),
                 color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
                 style = MaterialTheme.typography.bodySmall,
             )
@@ -189,32 +190,32 @@ fun SettingsScreen() {
                         urlDraft = v
                         mutate { it.copy(customTileUrl = v) }
                     },
-                    label = { Text("Tile URL") },
+                    label = { Text(Loc.t("settings.tileUrl")) },
                     placeholder = { Text("https://host/{z}/{x}/{y}.png") },
                     singleLine = true,
                     colors = settingsFieldColors(),
                     modifier = Modifier.fillMaxWidth(),
                 )
                 Text(
-                    "Must be an XYZ-style URL with {z}, {x}, {y} placeholders (ATAK-style {\$z}/{\$x}/{\$y} also works). WMTS endpoints from agency / private servers usually expose this. Falls back to OSM if invalid.",
+                    Loc.t("settings.customTile.help"),
                     color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
                     style = MaterialTheme.typography.bodySmall,
                 )
             }
 
-            SectionHeader("Self position")
+            SectionHeader(Loc.t("settings.section.selfPosition"))
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier.fillMaxWidth(),
             ) {
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        "MIL-STD-2525 symbol",
+                        Loc.t("settings.milStdSymbol"),
                         color = MaterialTheme.colorScheme.onBackground,
                         style = MaterialTheme.typography.bodyLarge,
                     )
                     Text(
-                        "Render your own pip as a friendly-combat ground frame (a-f-G-U-C) instead of the legacy tactical disc. Affects only the map; PPLI broadcast is unchanged.",
+                        Loc.t("settings.milStdSymbol.desc"),
                         color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
                         style = MaterialTheme.typography.bodySmall,
                     )
@@ -225,19 +226,19 @@ fun SettingsScreen() {
                 )
             }
 
-            SectionHeader("Drone detection")
+            SectionHeader(Loc.t("settings.section.droneDetection"))
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier.fillMaxWidth(),
             ) {
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        "FAA Remote ID scanner",
+                        Loc.t("settings.faaRemoteIdScanner"),
                         color = MaterialTheme.colorScheme.onBackground,
                         style = MaterialTheme.typography.bodyLarge,
                     )
                     Text(
-                        "Listen for nearby drones (DJI Mavic, Skydio, Autel) broadcasting FAA Remote ID over Bluetooth. Detected drones appear on the map as unknown-air UAS contacts. Catches the Bluetooth-broadcast subset of Remote ID; WiFi-beacon broadcasts require a gy6 sensor. BLE scanning has a battery cost.",
+                        Loc.t("settings.faaRemoteId.desc"),
                         color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
                         style = MaterialTheme.typography.bodySmall,
                     )
@@ -288,6 +289,16 @@ fun SettingsScreen() {
                     },
                 )
             }
+
+            // Language — switches the UI language live, no restart. Bound
+            // straight to Loc; reading Loc.current here means a switch
+            // recomposes the whole screen instantly (iOS parity).
+            SectionHeader(Loc.t("settings.section.language"))
+            SegmentedRow(
+                options = Loc.Language.entries.map { it to "${it.flag}  ${it.displayName}" },
+                selected = Loc.current,
+                onSelect = { lang -> Loc.setLanguage(lang) },
+            )
 
             Spacer(Modifier.height(8.dp))
         }
@@ -396,7 +407,7 @@ private fun TeamColorDropdown(value: String, onSelect: (String) -> Unit) {
             value = current.first,
             onValueChange = {},
             readOnly = true,
-            label = { Text("Team") },
+            label = { Text(Loc.t("settings.team")) },
             leadingIcon = {
                 Box(
                     modifier = Modifier
