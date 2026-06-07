@@ -113,6 +113,21 @@ object GybDetectionParser {
             )
         }
 
+        // Operator (pilot) location from the RID System message. The firmware
+        // sends opLat/opLon when known, often before the drone has a GPS fix.
+        val opLat = obj.optDoubleOrNull("opLat")
+        val opLon = obj.optDoubleOrNull("opLon")
+        if (opLat != null && opLon != null && !(opLat == 0.0 && opLon == 0.0) && !opLat.isNaN() && !opLon.isNaN()) {
+            messages.add(
+                OpenDroneIdMessage.OperatorLocation(
+                    protocolVersion = 0,
+                    latitude = opLat,
+                    longitude = opLon,
+                    altitudeM = obj.optDoubleOrNull("opAlt"),
+                )
+            )
+        }
+
         return GybMessage.Drone(uasId = key, messages = messages, recvMethod = recvMethod)
     }
 

@@ -241,4 +241,5 @@ private val PRE_WARM_COT_TYPES: List<String> = listOf(
     "a-u-A",
     "a-u-A-M-H-Q",
     "a-u-A-M-F-Q",
+    "a-u-G", // RID operator / pilot marker
 )

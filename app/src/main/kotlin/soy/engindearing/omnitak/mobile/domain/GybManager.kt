@@ -119,8 +119,9 @@ class GybManager(
                 val changed = trackStore.ingest(msg.messages, fallbackId = msg.uasId)
                 for (id in changed) {
                     val track = trackStore.get(id) ?: continue
-                    RemoteIdToCoTConverter.toCoT(track)?.let { ev ->
-                        val note = " / via gyb (${GybDetectionParser.recvMethodLabel(msg.recvMethod)})"
+                    val note = " / via gyb (${GybDetectionParser.recvMethodLabel(msg.recvMethod)})"
+                    // Emit the drone and/or the operator (pilot) marker.
+                    for (ev in RemoteIdToCoTConverter.toCoTs(track)) {
                         cotSink(ev.copy(remarks = ev.remarks + note))
                     }
                 }
@@ -133,6 +134,7 @@ class GybManager(
         val removed = trackStore.purgeStale()
         for (id in removed) {
             cotRemove("RID-$id")
+            cotRemove("RID-OP-$id")
             lastRecvMethod.remove(id)
         }
         _droneCount.value = trackStore.snapshot().size
@@ -141,7 +143,7 @@ class GybManager(
     private fun clearAll() {
         val ids = trackStore.snapshot().map { it.uasId }
         trackStore.clear()
-        ids.forEach { cotRemove("RID-$it") }
+        ids.forEach { cotRemove("RID-$it"); cotRemove("RID-OP-$it") }
         _droneCount.value = 0
         _batteryLevel.value = null
         _deviceModel.value = null

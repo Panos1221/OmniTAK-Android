@@ -59,6 +59,7 @@ class RemoteIdTrackStore(
 
         val basic = messages.firstOrNull { it is OpenDroneIdMessage.BasicId } as? OpenDroneIdMessage.BasicId
         val location = messages.firstOrNull { it is OpenDroneIdMessage.Location } as? OpenDroneIdMessage.Location
+        val operator = messages.firstOrNull { it is OpenDroneIdMessage.OperatorLocation } as? OpenDroneIdMessage.OperatorLocation
 
         val uasId = basic?.uasId ?: fallbackId ?: return emptySet()
         if (uasId.isEmpty()) return emptySet()
@@ -71,14 +72,16 @@ class RemoteIdTrackStore(
             idType = basic?.idType ?: previous?.idType ?: OpenDroneIdMessage.IdType.NONE,
             lastLocation = location ?: previous?.lastLocation,
             lastUpdateMs = now,
+            lastOperatorLocation = operator ?: previous?.lastOperatorLocation,
         )
 
         // Only emit when something actually changed (new sighting,
-        // new position, or new aircraft type). PPLI-style identical
-        // updates don't need to thrash the map.
+        // new position, new operator location, or new aircraft type).
+        // PPLI-style identical updates don't need to thrash the map.
         val changed = when {
             previous == null -> true
             previous.lastLocation != updated.lastLocation -> true
+            previous.lastOperatorLocation != updated.lastOperatorLocation -> true
             previous.uaType != updated.uaType -> true
             else -> false
         }

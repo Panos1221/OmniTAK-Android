@@ -156,15 +156,15 @@ class OmniTAKApp : Application() {
                 for (uasId in changedIds) {
                     val track = remoteIdScanner.tracks.firstOrNull { it.uasId == uasId }
                     if (track == null) {
-                        // Stale-purged track: drop the marker so the map
-                        // stops showing a ghost.
-                        contactStore.remove(
-                            "RID-$uasId",
-                        )
+                        // Stale-purged track: drop the drone + pilot markers
+                        // so the map stops showing a ghost.
+                        contactStore.remove("RID-$uasId")
+                        contactStore.remove("RID-OP-$uasId")
                     } else {
+                        // Emit the drone and/or operator (pilot) markers.
                         soy.engindearing.omnitak.mobile.data.remoteid.RemoteIdToCoTConverter
-                            .toCoT(track)
-                            ?.let { contactStore.ingest(it) }
+                            .toCoTs(track)
+                            .forEach { contactStore.ingest(it) }
                     }
                 }
             }
