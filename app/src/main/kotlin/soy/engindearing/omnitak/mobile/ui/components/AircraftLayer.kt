@@ -4,7 +4,6 @@ import android.util.Log
 import org.json.JSONArray
 import org.json.JSONObject
 import org.maplibre.android.maps.MapLibreMap
-import org.maplibre.android.style.sources.GeoJsonSource
 import soy.engindearing.omnitak.mobile.data.Aircraft
 
 /**
@@ -22,27 +21,17 @@ object AircraftLayer {
     const val LABEL_LAYER_ID = "aircraft-label"
 
     fun update(map: MapLibreMap, aircraft: List<Aircraft>) {
-        val style = map.style ?: return
-        val src = style.getSourceAs<GeoJsonSource>(SOURCE_ID) ?: return
-        val fc = toFeatureCollection(aircraft)
-        src.setGeoJson(
-            org.maplibre.geojson.FeatureCollection.fromJson(fc.toString())
-        )
+        if (!GeoJsonLayerFeeder.push(map, SOURCE_ID, toFeatures(aircraft))) return
         if (aircraft.isNotEmpty()) {
             Log.i("AircraftLayer", "pushed ${aircraft.size} aircraft to $SOURCE_ID")
         }
     }
 
     fun clear(map: MapLibreMap) {
-        val src = map.style?.getSourceAs<GeoJsonSource>(SOURCE_ID) ?: return
-        src.setGeoJson(
-            org.maplibre.geojson.FeatureCollection.fromJson(
-                """{"type":"FeatureCollection","features":[]}"""
-            )
-        )
+        GeoJsonLayerFeeder.clear(map, SOURCE_ID)
     }
 
-    private fun toFeatureCollection(aircraft: List<Aircraft>): JSONObject {
+    private fun toFeatures(aircraft: List<Aircraft>): JSONArray {
         val features = JSONArray()
         aircraft.forEach { a ->
             features.put(
@@ -66,8 +55,6 @@ object AircraftLayer {
                     )
             )
         }
-        return JSONObject()
-            .put("type", "FeatureCollection")
-            .put("features", features)
+        return features
     }
 }

@@ -3,7 +3,6 @@ package soy.engindearing.omnitak.mobile.ui.components
 import org.json.JSONArray
 import org.json.JSONObject
 import org.maplibre.android.maps.MapLibreMap
-import org.maplibre.android.style.sources.GeoJsonSource
 import soy.engindearing.omnitak.mobile.data.Drawing
 import soy.engindearing.omnitak.mobile.data.DrawingKind
 import kotlin.math.cos
@@ -19,14 +18,10 @@ object DrawingLayer {
     const val SOURCE_ID = "drawings-src"
 
     fun update(map: MapLibreMap, drawings: List<Drawing>) {
-        val style = map.style ?: return
-        val src = style.getSourceAs<GeoJsonSource>(SOURCE_ID) ?: return
-        src.setGeoJson(
-            org.maplibre.geojson.FeatureCollection.fromJson(toFeatureCollection(drawings).toString())
-        )
+        GeoJsonLayerFeeder.push(map, SOURCE_ID, toFeatures(drawings))
     }
 
-    private fun toFeatureCollection(drawings: List<Drawing>): JSONObject {
+    private fun toFeatures(drawings: List<Drawing>): JSONArray {
         val features = JSONArray()
         drawings.forEach { d ->
             when (d.kind) {
@@ -35,9 +30,7 @@ object DrawingLayer {
                 DrawingKind.CIRCLE -> features.put(circleFeature(d))
             }
         }
-        return JSONObject()
-            .put("type", "FeatureCollection")
-            .put("features", features)
+        return features
     }
 
     private fun lineFeature(d: Drawing): JSONObject {
