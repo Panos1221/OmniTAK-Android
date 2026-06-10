@@ -6,7 +6,13 @@ Open-source TAK (Team Awareness Kit) client for Android, built with Kotlin + Jet
 
 OmniTAK speaks Cursor-on-Target (CoT) over TLS to any TAK Server, supports tactical map rendering via MapLibre, ADS-B traffic display, Meshtastic radios, drawing tools, and more — designed for search-and-rescue, civil defense, and outdoor operations.
 
-> **Bring your own TAK Server.** OmniTAK is a client. Stand up [TAK Server](https://tak.gov) (community CIV edition) or [FreeTAKServer](https://github.com/FreeTAKTeam/FreeTakServer) and point OmniTAK at it.
+> **Bring your own TAK Server.** OmniTAK is a client. Stand up [TAK Server](https://tak.gov) (community CIV edition), [OpenTAKServer](https://github.com/brian7704/OpenTAKServer), or [taky](https://github.com/tkuester/taky) and point OmniTAK at it.
+
+## 🧪 Testers wanted
+
+OmniTAK for Android is in **Google Play closed testing**, and every tester helps push it toward the public Play Store release. The iOS build is already live on the [App Store](https://apps.apple.com/us/app/omnitakmobile/id6755246992).
+
+**To test the Android build:** drop your Google-account email in the Beta section at **[omnitak.engindearing.soy](https://omnitak.engindearing.soy)** and you will get the install link by email. Free, no ads, Apache 2.0.
 
 ## Download
 
@@ -16,7 +22,7 @@ OmniTAK speaks Cursor-on-Target (CoT) over TLS to any TAK Server, supports tacti
 
 - **Signed APK (sideload):** [OmniTAK-0.2.2-vc18.apk](https://github.com/engindearing-projects/OmniTAK-Android/releases/download/v0.2.1/OmniTAK-0.2.2-vc18.apk)
 - **Always-latest APK:** [releases/latest](https://github.com/engindearing-projects/OmniTAK-Android/releases/latest)
-- **Google Play (closed testing):** ask J for an invite
+- **Google Play (closed testing):** [sign up at omnitak.engindearing.soy](https://omnitak.engindearing.soy) with your Google-account email
 
 > **Upgrading?** versionCode is monotonic — every release ratchets the integer up. Android allows in-place upgrade as long as the signing cert is unchanged.
 
@@ -132,7 +138,7 @@ OmniTAK-Android uses the following open-source components:
 
 ## Acknowledgments
 
-Built by [Engindearing](https://engindearing.soy). Inspired by [ATAK](https://github.com/deptofdefense/AndroidTacticalAssaultKit-CIV), iTAK, [FreeTAKServer](https://github.com/FreeTAKTeam/FreeTakServer), and the broader TAK community.
+Built by [Engindearing](https://engindearing.soy). Inspired by [ATAK](https://github.com/deptofdefense/AndroidTacticalAssaultKit-CIV), iTAK, [OpenTAKServer](https://github.com/brian7704/OpenTAKServer), and the broader TAK community.
 
 The companion iOS client is [OmniTAK-iOS](https://github.com/engindearing-projects/OmniTAK-iOS).
 
