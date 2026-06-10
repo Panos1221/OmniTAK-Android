@@ -51,7 +51,7 @@ import soy.engindearing.omnitak.mobile.i18n.Loc
  *      will mirror the iOS ATAKToolsView once we wire the Android
  *      equivalent. Tapping it surfaces a snackbar via the parent.
  *
- * The sheet's container color matches the LiquidGlassNavBar tactical
+ * The sheet's container color matches the bottom toolbar's tactical
  * dark surface so the popup reads as part of the same chrome family.
  */
 @OptIn(ExperimentalMaterial3Api::class)

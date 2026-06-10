@@ -65,7 +65,7 @@ import soy.engindearing.omnitak.mobile.ui.components.ToolbarEditBus
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun SettingsScreen() {
+fun SettingsScreen(onOpenAbout: () -> Unit = {}) {
     val app = LocalContext.current.applicationContext as OmniTAKApp
     val prefs by app.userPrefsStore.prefs.collectAsState(initial = UserPrefs())
     val scope = rememberCoroutineScope()
@@ -351,6 +351,29 @@ fun SettingsScreen() {
                 selected = Loc.current,
                 onSelect = { lang -> Loc.setLanguage(lang) },
             )
+
+            // About — the route was registered in AppNav since 0.1 but
+            // nothing navigated to it after the bottom-bar rework dropped
+            // the About tab. This row is the entry point.
+            SectionHeader("About")
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(8.dp))
+                    .clickable { onOpenAbout() }
+                    .padding(vertical = 10.dp, horizontal = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("About OmniTAK", color = MaterialTheme.colorScheme.onBackground)
+                    Text(
+                        "v${soy.engindearing.omnitak.mobile.BuildConfig.VERSION_NAME} " +
+                            "(${soy.engindearing.omnitak.mobile.BuildConfig.VERSION_CODE})",
+                        color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+            }
 
             Spacer(Modifier.height(8.dp))
         }

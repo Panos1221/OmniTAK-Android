@@ -243,7 +243,9 @@ fun AppNav() {
             composable("missionsync") {
                 soy.engindearing.omnitak.mobile.ui.screens.MissionSyncScreen(onBack = { nav.popBackStack() })
             }
-            composable("settings") { SettingsScreen() }
+            composable("settings") {
+                SettingsScreen(onOpenAbout = { nav.navigate("about") })
+            }
             composable("about") { AboutScreen() }
         }
     }
