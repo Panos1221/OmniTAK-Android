@@ -20,23 +20,36 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Inventory2
 import androidx.compose.material.icons.filled.Sync
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -45,12 +58,14 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.launch
 import soy.engindearing.omnitak.mobile.OmniTAKApp
 import soy.engindearing.omnitak.mobile.domain.AggregatedMission
 import soy.engindearing.omnitak.mobile.domain.AggregatedPackage
 import soy.engindearing.omnitak.mobile.domain.MissionServerStatus
 import soy.engindearing.omnitak.mobile.domain.ServerSyncSession
+import soy.engindearing.omnitak.mobile.i18n.Loc
 import soy.engindearing.omnitak.mobile.ui.theme.HostileRed
 import soy.engindearing.omnitak.mobile.ui.theme.TacticalAccent
 import soy.engindearing.omnitak.mobile.ui.theme.TacticalBackground
@@ -70,6 +85,15 @@ fun MissionSyncScreen(onBack: () -> Unit = {}) {
     val sessions by manager.sessions.collectAsState()
     val isRefreshing by manager.isRefreshing.collectAsState()
     val scope = rememberCoroutineScope()
+    val snackbar = remember { SnackbarHostState() }
+    fun toast(msg: String) {
+        scope.launch { snackbar.showSnackbar(msg, withDismissAction = true) }
+    }
+    // "New Mission" sheet (createMission) + package→mission attach
+    // picker (attachHashToMission) — the screen used to be a read-only
+    // status display while these Marti write APIs sat unwired.
+    var newMissionOpen by remember { mutableStateOf(false) }
+    var attachTarget by remember { mutableStateOf<AggregatedPackage?>(null) }
 
     LaunchedEffect(Unit) { manager.refreshAll() }
 
@@ -97,6 +121,16 @@ fun MissionSyncScreen(onBack: () -> Unit = {}) {
                 },
                 actions = {
                     IconButton(
+                        onClick = { newMissionOpen = true },
+                        enabled = sessions.any { it.status.isOnline },
+                    ) {
+                        Icon(
+                            Icons.Filled.Add,
+                            contentDescription = Loc.t("mission.new.title"),
+                            tint = TacticalAccent,
+                        )
+                    }
+                    IconButton(
                         onClick = { scope.launch { manager.refreshAll() } },
                         enabled = !isRefreshing,
                     ) {
@@ -117,6 +151,7 @@ fun MissionSyncScreen(onBack: () -> Unit = {}) {
                 ),
             )
         },
+        snackbarHost = { SnackbarHost(snackbar) },
     ) { inner: PaddingValues ->
         if (sessions.isEmpty()) {
             EmptyMissionSync(Modifier.padding(inner))
@@ -143,7 +178,187 @@ fun MissionSyncScreen(onBack: () -> Unit = {}) {
 
             if (allPackages.isNotEmpty()) {
                 item { SectionHeader("DATA PACKAGES", "${allPackages.size}") }
-                items(allPackages, key = { it.id }) { p -> PackageRow(p) }
+                items(allPackages, key = { it.id }) { p ->
+                    PackageRow(p, onTap = { attachTarget = p })
+                }
+            }
+        }
+    }
+
+    if (newMissionOpen) {
+        NewMissionSheet(
+            servers = sessions.filter { it.status.isOnline },
+            onCreate = { serverId, name, description ->
+                newMissionOpen = false
+                val serverName = sessions
+                    .firstOrNull { it.serverId == serverId }?.serverName ?: serverId
+                scope.launch {
+                    val creator = app.userPrefsStore.ensureSelfUid()
+                    manager.createMission(serverId, name, description, creator).fold(
+                        onSuccess = { toast(Loc.t("mission.new.created", it.name, serverName)) },
+                        onFailure = {
+                            toast(Loc.t("mission.new.failed", it.message ?: "unknown error"))
+                        },
+                    )
+                }
+            },
+            onDismiss = { newMissionOpen = false },
+        )
+    }
+
+    // Tap a data package → attach its hash to a mission on the same
+    // server (PUT /Marti/api/missions/{name}/contents).
+    attachTarget?.let { pkg ->
+        val missionsOnServer = sessions
+            .firstOrNull { it.serverId == pkg.serverId }?.missions ?: emptyList()
+        if (missionsOnServer.isEmpty()) {
+            LaunchedEffect(pkg.id) {
+                snackbar.showSnackbar(
+                    Loc.t("mission.attach.none", pkg.serverName),
+                    withDismissAction = true,
+                )
+                attachTarget = null
+            }
+        } else {
+            AlertDialog(
+                onDismissRequest = { attachTarget = null },
+                containerColor = TacticalSurface,
+                title = {
+                    Text(
+                        Loc.t("mission.attach.title", pkg.pkg.name),
+                        color = MaterialTheme.colorScheme.onBackground,
+                    )
+                },
+                text = {
+                    Column {
+                        missionsOnServer.forEach { m ->
+                            TextButton(
+                                onClick = {
+                                    attachTarget = null
+                                    scope.launch {
+                                        manager.attachPackageToMission(
+                                            serverId = pkg.serverId,
+                                            missionName = m.name,
+                                            hash = pkg.pkg.hash,
+                                        ).fold(
+                                            onSuccess = {
+                                                toast(Loc.t("mission.attach.ok", m.name))
+                                            },
+                                            onFailure = {
+                                                toast(
+                                                    Loc.t(
+                                                        "mission.attach.failed",
+                                                        it.message ?: "unknown error",
+                                                    )
+                                                )
+                                            },
+                                        )
+                                    }
+                                },
+                                modifier = Modifier.fillMaxWidth(),
+                            ) {
+                                Text(m.name, color = TacticalAccent, modifier = Modifier.fillMaxWidth())
+                            }
+                        }
+                    }
+                },
+                confirmButton = {},
+                dismissButton = {
+                    TextButton(onClick = { attachTarget = null }) {
+                        Text(Loc.t("common.cancel"), color = TacticalAccent)
+                    }
+                },
+            )
+        }
+    }
+}
+
+/**
+ * Minimal mission-authoring sheet — name + optional description, plus a
+ * server picker when more than one server is online. Mirrors the iOS
+ * MissionCreationSheet scope (slice 2 of #30).
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun NewMissionSheet(
+    servers: List<ServerSyncSession>,
+    onCreate: (serverId: String, name: String, description: String?) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val sheet = rememberModalBottomSheetState()
+    var name by remember { mutableStateOf("") }
+    var description by remember { mutableStateOf("") }
+    var serverId by remember { mutableStateOf(servers.firstOrNull()?.serverId) }
+
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheet,
+        containerColor = Color(0xFF0F1115),
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 20.dp)
+                .padding(bottom = 24.dp),
+        ) {
+            Text(
+                Loc.t("mission.new.title"),
+                color = Color.White,
+                fontSize = 18.sp,
+                fontWeight = FontWeight.SemiBold,
+            )
+            OutlinedTextField(
+                value = name,
+                onValueChange = { name = it },
+                label = { Text(Loc.t("mission.new.name")) },
+                singleLine = true,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 10.dp),
+            )
+            OutlinedTextField(
+                value = description,
+                onValueChange = { description = it },
+                label = { Text(Loc.t("mission.new.desc")) },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 8.dp),
+            )
+            if (servers.size > 1) {
+                Text(
+                    Loc.t("mission.new.server"),
+                    color = Color.White.copy(alpha = 0.6f),
+                    fontSize = 13.sp,
+                    modifier = Modifier.padding(top = 12.dp),
+                )
+                servers.forEach { s ->
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { serverId = s.serverId }
+                            .padding(vertical = 2.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        RadioButton(
+                            selected = serverId == s.serverId,
+                            onClick = { serverId = s.serverId },
+                        )
+                        Text(s.serverName, color = Color.White)
+                    }
+                }
+            }
+            Button(
+                onClick = {
+                    serverId?.let {
+                        onCreate(it, name.trim(), description.trim().ifEmpty { null })
+                    }
+                },
+                enabled = name.isNotBlank() && serverId != null,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 16.dp),
+            ) {
+                Text(Loc.t("mission.new.create"))
             }
         }
     }
@@ -283,12 +498,13 @@ private fun MissionRow(item: AggregatedMission) {
 }
 
 @Composable
-private fun PackageRow(item: AggregatedPackage) {
+private fun PackageRow(item: AggregatedPackage, onTap: () -> Unit) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(10.dp))
             .background(TacticalSurface)
+            .clickable(onClick = onTap)
             .padding(12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {

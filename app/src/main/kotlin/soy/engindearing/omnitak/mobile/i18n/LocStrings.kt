@@ -114,6 +114,19 @@ internal object LocStrings {
         "servers.delete.title" to "Delete “%s”?",
         "servers.delete.body" to "This removes the server and its enrollment (client certificate reference, CA pin). You may need admin credentials to enroll again.",
         "servers.delete.confirm" to "Delete",
+
+        // Mission Sync
+        "mission.new.title" to "New Mission",
+        "mission.new.name" to "Name",
+        "mission.new.desc" to "Description (optional)",
+        "mission.new.server" to "Server",
+        "mission.new.create" to "Create Mission",
+        "mission.new.created" to "Mission “%s” created on %s",
+        "mission.new.failed" to "Create failed: %s",
+        "mission.attach.title" to "Attach “%s” to mission…",
+        "mission.attach.none" to "No missions on %s to attach to — create one first",
+        "mission.attach.ok" to "Attached to “%s”",
+        "mission.attach.failed" to "Attach failed: %s",
     )
 
     private val ZH_HANT: Map<String, String> = mapOf(
@@ -198,5 +211,18 @@ internal object LocStrings {
         "servers.delete.title" to "刪除「%s」？",
         "servers.delete.body" to "這會移除伺服器及其註冊資料（用戶端憑證參照、CA 指紋）。重新註冊可能需要管理員憑證。",
         "servers.delete.confirm" to "刪除",
+
+        // Mission Sync
+        "mission.new.title" to "新增任務",
+        "mission.new.name" to "名稱",
+        "mission.new.desc" to "說明（選填）",
+        "mission.new.server" to "伺服器",
+        "mission.new.create" to "建立任務",
+        "mission.new.created" to "已在 %2\$s 建立任務「%1\$s」",
+        "mission.new.failed" to "建立失敗：%s",
+        "mission.attach.title" to "將「%s」附加至任務…",
+        "mission.attach.none" to "%s 上沒有可附加的任務 — 請先建立一個",
+        "mission.attach.ok" to "已附加至「%s」",
+        "mission.attach.failed" to "附加失敗：%s",
     )
 }

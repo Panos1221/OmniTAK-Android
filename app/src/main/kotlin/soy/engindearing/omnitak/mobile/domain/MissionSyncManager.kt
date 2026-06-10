@@ -118,6 +118,54 @@ class MissionSyncManager(
         }
     }
 
+    /**
+     * Create a mission on a specific enabled server, then refresh that
+     * server so the new mission appears in the list. Slice 2 of #30 —
+     * the UI consumer the staged [TakRestApiClient.createMission] API
+     * was waiting for (Android counterpart to iOS MissionCreationSheet).
+     */
+    suspend fun createMission(
+        serverId: String,
+        name: String,
+        description: String?,
+        creatorUid: String,
+    ): Result<TakMissionInfo> {
+        val sv = enabledServers().firstOrNull { it.id == serverId }
+            ?: return Result.failure(IllegalStateException("Server is not available for mission sync"))
+        val result = withContext(Dispatchers.IO) {
+            runCatching {
+                TakRestApiClient(sv, certVault).createMission(
+                    name = name,
+                    creatorUid = creatorUid,
+                    description = description?.takeIf { it.isNotBlank() },
+                )
+            }
+        }
+        if (result.isSuccess) refresh(serverId)
+        return result
+    }
+
+    /**
+     * Attach an already-uploaded data-package hash to a mission on the
+     * same server (`PUT /Marti/api/missions/{name}/contents`), then
+     * refresh so the mission's content count updates.
+     */
+    suspend fun attachPackageToMission(
+        serverId: String,
+        missionName: String,
+        hash: String,
+    ): Result<Unit> {
+        val sv = enabledServers().firstOrNull { it.id == serverId }
+            ?: return Result.failure(IllegalStateException("Server is not available for mission sync"))
+        val result = withContext(Dispatchers.IO) {
+            runCatching {
+                TakRestApiClient(sv, certVault).attachHashToMission(missionName, hash)
+            }
+        }
+        if (result.isSuccess) refresh(serverId)
+        return result
+    }
+
     /** Refresh a single server (tap-to-retry on its row). */
     suspend fun refresh(serverId: String) {
         val sv = enabledServers().firstOrNull { it.id == serverId } ?: return
