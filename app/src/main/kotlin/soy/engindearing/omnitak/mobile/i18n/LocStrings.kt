@@ -94,6 +94,15 @@ internal object LocStrings {
 
         // Language
         "settings.appLanguage" to "App Language",
+
+        // Map — marker save/drop toasts
+        "marker.verb.saved" to "Saved",
+        "marker.verb.updated" to "Updated",
+        "marker.toast.sent" to "%s marker “%s” — sent to server",
+        "marker.toast.local" to "%s marker “%s” — local only (no server)",
+        "marker.toast.droppedSent" to "Dropped marker at %s — sent to server",
+        "marker.toast.droppedLocal" to "Dropped marker at %s — local only (no server)",
+        "map.toast.panning" to "Panning to %s",
     )
 
     private val ZH_HANT: Map<String, String> = mapOf(
@@ -158,5 +167,14 @@ internal object LocStrings {
         "settings.gybDetector.desc" to "透過藍芽搭配 gyb_detect 感測器，接收手機本身收不到的 WiFi 訊號 Remote ID。偵測結果會與裝置內建 Remote ID 合併為每架無人機單一標記。",
 
         "settings.appLanguage" to "應用程式語言",
+
+        // Map — marker save/drop toasts
+        "marker.verb.saved" to "已儲存",
+        "marker.verb.updated" to "已更新",
+        "marker.toast.sent" to "%s標記「%s」— 已傳送至伺服器",
+        "marker.toast.local" to "%s標記「%s」— 僅本機（未連線伺服器）",
+        "marker.toast.droppedSent" to "已在 %s 放置標記 — 已傳送至伺服器",
+        "marker.toast.droppedLocal" to "已在 %s 放置標記 — 僅本機（未連線伺服器）",
+        "map.toast.panning" to "正在移至 %s",
     )
 }

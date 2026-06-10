@@ -64,6 +64,7 @@ import soy.engindearing.omnitak.mobile.data.Drawing
 import soy.engindearing.omnitak.mobile.data.DrawingKind
 import soy.engindearing.omnitak.mobile.data.GeoMath
 import soy.engindearing.omnitak.mobile.domain.ConnectionState
+import soy.engindearing.omnitak.mobile.i18n.Loc
 import soy.engindearing.omnitak.mobile.ui.components.ATAKStatusBar
 import soy.engindearing.omnitak.mobile.ui.components.ContactsPanel
 import soy.engindearing.omnitak.mobile.ui.components.LayersDialog
@@ -1321,19 +1322,33 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
                 val ll = markerSheetLatLng
                 if (ll != null) {
                     val uid = editingMarker?.uid ?: "local-${System.currentTimeMillis()}"
-                    app.contactStore.ingest(
-                        CoTEvent(
-                            uid = uid,
-                            type = "a-${result.affiliation.code}-G-U-C",
-                            lat = ll.latitude,
-                            lon = ll.longitude,
-                            hae = result.altitudeMeters ?: 0.0,
-                            callsign = result.callsign,
-                            remarks = result.remarks,
-                        )
+                    val event = CoTEvent(
+                        uid = uid,
+                        type = "a-${result.affiliation.code}-G-U-C",
+                        lat = ll.latitude,
+                        lon = ll.longitude,
+                        hae = result.altitudeMeters ?: 0.0,
+                        callsign = result.callsign,
+                        remarks = result.remarks,
                     )
-                    val verb = if (editingMarker != null) "Updated" else "Saved"
-                    toast("$verb ${result.affiliation.name.lowercase()} marker “${result.callsign}”")
+                    app.contactStore.ingest(event)
+                    val verb = if (editingMarker != null) Loc.t("marker.verb.updated")
+                    else Loc.t("marker.verb.saved")
+                    // Broadcast the marker to every connected server so
+                    // teammates actually see it — same path the FEMA
+                    // palette uses. The local ingest above stands on its
+                    // own for offline work; the toast tells the operator
+                    // which of the two actually happened.
+                    scope.launch {
+                        val xml = soy.engindearing.omnitak.mobile.domain.CotBuilders
+                            .rebuildEvent(event, destUids = emptyList())
+                        val sent = runCatching { app.serverManager.sendCoT(xml) }
+                            .getOrDefault(false)
+                        toast(
+                            if (sent) Loc.t("marker.toast.sent", verb, result.callsign)
+                            else Loc.t("marker.toast.local", verb, result.callsign)
+                        )
+                    }
                 }
                 markerSheetLatLng = null
                 editingMarker = null
@@ -1389,28 +1404,37 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
                     panTarget = LatLng(lat, lon)
                     panTargetTick += 1
                     if (followMeActive) mutatePref { it.copy(followMeActive = false) }
-                    if (drop) {
-                        val uid = "local-${System.currentTimeMillis()}"
-                        app.contactStore.ingest(
-                            CoTEvent(
-                                uid = uid,
-                                type = "a-f-G-U-C",
-                                lat = lat,
-                                lon = lon,
-                                hae = 0.0,
-                                callsign = "Marker ${contacts.size + 1}",
-                                remarks = "",
-                            )
-                        )
-                    }
                     // Honor the operator's coordinate-format pref (#3/#4),
                     // matching the radial "Add @ …" toast above.
                     val coordText = soy.engindearing.omnitak.mobile.data.CoordFormatter
                         .position(lat, lon, userPrefs.coordFormat)
-                    toast(
-                        if (drop) "Dropped marker at $coordText"
-                        else "Panning to $coordText"
-                    )
+                    if (drop) {
+                        val uid = "local-${System.currentTimeMillis()}"
+                        val event = CoTEvent(
+                            uid = uid,
+                            type = "a-f-G-U-C",
+                            lat = lat,
+                            lon = lon,
+                            hae = 0.0,
+                            callsign = "Marker ${contacts.size + 1}",
+                            remarks = "",
+                        )
+                        app.contactStore.ingest(event)
+                        // Same broadcast contract as MarkerEditSheet —
+                        // peers see the dropped marker, offline stays local.
+                        scope.launch {
+                            val xml = soy.engindearing.omnitak.mobile.domain.CotBuilders
+                                .rebuildEvent(event, destUids = emptyList())
+                            val sent = runCatching { app.serverManager.sendCoT(xml) }
+                                .getOrDefault(false)
+                            toast(
+                                if (sent) Loc.t("marker.toast.droppedSent", coordText)
+                                else Loc.t("marker.toast.droppedLocal", coordText)
+                            )
+                        }
+                    } else {
+                        toast(Loc.t("map.toast.panning", coordText))
+                    }
                 },
                 onDismiss = { coordEntryOpen = false },
             )
