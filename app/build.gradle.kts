@@ -26,6 +26,21 @@ android {
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables { useSupportLibrary = true }
+
+        // Cesium Ion token lives in local.properties (gitignored) — NEVER in
+        // a committed asset; this is a public repo. CesiumMapView injects it
+        // into cesium_scene.html at WebView load time. The empty default
+        // keeps clean checkouts / CI green (the 3D globe runs tokenless with
+        // degraded Ion imagery instead of failing the build).
+        val localProps = Properties().apply {
+            val f = rootProject.file("local.properties")
+            if (f.exists()) f.inputStream().use { load(it) }
+        }
+        buildConfigField(
+            "String",
+            "CESIUM_ION_TOKEN",
+            "\"${localProps.getProperty("CESIUM_ION_TOKEN") ?: ""}\"",
+        )
     }
 
     // Upload keystore lives outside source control. Set the four props in
@@ -80,7 +95,10 @@ android {
 
     kotlinOptions { jvmTarget = "17" }
 
-    buildFeatures { compose = true }
+    buildFeatures {
+        compose = true
+        buildConfig = true
+    }
 
     // Pull in the existing icon/color/theme resources that already live under
     // app_assets/android/ so we don't duplicate them.
@@ -128,6 +146,11 @@ dependencies {
 
     implementation("androidx.datastore:datastore-preferences:1.1.1")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")
+
+    // EncryptedSharedPreferences for TAK server passwords + .p12 passphrases
+    // (Keystore-backed AES256-GCM). The server-list JSON in DataStore keeps
+    // only non-secret fields; see SecureCredentialStore.
+    implementation("androidx.security:security-crypto:1.1.0-alpha06")
 
     // MapLibre Android (open-source fork of Mapbox) — parallel to iOS
     implementation("org.maplibre.gl:android-sdk:11.8.0")
@@ -188,6 +211,10 @@ dependencies {
     // Real org.json impl so JVM tests can exercise JSONObject/JSONArray
     // (e.g. CesiumEntityJson serialization). Android stubs them otherwise.
     testImplementation("org.json:json:20240303")
+    // Real XmlPullParser impl (same trick as org.json above) so JVM tests
+    // exercise the production CoTParser/ChatXml path — the mockable
+    // android.jar makes XmlPullParserFactory.newInstance() return null.
+    testImplementation("net.sf.kxml:kxml2:2.3.0")
 
     // Instrumented tests — symbology validation runs on a real device or
     // emulator because MapLibre's SurfaceView renders through native GL

@@ -1,23 +1,27 @@
 package soy.engindearing.omnitak.mobile.data
 
-import android.util.Xml
 import org.xmlpull.v1.XmlPullParser
+import org.xmlpull.v1.XmlPullParserFactory
 import java.io.StringReader
 
 /**
- * Lightweight XmlPullParser-based CoT event parser. Only pulls the
- * fields OmniTAK renders today (uid, type, time, stale, point, contact
- * callsign, __group team name/role). Silently returns null on malformed
- * input rather than throwing — the read loop can't afford to die on a
- * single bad event.
+ * Lightweight XmlPullParser-based CoT event parser. Pulls the fields
+ * OmniTAK renders today (uid, type, time, stale, point, contact
+ * callsign, __group team name/role, remarks, usericon iconsetpath).
+ * Silently returns null on malformed input rather than throwing — the
+ * read loop can't afford to die on a single bad event.
+ *
+ * Built on [XmlPullParserFactory] (not `android.util.Xml`) so it runs
+ * on plain-JVM unit tests too — there is no separate "test fallback"
+ * parser anymore; tests exercise exactly the production path.
  *
  * Usage:
  *   CoTParser.parse("<event …><point …/><detail><contact callsign=…/></detail></event>")
  */
 object CoTParser {
     fun parse(xml: String): CoTEvent? = runCatching {
-        val parser: XmlPullParser = Xml.newPullParser()
-        parser.setFeature(XmlPullParser.FEATURE_PROCESS_NAMESPACES, false)
+        val factory = XmlPullParserFactory.newInstance().apply { isNamespaceAware = false }
+        val parser: XmlPullParser = factory.newPullParser()
         parser.setInput(StringReader(xml))
 
         var uid: String? = null
@@ -32,6 +36,8 @@ object CoTParser {
         var callsign: String? = null
         var teamName: String? = null
         var teamRole: String? = null
+        var remarks: String? = null
+        var iconsetPath: String? = null
 
         var ev = parser.eventType
         while (ev != XmlPullParser.END_DOCUMENT) {
@@ -60,6 +66,14 @@ object CoTParser {
                         teamName = parser.getAttributeValue(null, "name") ?: teamName
                         teamRole = parser.getAttributeValue(null, "role") ?: teamRole
                     }
+                    // Free-text remarks — chat fallback + marker notes read these.
+                    "remarks" -> {
+                        remarks = parser.nextText() ?: remarks
+                    }
+                    // Custom-glyph icon (FEMA etc.) — rebuildEvent re-emits it.
+                    "usericon" -> {
+                        iconsetPath = parser.getAttributeValue(null, "iconsetpath") ?: iconsetPath
+                    }
                 }
             }
             ev = parser.next()
@@ -77,9 +91,11 @@ object CoTParser {
             timeIso = timeIso,
             staleIso = staleIso,
             callsign = callsign,
+            remarks = remarks ?: "",
             rawXml = xml,
             teamName = teamName,
             teamRole = teamRole,
+            iconsetPath = iconsetPath,
         )
     }.getOrNull()
 }

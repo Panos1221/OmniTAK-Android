@@ -86,7 +86,7 @@ fun WaypointEditSheet(
                 color = Color.White,
             )
             Text(
-                text = "%.5f, %.5f".format(waypoint.latDeg, waypoint.lonDeg),
+                text = rememberCoordText(waypoint.latDeg, waypoint.lonDeg),
                 style = MaterialTheme.typography.bodySmall,
                 color = Color.White.copy(alpha = 0.7f),
                 fontFamily = FontFamily.Monospace,

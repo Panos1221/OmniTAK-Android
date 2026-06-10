@@ -60,7 +60,7 @@ class SelfPositionBroadcasterMeshTest {
             },
             meshConnected = meshConnected,
             meshBroadcastEnabled = meshBroadcastEnabled,
-            meshThrottleMs = meshThrottleMs,
+            meshThrottleMs = { meshThrottleMs },
         )
     }
 

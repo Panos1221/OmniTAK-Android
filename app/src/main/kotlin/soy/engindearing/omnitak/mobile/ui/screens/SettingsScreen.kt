@@ -58,6 +58,8 @@ import soy.engindearing.omnitak.mobile.data.CoordFormat
 import soy.engindearing.omnitak.mobile.data.DistanceUnit
 import soy.engindearing.omnitak.mobile.data.MapProvider
 import soy.engindearing.omnitak.mobile.data.UserPrefs
+import soy.engindearing.omnitak.mobile.domain.ConnectionState
+import soy.engindearing.omnitak.mobile.ui.components.GybDeviceSheet
 import soy.engindearing.omnitak.mobile.ui.theme.TacticalAccent
 import soy.engindearing.omnitak.mobile.ui.theme.TacticalBackground
 import soy.engindearing.omnitak.mobile.ui.theme.TacticalSurface
@@ -65,7 +67,7 @@ import soy.engindearing.omnitak.mobile.ui.components.ToolbarEditBus
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun SettingsScreen() {
+fun SettingsScreen(onOpenAbout: () -> Unit = {}) {
     val app = LocalContext.current.applicationContext as OmniTAKApp
     val prefs by app.userPrefsStore.prefs.collectAsState(initial = UserPrefs())
     val scope = rememberCoroutineScope()
@@ -342,6 +344,47 @@ fun SettingsScreen() {
                 )
             }
 
+            // gyb device picker — scan / connect / disconnect + link status.
+            // Without this row the toggle above only started stream
+            // collectors on a BLE client that never connected to anything;
+            // the whole detection pipeline was unreachable on Android.
+            if (prefs.gybDetectorEnabled) {
+                val gybState by app.gybManager.connectionState.collectAsState()
+                var showGybSheet by remember { mutableStateOf(false) }
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(8.dp))
+                        .clickable { showGybSheet = true }
+                        .padding(vertical = 10.dp, horizontal = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            Loc.t("settings.gybManage"),
+                            color = MaterialTheme.colorScheme.onBackground,
+                        )
+                        Text(
+                            when (val s = gybState) {
+                                ConnectionState.Disconnected -> Loc.t("gyb.state.disconnected")
+                                is ConnectionState.Connecting -> Loc.t("gyb.state.connecting", s.serverName)
+                                is ConnectionState.Connected -> Loc.t("gyb.state.connected", s.serverName)
+                                is ConnectionState.Failed -> Loc.t("gyb.state.failed", s.reason)
+                            },
+                            color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
+                    Text("›", color = TacticalAccent, fontWeight = FontWeight.Bold)
+                }
+                if (showGybSheet) {
+                    GybDeviceSheet(
+                        gybManager = app.gybManager,
+                        onDismiss = { showGybSheet = false },
+                    )
+                }
+            }
+
             // Language — switches the UI language live, no restart. Bound
             // straight to Loc; reading Loc.current here means a switch
             // recomposes the whole screen instantly (iOS parity).
@@ -351,6 +394,29 @@ fun SettingsScreen() {
                 selected = Loc.current,
                 onSelect = { lang -> Loc.setLanguage(lang) },
             )
+
+            // About — the route was registered in AppNav since 0.1 but
+            // nothing navigated to it after the bottom-bar rework dropped
+            // the About tab. This row is the entry point.
+            SectionHeader("About")
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(8.dp))
+                    .clickable { onOpenAbout() }
+                    .padding(vertical = 10.dp, horizontal = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("About OmniTAK", color = MaterialTheme.colorScheme.onBackground)
+                    Text(
+                        "v${soy.engindearing.omnitak.mobile.BuildConfig.VERSION_NAME} " +
+                            "(${soy.engindearing.omnitak.mobile.BuildConfig.VERSION_CODE})",
+                        color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+            }
 
             Spacer(Modifier.height(8.dp))
         }

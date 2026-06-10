@@ -44,11 +44,15 @@ import soy.engindearing.omnitak.mobile.data.MeshtasticBleClient
 import soy.engindearing.omnitak.mobile.ui.theme.TacticalAccent
 import soy.engindearing.omnitak.mobile.ui.theme.TacticalSurface
 
+/** Transport-agnostic scan row — Meshtastic and gyb results both map
+ *  into this so the picker below serves every BLE peripheral we pair. */
+data class BleDeviceItem(val name: String?, val address: String, val rssi: Int)
+
 /**
- * BLE device picker for the Meshtastic screen. Handles the
- * BLUETOOTH_SCAN/CONNECT permission flow on Android 12+, gracefully
- * falls back on older releases (which only need the location perms
- * already declared in the manifest).
+ * BLE device picker shared by the Meshtastic screen and the gyb detector
+ * sheet. Handles the BLUETOOTH_SCAN/CONNECT permission flow on Android
+ * 12+, gracefully falls back on older releases (which only need the
+ * location perms already declared in the manifest).
  *
  * Behaviour mirrors the iOS picker — start scanning on tap, surface
  * each result (name, MAC, RSSI bars), tap to connect.
@@ -58,9 +62,10 @@ fun BleScanList(
     isScanning: Boolean,
     onStartScan: () -> Unit,
     onStopScan: () -> Unit,
-    results: List<MeshtasticBleClient.BleScanResult>,
+    results: List<BleDeviceItem>,
     onConnect: (address: String) -> Unit,
     modifier: Modifier = Modifier,
+    deviceNoun: String = "Meshtastic radios",
 ) {
     val context = LocalContext.current
 
@@ -82,7 +87,7 @@ fun BleScanList(
     Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(8.dp)) {
         if (!permsGranted) {
             Text(
-                "Bluetooth scan + connect permissions are required to discover Meshtastic radios.",
+                "Bluetooth scan + connect permissions are required to discover $deviceNoun.",
                 color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f),
                 style = MaterialTheme.typography.bodySmall,
             )
@@ -126,7 +131,7 @@ fun BleScanList(
 
             if (results.isEmpty()) {
                 Text(
-                    if (isScanning) "Scanning…" else "No devices yet — start a scan to discover Meshtastic radios.",
+                    if (isScanning) "Scanning…" else "No devices yet — start a scan to discover $deviceNoun.",
                     color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
                     style = MaterialTheme.typography.bodySmall,
                 )
@@ -144,7 +149,7 @@ fun BleScanList(
 
 @Composable
 private fun ScanRow(
-    device: MeshtasticBleClient.BleScanResult,
+    device: BleDeviceItem,
     onConnect: (String) -> Unit,
 ) {
     Row(

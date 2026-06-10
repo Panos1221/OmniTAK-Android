@@ -64,14 +64,7 @@ private fun DroneMarker(entry: MultiUasRegistry.Entry, map: MapLibreMap) {
     if (lat == null || lon == null || !state.hasFix()) return
 
     val density = LocalDensity.current
-    var screen by remember { mutableStateOf<PointF?>(null) }
-    LaunchedEffect(lat, lon, map) {
-        while (isActive) {
-            screen = map.projection.toScreenLocation(LatLng(lat, lon))
-            delay(150)
-        }
-    }
-    val pt = screen ?: return
+    val pt = rememberScreenPosition(map, lat, lon, periodMs = 150) ?: return
     val xDp = with(density) { pt.x.toDp() }
     val yDp = with(density) { pt.y.toDp() }
     // Small dim cyan dot — half the size of the active drone marker so

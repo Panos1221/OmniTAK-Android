@@ -166,12 +166,7 @@ class ContactSymbolLayer {
             features.put(featureJson(c, sidc))
         }
 
-        val fc = JSONObject().apply {
-            put("type", "FeatureCollection")
-            put("features", features)
-        }
-        val source = style.getSourceAs<GeoJsonSource>(SOURCE_ID)
-        source?.setGeoJson(fc.toString())
+        GeoJsonLayerFeeder.push(style, SOURCE_ID, features)
         return newlyRegistered
     }
 

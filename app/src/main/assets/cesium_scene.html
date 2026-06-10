@@ -1,7 +1,7 @@
 <!DOCTYPE html><html lang="en"><head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-<link href="https://cesium.com/downloads/cesiumjs/releases/1.124/Build/Cesium/Widgets/widgets.css" rel="stylesheet">
+<link href="https://cesium.com/downloads/cesiumjs/releases/1.124/Build/Cesium/Widgets/widgets.css" rel="stylesheet" integrity="sha384-ghEeMdcWWzRv/BPeUcX835vcKDGrxvROXisl/Btpv3GeekBUXTSPVcFJpI1Tcrgp">
 <style>
   /* Android WebView (after loadDataWithBaseURL) resolves 100%/100vh to 0,
      so size the canvas in pixels via _fitViewport. */
@@ -16,10 +16,21 @@
 </style></head><body>
 <div id="loading"><span class="dot"></span><span class="dot"></span><span class="dot"></span><div class="label">Loading 3D world…</div></div>
 <div id="cesiumContainer"></div>
-<script src="https://cesium.com/downloads/cesiumjs/releases/1.124/Build/Cesium/Cesium.js"></script>
-<script src="https://unpkg.com/milsymbol@2.2.0/dist/milsymbol.js"></script>
+<!-- Subresource Integrity pins on every remote script/style: the WebView
+     refuses to execute a swapped artifact (CDN / BGP-level tamper) inside a
+     scene that receives operator + contact positions over OmniBridge.
+     cesium.com resources are same-origin with the page (loadDataWithBaseURL
+     uses https://cesium.com/ as base) so no crossorigin attr; unpkg sends
+     Access-Control-Allow-Origin:* so milsymbol uses crossorigin=anonymous.
+     Residual risk: Cesium.js fetches its own Workers/Assets from the same
+     CDN at runtime — those can't carry SRI. Vendoring the full Cesium build
+     (~70 MB with Workers/Assets) was rejected for APK size. -->
+<script src="https://cesium.com/downloads/cesiumjs/releases/1.124/Build/Cesium/Cesium.js" integrity="sha384-5oazsHA45lZs9jgvxUv40qbMATfjwmtR/wQePfqDAeIDIhGmSK2V0gpRoCpZVBzJ"></script>
+<script src="https://unpkg.com/milsymbol@2.2.0/dist/milsymbol.js" integrity="sha384-nBeSn7MTFykY3q7Irc8DaMFNJsqvJE1xMmD74ebMBp8ZK6QTtcooJ6Yb8+62w8ur" crossorigin="anonymous"></script>
 <script>
-  Cesium.Ion.defaultAccessToken='eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJqdGkiOiI3NDUwNGNjMy05ZGM2LTRhNjgtYWY1ZS0xNjdjMTI0OTYxMjYiLCJpZCI6NDMyNTU0LCJpc3MiOiJodHRwczovL2lvbi5jZXNpdW0uY29tIiwiYXVkIjoidW5kZWZpbmVkX2RlZmF1bHQiLCJpYXQiOjE3Nzg5OTYwNzd9.4MTmIKjioTboeXn02fm7i7Ftude-JVIg3RYW4jgIZ48';
+  // Injected at WebView load time by CesiumMapView from BuildConfig.CESIUM_ION_TOKEN
+  // (fed by gitignored local.properties) — never commit a literal token here.
+  Cesium.Ion.defaultAccessToken='__CESIUM_ION_TOKEN__';
   const _state={ready:false,viewer:null,entities:new Map(),drawings:new Map(),billboardCache:new Map()};
   function _drawColor(hex,a){try{const c=Cesium.Color.fromCssColorString(hex||'#4ADE80');return a!==undefined?c.withAlpha(a):c}catch(e){return Cesium.Color.CYAN}}
   function _havDist(a,b){const R=6371000,lat1=a[1]*Math.PI/180,lat2=b[1]*Math.PI/180,dLat=(b[1]-a[1])*Math.PI/180,dLon=(b[0]-a[0])*Math.PI/180;const s=Math.sin(dLat/2)**2+Math.cos(lat1)*Math.cos(lat2)*Math.sin(dLon/2)**2;return 2*R*Math.asin(Math.min(1,Math.sqrt(s)))}

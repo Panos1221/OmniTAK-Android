@@ -33,7 +33,7 @@ import kotlin.math.roundToLong
  * Chat packets: is_compressed=true — callsign/device_callsign/message compressed
  *               via [Unishox2]; chat.to is always raw (matches gateway behaviour).
  *
- * Wire helpers reuse the same pattern as [AtakPluginSerializer].
+ * Wire helpers live in [MeshWire].
  */
 object TakPacketSerializer {
 
@@ -60,7 +60,7 @@ object TakPacketSerializer {
 
         // 2: contact
         val contactBytes = buildContact(callsign, deviceId, compressed = false)
-        appendLenField(out, field = 2, bytes = contactBytes)
+        MeshWire.appendLenField(out, field = 2, bytes = contactBytes)
 
         // 3: group
         val team = Team.fromCotName(event.teamName)
@@ -69,18 +69,18 @@ object TakPacketSerializer {
             if (it == MemberRole.Unspecifed) MemberRole.TeamMember else it
         }
         val groupBytes = buildGroup(role, team)
-        appendLenField(out, field = 3, bytes = groupBytes)
+        MeshWire.appendLenField(out, field = 3, bytes = groupBytes)
 
         // 4: status
         val statusBytes = buildStatus(battery)
-        appendLenField(out, field = 4, bytes = statusBytes)
+        MeshWire.appendLenField(out, field = 4, bytes = statusBytes)
 
         // 5: pli (oneof payload_variant)
         val latI = (event.lat * 1e7).roundToLong().toInt()
         val lonI = (event.lon * 1e7).roundToLong().toInt()
         val altitude = event.hae.toInt()
         val pliBytes = buildPli(latI, lonI, altitude, speed = speed, course = course)
-        appendLenField(out, field = 5, bytes = pliBytes)
+        MeshWire.appendLenField(out, field = 5, bytes = pliBytes)
 
         return out.toByteArray()
     }
@@ -106,11 +106,11 @@ object TakPacketSerializer {
         val out = ByteArrayOutputStream()
 
         // 1: is_compressed = true (1)
-        appendVarintField(out, field = 1, value = 1UL)
+        MeshWire.appendVarintField(out, field = 1, value = 1UL)
 
         // 2: contact (compressed)
         val contactBytes = buildContact(callsign, deviceId, compressed = true)
-        appendLenField(out, field = 2, bytes = contactBytes)
+        MeshWire.appendLenField(out, field = 2, bytes = contactBytes)
 
         // 3: group
         val team = Team.fromCotName(event.teamName)
@@ -118,15 +118,15 @@ object TakPacketSerializer {
             if (it == MemberRole.Unspecifed) MemberRole.TeamMember else it
         }
         val groupBytes = buildGroup(role, team)
-        appendLenField(out, field = 3, bytes = groupBytes)
+        MeshWire.appendLenField(out, field = 3, bytes = groupBytes)
 
         // 4: status
         val statusBytes = buildStatus(battery)
-        appendLenField(out, field = 4, bytes = statusBytes)
+        MeshWire.appendLenField(out, field = 4, bytes = statusBytes)
 
         // 6: chat (oneof payload_variant) — message compressed, to raw
         val chatBytes = buildChat(message, to, compressed = true)
-        appendLenField(out, field = 6, bytes = chatBytes)
+        MeshWire.appendLenField(out, field = 6, bytes = chatBytes)
 
         return out.toByteArray()
     }
@@ -138,12 +138,12 @@ object TakPacketSerializer {
         val csBytes = if (compressed) Unishox2.compress(callsign) else callsign.toByteArray(Charsets.UTF_8)
         val dcBytes = if (compressed) Unishox2.compress(deviceCallsign) else deviceCallsign.toByteArray(Charsets.UTF_8)
         // 1: callsign (bytes)
-        appendTag(out, field = 1, wire = 2)
-        appendVarint(out, csBytes.size.toULong())
+        MeshWire.appendTag(out, field = 1, wire = 2)
+        MeshWire.appendVarint(out, csBytes.size.toULong())
         out.write(csBytes)
         // 2: device_callsign (bytes)
-        appendTag(out, field = 2, wire = 2)
-        appendVarint(out, dcBytes.size.toULong())
+        MeshWire.appendTag(out, field = 2, wire = 2)
+        MeshWire.appendVarint(out, dcBytes.size.toULong())
         out.write(dcBytes)
         return out.toByteArray()
     }
@@ -151,33 +151,33 @@ object TakPacketSerializer {
     private fun buildGroup(role: MemberRole, team: Team): ByteArray {
         val out = ByteArrayOutputStream()
         // 1: role (varint)
-        appendVarintField(out, field = 1, value = role.value.toULong())
+        MeshWire.appendVarintField(out, field = 1, value = role.value.toULong())
         // 2: team (varint)
-        appendVarintField(out, field = 2, value = team.value.toULong())
+        MeshWire.appendVarintField(out, field = 2, value = team.value.toULong())
         return out.toByteArray()
     }
 
     private fun buildStatus(battery: Int): ByteArray {
         val out = ByteArrayOutputStream()
         // 1: battery (varint)
-        appendVarintField(out, field = 1, value = battery.toULong())
+        MeshWire.appendVarintField(out, field = 1, value = battery.toULong())
         return out.toByteArray()
     }
 
     private fun buildPli(latI: Int, lonI: Int, altitude: Int, speed: Int, course: Int): ByteArray {
         val out = ByteArrayOutputStream()
         // 1: latitude_i  (sfixed32 / wire type 5)
-        appendTag(out, field = 1, wire = 5)
-        appendSFixed32(out, latI)
+        MeshWire.appendTag(out, field = 1, wire = 5)
+        MeshWire.appendSFixed32(out, latI)
         // 2: longitude_i (sfixed32 / wire type 5)
-        appendTag(out, field = 2, wire = 5)
-        appendSFixed32(out, lonI)
+        MeshWire.appendTag(out, field = 2, wire = 5)
+        MeshWire.appendSFixed32(out, lonI)
         // 3: altitude (varint)
-        if (altitude != 0) appendVarintField(out, field = 3, value = altitude.toULong())
+        if (altitude != 0) MeshWire.appendVarintField(out, field = 3, value = altitude.toULong())
         // 4: speed (varint)
-        if (speed != 0) appendVarintField(out, field = 4, value = speed.toULong())
+        if (speed != 0) MeshWire.appendVarintField(out, field = 4, value = speed.toULong())
         // 5: course (varint)
-        if (course != 0) appendVarintField(out, field = 5, value = course.toULong())
+        if (course != 0) MeshWire.appendVarintField(out, field = 5, value = course.toULong())
         return out.toByteArray()
     }
 
@@ -186,51 +186,17 @@ object TakPacketSerializer {
         val msgBytes = if (compressed) Unishox2.compress(message) else message.toByteArray(Charsets.UTF_8)
         val toBytes = to.toByteArray(Charsets.UTF_8) // to is always raw
         // 1: message (bytes)
-        appendTag(out, field = 1, wire = 2)
-        appendVarint(out, msgBytes.size.toULong())
+        MeshWire.appendTag(out, field = 1, wire = 2)
+        MeshWire.appendVarint(out, msgBytes.size.toULong())
         out.write(msgBytes)
         // 2: to (bytes)
-        appendTag(out, field = 2, wire = 2)
-        appendVarint(out, toBytes.size.toULong())
+        MeshWire.appendTag(out, field = 2, wire = 2)
+        MeshWire.appendVarint(out, toBytes.size.toULong())
         out.write(toBytes)
         return out.toByteArray()
     }
 
     // endregion
 
-    // region Wire helpers (mirroring AtakPluginSerializer) ------------------
 
-    internal fun appendTag(out: ByteArrayOutputStream, field: Int, wire: Int) {
-        appendVarint(out, ((field shl 3) or (wire and 0x7)).toULong())
-    }
-
-    internal fun appendVarint(out: ByteArrayOutputStream, value: ULong) {
-        var v = value
-        while (v >= 0x80uL) {
-            out.write(((v and 0x7FuL).toInt()) or 0x80)
-            v = v shr 7
-        }
-        out.write(v.toInt() and 0x7F)
-    }
-
-    internal fun appendVarintField(out: ByteArrayOutputStream, field: Int, value: ULong) {
-        appendTag(out, field = field, wire = 0)
-        appendVarint(out, value)
-    }
-
-    private fun appendLenField(out: ByteArrayOutputStream, field: Int, bytes: ByteArray) {
-        appendTag(out, field = field, wire = 2)
-        appendVarint(out, bytes.size.toULong())
-        out.write(bytes)
-    }
-
-    /** sfixed32: 4-byte little-endian signed 32-bit integer. */
-    private fun appendSFixed32(out: ByteArrayOutputStream, value: Int) {
-        out.write(value and 0xFF)
-        out.write((value ushr 8) and 0xFF)
-        out.write((value ushr 16) and 0xFF)
-        out.write((value ushr 24) and 0xFF)
-    }
-
-    // endregion
 }

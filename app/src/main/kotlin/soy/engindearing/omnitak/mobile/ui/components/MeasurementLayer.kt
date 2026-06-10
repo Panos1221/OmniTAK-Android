@@ -4,7 +4,6 @@ import org.json.JSONArray
 import org.json.JSONObject
 import org.maplibre.android.geometry.LatLng
 import org.maplibre.android.maps.MapLibreMap
-import org.maplibre.android.style.sources.GeoJsonSource
 
 /**
  * Updates the measurement source baked into [OSM_RASTER_STYLE]. The
@@ -19,14 +18,10 @@ object MeasurementLayer {
     const val POINTS_LAYER_ID = "measurement-points"
 
     fun update(map: MapLibreMap, points: List<LatLng>) {
-        val style = map.style ?: return
-        val src = style.getSourceAs<GeoJsonSource>(SOURCE_ID) ?: return
-        src.setGeoJson(
-            org.maplibre.geojson.FeatureCollection.fromJson(toFeatureCollection(points).toString())
-        )
+        GeoJsonLayerFeeder.push(map, SOURCE_ID, toFeatures(points))
     }
 
-    private fun toFeatureCollection(points: List<LatLng>): JSONObject {
+    private fun toFeatures(points: List<LatLng>): JSONArray {
         val features = JSONArray()
 
         if (points.size >= 2) {
@@ -68,8 +63,6 @@ object MeasurementLayer {
             )
         }
 
-        return JSONObject()
-            .put("type", "FeatureCollection")
-            .put("features", features)
+        return features
     }
 }

@@ -100,8 +100,7 @@ fun MeshNodeDetailSheet(
 
             // Position — surface "no GPS yet" instead of empty.
             if (node.position != null) {
-                DetailRow("Latitude", "%.6f°".format(node.position.lat))
-                DetailRow("Longitude", "%.6f°".format(node.position.lon))
+                DetailRow("Position", rememberCoordText(node.position.lat, node.position.lon))
                 node.position.altitudeM?.let { DetailRow("Altitude", "$it m") }
             } else {
                 DetailRow(

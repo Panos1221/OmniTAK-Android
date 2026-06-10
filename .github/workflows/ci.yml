@@ -1,0 +1,64 @@
+# OmniTAK-Android CI — compile + unit tests.
+#
+# Scope and known limitations:
+#  - assembleDebug + testDebugUnitTest only. No instrumented (androidTest)
+#    or BLE-dependent tests run here — the gyb/Meshtastic BLE paths are
+#    covered at the parser/pipeline unit level (RemoteIdPipelineTest etc.);
+#    end-to-end BLE needs hardware or tools/mock_gyb_peripheral.py from the
+#    gyb_detect repo and is exercised manually.
+#  - app/src/main/jniLibs/ is a ~750 MB untracked local overlay of prebuilt
+#    native libs (gitignored, never in the repo). The debug APK built here
+#    therefore packages WITHOUT those overlaid .so files — fine for
+#    compile/test verification, NOT a release artifact. Release builds with
+#    the overlay happen on a workstation that has it (scripts/build-release.sh).
+#  - CESIUM_ION_TOKEN comes from local.properties (gitignored); the build
+#    intentionally falls back to an empty token so clean CI checkouts stay
+#    green (3D globe runs tokenless with degraded Ion imagery).
+#  - No release signing on CI: keystore.properties is absent, and the
+#    release config falls back to debug signing by design. assembleDebug
+#    avoids the question entirely.
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+      - "release/*"
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build + unit tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      # Caches Gradle distribution, dependency caches, and configuration
+      # cache between runs; also uploads a build scan-free job summary.
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Assemble debug APK
+        run: ./gradlew assembleDebug --stacktrace
+
+      - name: Run unit tests
+        run: ./gradlew testDebugUnitTest --stacktrace
+
+      - name: Upload unit test reports
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: unit-test-reports
+          path: app/build/reports/tests/testDebugUnitTest/
+          retention-days: 14

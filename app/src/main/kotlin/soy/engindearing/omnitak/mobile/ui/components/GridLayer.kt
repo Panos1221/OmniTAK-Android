@@ -4,7 +4,6 @@ import org.json.JSONArray
 import org.json.JSONObject
 import org.maplibre.android.geometry.LatLng
 import org.maplibre.android.maps.MapLibreMap
-import org.maplibre.android.style.sources.GeoJsonSource
 import kotlin.math.ceil
 import kotlin.math.floor
 
@@ -31,29 +30,18 @@ object GridLayer {
         halfWidthDegrees: Double = 2.0,
         stepDegrees: Double = 0.1,
     ) {
-        val style = map.style ?: return
-        val src = style.getSourceAs<GeoJsonSource>(SOURCE_ID) ?: return
-        src.setGeoJson(
-            org.maplibre.geojson.FeatureCollection.fromJson(
-                toFeatureCollection(center, halfWidthDegrees, stepDegrees).toString()
-            )
-        )
+        GeoJsonLayerFeeder.push(map, SOURCE_ID, toFeatures(center, halfWidthDegrees, stepDegrees))
     }
 
     fun clear(map: MapLibreMap) {
-        val src = map.style?.getSourceAs<GeoJsonSource>(SOURCE_ID) ?: return
-        src.setGeoJson(
-            org.maplibre.geojson.FeatureCollection.fromJson(
-                """{"type":"FeatureCollection","features":[]}"""
-            )
-        )
+        GeoJsonLayerFeeder.clear(map, SOURCE_ID)
     }
 
-    private fun toFeatureCollection(
+    private fun toFeatures(
         center: LatLng,
         halfWidth: Double,
         step: Double,
-    ): JSONObject {
+    ): JSONArray {
         val features = JSONArray()
         val latMin = floor((center.latitude - halfWidth) / step) * step
         val latMax = ceil((center.latitude + halfWidth) / step) * step
@@ -106,8 +94,6 @@ object GridLayer {
             lon += step
         }
 
-        return JSONObject()
-            .put("type", "FeatureCollection")
-            .put("features", features)
+        return features
     }
 }

@@ -9,9 +9,9 @@ import java.io.ByteArrayOutputStream
 
 /**
  * JVM unit tests for the portnum-72 ATAK plugin parser/serializer pair.
- * The XML fallback test deliberately invokes [AtakPluginParser.parse]
- * which routes through `parseCoTXmlFallback` on a plain JVM (no
- * `android.util.Xml`).
+ * Raw-XML payloads route through the production [CoTParser] (built on
+ * XmlPullParserFactory, so it runs on plain JVM) — tests exercise the
+ * exact on-device path.
  */
 class AtakPluginParserTest {
 

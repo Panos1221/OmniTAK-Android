@@ -400,7 +400,11 @@ private fun BlePane(
                 isScanning = false
                 mesh.stopBleScan()
             },
-            results = results.toList(),
+            results = results.map {
+                soy.engindearing.omnitak.mobile.ui.components.BleDeviceItem(
+                    name = it.name, address = it.address, rssi = it.rssi,
+                )
+            },
             onConnect = { addr ->
                 isScanning = false
                 mesh.stopBleScan()

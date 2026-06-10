@@ -1,9 +1,5 @@
 package soy.engindearing.omnitak.mobile.data
 
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
-import java.util.TimeZone
 import java.util.UUID
 
 /**
@@ -474,21 +470,14 @@ object TakPacketParser {
         lat: Double, lon: Double, hae: Double, ce: Double, le: Double,
         timeIso: String, staleIso: String,
         detailXml: String,
-    ): String = buildString {
-        append("<?xml version=\"1.0\" encoding=\"UTF-8\"?>")
-        append("<event version=\"2.0\" uid=\"${esc(uid)}\" type=\"${esc(type)}\"")
-        append(" time=\"$timeIso\" start=\"$timeIso\" stale=\"$staleIso\"")
-        append(" how=\"${esc(how)}\">")
-        append("<point lat=\"$lat\" lon=\"$lon\" hae=\"$hae\" ce=\"$ce\" le=\"$le\"/>")
-        append(detailXml)
-        append("</event>")
-    }
+    ): String = CotXml.buildEvent(
+        uid = uid, type = type, how = how,
+        lat = lat, lon = lon, hae = hae, ce = ce, le = le,
+        timeIso = timeIso, staleIso = staleIso,
+        detailXml = detailXml,
+    )
 
-    private fun esc(s: String) = s
-        .replace("&", "&amp;")
-        .replace("<", "&lt;")
-        .replace(">", "&gt;")
-        .replace("\"", "&quot;")
+    private fun esc(s: String) = CotXml.escape(s)
 
     // endregion
 
@@ -527,12 +516,8 @@ object TakPacketParser {
 
     // region Timestamp helpers
 
-    private val isoFmt get() = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSSXXX", Locale.US).apply {
-        timeZone = TimeZone.getTimeZone("UTC")
-    }
-
-    private fun isoNow(): String = isoFmt.format(Date())
-    private fun isoStale(): String = isoFmt.format(Date(System.currentTimeMillis() + 300_000L))
+    private fun isoNow(): String = CotXml.isoMillis()
+    private fun isoStale(): String = CotXml.isoMillis(System.currentTimeMillis() + 300_000L)
 
     // endregion
 }

@@ -32,5 +32,12 @@ fun AboutScreen() {
             style = MaterialTheme.typography.bodyLarge,
             color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f),
         )
+        Spacer(Modifier.height(16.dp))
+        Text(
+            "Version ${soy.engindearing.omnitak.mobile.BuildConfig.VERSION_NAME} " +
+                "(${soy.engindearing.omnitak.mobile.BuildConfig.VERSION_CODE})",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.5f),
+        )
     }
 }

@@ -3,8 +3,6 @@ package soy.engindearing.omnitak.mobile.data
 import org.xmlpull.v1.XmlPullParser
 import org.xmlpull.v1.XmlPullParserFactory
 import java.io.StringReader
-import java.time.Instant
-import java.time.format.DateTimeFormatter
 import java.util.UUID
 
 /**
@@ -32,8 +30,9 @@ object ChatXml {
         hae: Double = 0.0,
         messageId: String = UUID.randomUUID().toString(),
     ): Generated {
-        val now = DateTimeFormatter.ISO_INSTANT.format(Instant.now())
-        val stale = DateTimeFormatter.ISO_INSTANT.format(Instant.now().plusSeconds(3600))
+        val nowMs = System.currentTimeMillis()
+        val now = CotXml.isoMillis(nowMs)
+        val stale = CotXml.isoMillis(nowMs + 3600_000L)
 
         val chatroom: String
         val marti: String
@@ -50,13 +49,7 @@ object ChatXml {
         }
         val chatgrpUid1 = if (isGroup) chatroom else (recipientUid ?: chatroom)
 
-        val xml = buildString {
-            append("""<?xml version="1.0" encoding="UTF-8"?>""")
-            append(
-                "<event version=\"2.0\" uid=\"GeoChat.${escape(senderUid)}.${escape(chatroom)}.${escape(messageId)}\" " +
-                    "type=\"b-t-f\" time=\"$now\" start=\"$now\" stale=\"$stale\" how=\"h-g-i-g-o\">"
-            )
-            append("<point lat=\"$lat\" lon=\"$lon\" hae=\"$hae\" ce=\"9999999\" le=\"9999999\"/>")
+        val detail = buildString {
             append("<detail>")
             append(
                 "<__chat id=\"${escape(chatroom)}\" chatroom=\"${escape(chatroom)}\" " +
@@ -77,8 +70,16 @@ object ChatXml {
             )
             append(marti)
             append("</detail>")
-            append("</event>")
         }
+        val xml = CotXml.buildEvent(
+            uid = "GeoChat.$senderUid.$chatroom.$messageId",
+            type = "b-t-f",
+            how = "h-g-i-g-o",
+            lat = lat, lon = lon, hae = hae,
+            timeIso = now,
+            staleIso = stale,
+            detailXml = detail,
+        )
         return Generated(xml, messageId)
     }
 
@@ -171,7 +172,7 @@ object ChatXml {
             recipientUid = recipientUid,
             recipientCallsign = recipientCallsign,
             text = finalText,
-            timeIso = eventTime ?: DateTimeFormatter.ISO_INSTANT.format(Instant.now()),
+            timeIso = eventTime ?: CotXml.isoMillis(),
             status = ChatStatus.RECEIVED,
             isFromSelf = selfUid != null && finalSenderUid == selfUid,
             serverId = serverId,
@@ -186,10 +187,5 @@ object ChatXml {
         return if (parts.size >= 2) parts[1] else null
     }
 
-    private fun escape(raw: String): String =
-        raw.replace("&", "&amp;")
-            .replace("<", "&lt;")
-            .replace(">", "&gt;")
-            .replace("\"", "&quot;")
-            .replace("'", "&apos;")
+    private fun escape(raw: String): String = CotXml.escape(raw)
 }

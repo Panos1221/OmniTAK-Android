@@ -173,8 +173,10 @@ class OmniTAKApp : Application() {
         // Phase 3 — external gyb_detect sensor. When enabled, the manager's
         // collectors run and parsed drones flow gyb → RemoteIdTrackStore →
         // RemoteIdToCoTConverter → ContactStore, sharing the `RID-` UID with
-        // the on-device scanner so the same drone never double-plots. Actual
-        // BLE connect/disconnect is driven from Settings.
+        // the on-device scanner so the same drone never double-plots.
+        // Scan/connect/disconnect live in Settings → GybDeviceSheet; the
+        // manager auto-reconnects to the persisted last device on start()
+        // and after a BLE drop (with backoff), and stops with the toggle.
         appScope.launch {
             userPrefsStore.prefs
                 .map { it.gybDetectorEnabled }
@@ -202,6 +204,16 @@ class OmniTAKApp : Application() {
             cotSink = { event -> contactStore.ingest(event) },
             cotRemove = { uid -> contactStore.remove(uid) },
             scope = appScope,
+            trackStore = remoteIdTrackStore,
+            // cachedPrefs is eagerly collected in onCreate, so by the time
+            // the toggle-driven start() fires this read is non-suspending
+            // and current.
+            lastDeviceAddress = { cachedPrefs.value.gybLastDeviceAddress },
+            persistLastDevice = { addr ->
+                appScope.launch {
+                    userPrefsStore.update { it.copy(gybLastDeviceAddress = addr) }
+                }
+            },
         )
     }
     val drawingStore: DrawingStore by lazy { DrawingStore() }
@@ -254,8 +266,7 @@ class OmniTAKApp : Application() {
                                     senderCallsign = senderCallsign,
                                     text = event.remarks.ifBlank { "[mesh chat]" },
                                     timeIso = event.timeIso
-                                        ?: java.time.format.DateTimeFormatter.ISO_INSTANT
-                                            .format(java.time.Instant.now()),
+                                        ?: soy.engindearing.omnitak.mobile.data.CotXml.isoMillis(),
                                     status = soy.engindearing.omnitak.mobile.data.ChatStatus.RECEIVED,
                                     isFromSelf = false,
                                 )
@@ -323,16 +334,31 @@ class OmniTAKApp : Application() {
         soy.engindearing.omnitak.mobile.data.RasterOverlayStore(this)
     }
 
+    /** Single Remote ID track roster shared by the phone scanner and the
+     *  gyb sensor. One store means either source refreshes a drone's
+     *  lastSeen and the stale purge only drops a track when BOTH sensors
+     *  have gone silent — two private stores used to delete each other's
+     *  live RID-/RID-OP- markers. */
+    val remoteIdTrackStore: soy.engindearing.omnitak.mobile.data.remoteid.RemoteIdTrackStore by lazy {
+        soy.engindearing.omnitak.mobile.data.remoteid.RemoteIdTrackStore()
+    }
+
     /** FAA Remote ID BLE scanner (Phase 2 of the gy6 plan). Starts/stops
      *  from a coroutine in [onCreate] driven by `remoteIdScanEnabled`. */
     val remoteIdScanner: soy.engindearing.omnitak.mobile.data.remoteid.RemoteIdScanner by lazy {
-        soy.engindearing.omnitak.mobile.data.remoteid.RemoteIdScanner(this)
+        soy.engindearing.omnitak.mobile.data.remoteid.RemoteIdScanner(this, remoteIdTrackStore)
     }
     val certVault: CertVault by lazy { CertVault(this) }
 
     // Off-grid mesh plan Step 1b — single app-owned broadcaster instance.
     // Null until startAppBroadcaster() is called. Thread-safe via @Volatile.
     @Volatile private var appBroadcaster: SelfPositionBroadcaster? = null
+    // The prefs collector feeding the broadcaster's lambda getters. Held so
+    // stopAppBroadcaster() can cancel it — every connect→disconnect cycle
+    // used to leak one infinite collector coroutine in process-lifetime
+    // appScope (a field device flapping connectivity for days accumulated
+    // hundreds, all re-running on every prefs write).
+    @Volatile private var broadcasterPrefsJob: kotlinx.coroutines.Job? = null
 
     private fun startAppBroadcaster() {
         if (appBroadcaster != null) return
@@ -342,7 +368,8 @@ class OmniTAKApp : Application() {
         // without suspending — they're called inside a non-suspending context.
         val broadcastOverMeshFlow = kotlinx.coroutines.flow.MutableStateFlow(true)
         val meshIntervalMsFlow = kotlinx.coroutines.flow.MutableStateFlow(30_000L)
-        appScope.launch {
+        broadcasterPrefsJob?.cancel()
+        broadcasterPrefsJob = appScope.launch {
             userPrefsStore.prefs.collect { p ->
                 broadcastOverMeshFlow.value = p.broadcastOverMesh
                 meshIntervalMsFlow.value = p.meshBroadcastIntervalSecs.coerceIn(30, 60).toLong() * 1000L
@@ -357,13 +384,18 @@ class OmniTAKApp : Application() {
             sendToMesh = { event -> meshtastic.sendCoTOverMesh(event) },
             meshConnected = { meshtastic.activeConnectionState.value is ConnectionState.Connected },
             meshBroadcastEnabled = { broadcastOverMeshFlow.value },
-            meshThrottleMs = meshIntervalMsFlow.value,
+            // Lambda, not a snapshot — the operator's interval pref now
+            // applies to a running broadcaster instead of freezing at the
+            // pre-DataStore 30 s default.
+            meshThrottleMs = { meshIntervalMsFlow.value },
         ).also { it.start() }
     }
 
     private fun stopAppBroadcaster() {
         appBroadcaster?.stop()
         appBroadcaster = null
+        broadcasterPrefsJob?.cancel()
+        broadcasterPrefsJob = null
     }
     val locationProvider: LocationProvider by lazy { LocationProvider(this) }
     val serverManager: ServerManager by lazy {
