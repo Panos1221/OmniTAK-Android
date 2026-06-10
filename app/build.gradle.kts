@@ -129,6 +129,11 @@ dependencies {
     implementation("androidx.datastore:datastore-preferences:1.1.1")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")
 
+    // EncryptedSharedPreferences for TAK server passwords + .p12 passphrases
+    // (Keystore-backed AES256-GCM). The server-list JSON in DataStore keeps
+    // only non-secret fields; see SecureCredentialStore.
+    implementation("androidx.security:security-crypto:1.1.0-alpha06")
+
     // MapLibre Android (open-source fork of Mapbox) — parallel to iOS
     implementation("org.maplibre.gl:android-sdk:11.8.0")
 
