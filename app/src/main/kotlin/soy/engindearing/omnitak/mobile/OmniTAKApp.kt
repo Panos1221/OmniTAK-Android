@@ -202,6 +202,7 @@ class OmniTAKApp : Application() {
             cotSink = { event -> contactStore.ingest(event) },
             cotRemove = { uid -> contactStore.remove(uid) },
             scope = appScope,
+            trackStore = remoteIdTrackStore,
         )
     }
     val drawingStore: DrawingStore by lazy { DrawingStore() }
@@ -322,10 +323,19 @@ class OmniTAKApp : Application() {
         soy.engindearing.omnitak.mobile.data.RasterOverlayStore(this)
     }
 
+    /** Single Remote ID track roster shared by the phone scanner and the
+     *  gyb sensor. One store means either source refreshes a drone's
+     *  lastSeen and the stale purge only drops a track when BOTH sensors
+     *  have gone silent — two private stores used to delete each other's
+     *  live RID-/RID-OP- markers. */
+    val remoteIdTrackStore: soy.engindearing.omnitak.mobile.data.remoteid.RemoteIdTrackStore by lazy {
+        soy.engindearing.omnitak.mobile.data.remoteid.RemoteIdTrackStore()
+    }
+
     /** FAA Remote ID BLE scanner (Phase 2 of the gy6 plan). Starts/stops
      *  from a coroutine in [onCreate] driven by `remoteIdScanEnabled`. */
     val remoteIdScanner: soy.engindearing.omnitak.mobile.data.remoteid.RemoteIdScanner by lazy {
-        soy.engindearing.omnitak.mobile.data.remoteid.RemoteIdScanner(this)
+        soy.engindearing.omnitak.mobile.data.remoteid.RemoteIdScanner(this, remoteIdTrackStore)
     }
     val certVault: CertVault by lazy { CertVault(this) }
 

@@ -33,6 +33,12 @@ class GybManager(
     private val cotSink: (CoTEvent) -> Unit,
     private val cotRemove: (String) -> Unit,
     private val scope: CoroutineScope,
+    // Shared with RemoteIdScanner (provided by OmniTAKApp) so a drone heard
+    // by BOTH sensors lives on one track: either source refreshes lastSeen,
+    // and the stale purge only fires when both have gone silent. Two private
+    // stores used to run competing purge loops that deleted each other's
+    // still-live markers.
+    private val trackStore: RemoteIdTrackStore,
 ) {
     val client = GybBleClient(context)
     val connectionState: StateFlow<ConnectionState> get() = client.state
@@ -49,7 +55,6 @@ class GybManager(
     private val _deviceModel = MutableStateFlow<String?>(null)
     val deviceModel: StateFlow<String?> = _deviceModel.asStateFlow()
 
-    private val trackStore = RemoteIdTrackStore()
     private val lastRecvMethod = mutableMapOf<String, Int>()
 
     private var collectJob: Job? = null
@@ -84,6 +89,10 @@ class GybManager(
 
     /** Stop everything and drop all gyb-sourced markers. */
     fun stop() {
+        // Guard matters now that trackStore is shared: a redundant stop()
+        // (initial pref emission at app start) must not clearAll() tracks
+        // the phone's Remote ID scanner is still feeding.
+        if (!running) return
         running = false
         collectJob?.cancel(); collectJob = null
         scanCollectJob?.cancel(); scanCollectJob = null
