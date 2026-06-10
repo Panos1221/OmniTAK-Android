@@ -342,6 +342,12 @@ class OmniTAKApp : Application() {
     // Off-grid mesh plan Step 1b — single app-owned broadcaster instance.
     // Null until startAppBroadcaster() is called. Thread-safe via @Volatile.
     @Volatile private var appBroadcaster: SelfPositionBroadcaster? = null
+    // The prefs collector feeding the broadcaster's lambda getters. Held so
+    // stopAppBroadcaster() can cancel it — every connect→disconnect cycle
+    // used to leak one infinite collector coroutine in process-lifetime
+    // appScope (a field device flapping connectivity for days accumulated
+    // hundreds, all re-running on every prefs write).
+    @Volatile private var broadcasterPrefsJob: kotlinx.coroutines.Job? = null
 
     private fun startAppBroadcaster() {
         if (appBroadcaster != null) return
@@ -351,7 +357,8 @@ class OmniTAKApp : Application() {
         // without suspending — they're called inside a non-suspending context.
         val broadcastOverMeshFlow = kotlinx.coroutines.flow.MutableStateFlow(true)
         val meshIntervalMsFlow = kotlinx.coroutines.flow.MutableStateFlow(30_000L)
-        appScope.launch {
+        broadcasterPrefsJob?.cancel()
+        broadcasterPrefsJob = appScope.launch {
             userPrefsStore.prefs.collect { p ->
                 broadcastOverMeshFlow.value = p.broadcastOverMesh
                 meshIntervalMsFlow.value = p.meshBroadcastIntervalSecs.coerceIn(30, 60).toLong() * 1000L
@@ -366,13 +373,18 @@ class OmniTAKApp : Application() {
             sendToMesh = { event -> meshtastic.sendCoTOverMesh(event) },
             meshConnected = { meshtastic.activeConnectionState.value is ConnectionState.Connected },
             meshBroadcastEnabled = { broadcastOverMeshFlow.value },
-            meshThrottleMs = meshIntervalMsFlow.value,
+            // Lambda, not a snapshot — the operator's interval pref now
+            // applies to a running broadcaster instead of freezing at the
+            // pre-DataStore 30 s default.
+            meshThrottleMs = { meshIntervalMsFlow.value },
         ).also { it.start() }
     }
 
     private fun stopAppBroadcaster() {
         appBroadcaster?.stop()
         appBroadcaster = null
+        broadcasterPrefsJob?.cancel()
+        broadcasterPrefsJob = null
     }
     val locationProvider: LocationProvider by lazy { LocationProvider(this) }
     val serverManager: ServerManager by lazy {

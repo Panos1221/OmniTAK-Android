@@ -50,7 +50,11 @@ class SelfPositionBroadcaster internal constructor(
     private val sendToMesh: (suspend (CoTEvent) -> Boolean)? = null,
     private val meshConnected: () -> Boolean = { false },
     private val meshBroadcastEnabled: () -> Boolean = { true },
-    private val meshThrottleMs: Long = 30_000L,
+    // Lambda (like meshBroadcastEnabled) so the operator's
+    // meshBroadcastIntervalSecs pref applies live to a running
+    // broadcaster — a Long parameter froze whatever value was cached at
+    // construction time (usually the 30 s default, before DataStore emitted).
+    private val meshThrottleMs: () -> Long = { 30_000L },
     // Single source of wire identity (#9): production routes through
     // UserPrefsStore.ensureSelfUid via the secondary constructor so
     // exactly one code path mints the ANDROID-<uuid>. The default here
@@ -73,7 +77,7 @@ class SelfPositionBroadcaster internal constructor(
         sendToMesh: (suspend (CoTEvent) -> Boolean)? = null,
         meshConnected: () -> Boolean = { false },
         meshBroadcastEnabled: () -> Boolean = { true },
-        meshThrottleMs: Long = 30_000L,
+        meshThrottleMs: () -> Long = { 30_000L },
     ) : this(
         scope = scope,
         prefsFlow = prefsStore.prefs,
@@ -171,7 +175,7 @@ class SelfPositionBroadcaster internal constructor(
         val meshFn = sendToMesh
         if (meshFn != null && meshConnected() && meshBroadcastEnabled()) {
             val now = System.currentTimeMillis()
-            if (now - lastMeshSendMs >= meshThrottleMs) {
+            if (now - lastMeshSendMs >= meshThrottleMs()) {
                 val meshEvent = CoTEvent(
                     uid = prefs.selfUid.ifBlank { "ANDROID-fallback" },
                     type = "a-f-G-U-C",
