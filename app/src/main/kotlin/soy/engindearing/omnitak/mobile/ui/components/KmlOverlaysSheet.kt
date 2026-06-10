@@ -54,6 +54,7 @@ import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import soy.engindearing.omnitak.mobile.OmniTAKApp
+import soy.engindearing.omnitak.mobile.i18n.Loc
 import soy.engindearing.omnitak.mobile.data.KmlVectorOverlay
 import soy.engindearing.omnitak.mobile.data.MBTilesOverlay
 import soy.engindearing.omnitak.mobile.data.RasterOverlay
@@ -91,20 +92,38 @@ fun KmlOverlaysSheet(onDismiss: () -> Unit) {
     val status by store.status.collectAsState()
     val kmlError by store.lastError.collectAsState()
     val rasterError by rasterStore.lastError.collectAsState()
-    val error = kmlError ?: rasterError
+    // MBTiles/GPKG failures were invisible: the store sets lastError
+    // ("… import failed: …") but the sheet never collected it, so a
+    // corrupt pick did nothing visible. copyError covers the step before
+    // the stores — a content-resolver read that dies mid-copy.
+    val mbError by mbStore.lastError.collectAsState()
+    var copyError by remember { mutableStateOf<String?>(null) }
+    val error = copyError ?: kmlError ?: rasterError ?: mbError
 
     var editingId by remember { mutableStateOf<String?>(null) }
     var confirmDeleteAll by remember { mutableStateOf(false) }
 
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri: Uri? ->
         if (uri != null) {
+            copyError = null
             scope.launch(Dispatchers.IO) {
                 val name = queryDisplayName(context, uri) ?: "overlay.kml"
                 val tmp = File(context.cacheDir, name)
-                runCatching {
+                val copied = runCatching {
                     context.contentResolver.openInputStream(uri)?.use { input ->
                         tmp.outputStream().use { input.copyTo(it) }
-                    }
+                    } ?: error("no readable stream for this document")
+                }
+                if (copied.isFailure) {
+                    // Don't proceed to "import" an empty/partial temp file —
+                    // tell the operator why nothing appeared instead.
+                    copyError = Loc.t(
+                        "overlays.importReadError",
+                        name,
+                        copied.exceptionOrNull()?.message ?: "unknown error",
+                    )
+                    tmp.delete()
+                    return@launch
                 }
                 val lower = name.lowercase()
                 if (lower.endsWith(".mbtiles") || lower.endsWith(".gpkg")) {

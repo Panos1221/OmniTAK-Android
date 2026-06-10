@@ -619,6 +619,7 @@ private suspend fun sendChatInner(
     // Keep the existing MESH-CH*/MESH-DM-* portnum-1 path unchanged (above).
     val meshState = app.meshtastic.activeConnectionState.value
     val latestPrefs = app.userPrefsStore.prefs.first()
+    var meshSent = false
     if (meshState is soy.engindearing.omnitak.mobile.domain.ConnectionState.Connected &&
         latestPrefs.broadcastOverMesh
     ) {
@@ -631,12 +632,25 @@ private suspend fun sendChatInner(
             remarks = text,
             teamName = prefs.team,
         )
-        runCatching { app.meshtastic.sendCoTOverMesh(meshCotEvent) }
+        // Capture the mesh result instead of discarding it: in the
+        // flagship off-grid case (radio, no server) a successful mesh
+        // delivery used to render FAILED because only the server result
+        // was consulted. Real mesh errors get logged, not swallowed.
+        meshSent = runCatching { app.meshtastic.sendCoTOverMesh(meshCotEvent) }
+            .onFailure { t ->
+                android.util.Log.w(
+                    "ChatScreen",
+                    "mesh GeoChat send failed: ${t.javaClass.simpleName}: ${t.message}",
+                )
+            }
+            .getOrDefault(false)
     }
 
+    // Delivered if EITHER transport accepted it — server CoT or
+    // portnum-72 mesh broadcast. FAILED now means both paths failed.
     app.chatStore.updateMessageStatus(
         conversationId = convo.id,
         messageId = generated.messageId,
-        status = if (sent) ChatStatus.SENT else ChatStatus.FAILED,
+        status = if (sent || meshSent) ChatStatus.SENT else ChatStatus.FAILED,
     )
 }
