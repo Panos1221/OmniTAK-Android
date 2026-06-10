@@ -333,8 +333,28 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
             markerSheetLatLng = LatLng(event.lat, event.lon)
         }
     }
+    // Compose-observable camera target — MapCameraStore's plain fields
+    // don't trigger recomposition, so viewport-dependent layers (grid,
+    // ADSB box) hang off this state instead. Seeded from the persisted
+    // camera so cold start has a center before the first idle event.
+    var cameraTarget by remember {
+        mutableStateOf(
+            run {
+                val lat = app.mapCameraStore.lastTargetLat
+                val lon = app.mapCameraStore.lastTargetLon
+                if (lat != null && lon != null) LatLng(lat, lon) else null
+            }
+        )
+    }
     val handleCameraChanged: (LatLng, Double) -> Unit = { target, zoom ->
+        cameraTarget = target
         app.mapCameraStore.update(target.latitude, target.longitude, zoom)
+    }
+    // Keep the ADSB query box following the viewport — significant pans
+    // move the box, the next 15s poll picks it up. No-op while inactive.
+    LaunchedEffect(cameraTarget, adsbActive) {
+        val t = cameraTarget ?: return@LaunchedEffect
+        if (adsbActive) adsbService.recenterIfNeeded(t.latitude, t.longitude)
     }
 
     Box(
@@ -434,7 +454,20 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
             } else {
                 emptyList()
             },
-            gridCenter = if (gridEnabled) LatLng(37.42, -122.08) else null,
+            // Graticule follows the viewport (was hardcoded to Mountain
+            // View — invisible for any user outside ±2° of the
+            // Googleplex). Quantized to 0.5° so micro-pans don't re-push
+            // the GeoJSON; the ±2° box still covers the view with ≤0.25°
+            // of drift before the next camera-idle refresh.
+            gridCenter = if (gridEnabled) {
+                val c = cameraTarget
+                    ?: selfFix?.let { LatLng(it.lat, it.lon) }
+                    ?: FALLBACK_GLOBAL_VIEW
+                LatLng(
+                    kotlin.math.round(c.latitude * 2.0) / 2.0,
+                    kotlin.math.round(c.longitude * 2.0) / 2.0,
+                )
+            } else null,
             aircraft = if (aircraftVisible) aircraft else emptyList(),
             panTarget = panTarget,
             panTargetTick = panTargetTick,
@@ -1107,16 +1140,23 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
                             adsbService.stop()
                             toast("ADSB off")
                         } else {
-                            // Bay Area box until we plumb the live camera
-                            // center through — matches the emulator's
-                            // default Mountain View GPS so aircraft stay
-                            // on-screen during dev.
-                            adsbService.start(
-                                centerLat = 37.42,
-                                centerLon = -122.08,
-                                halfWidthDegrees = 2.5,
-                            )
-                            toast("ADSB on — polling OpenSky every 15s")
+                            // Center the OpenSky query on what the operator
+                            // is looking at (camera target), else their own
+                            // position. The old hardcoded Bay Area box made
+                            // this feature dead for everyone outside ~250 km
+                            // of Mountain View.
+                            val center = cameraTarget
+                                ?: selfFix?.let { LatLng(it.lat, it.lon) }
+                            if (center == null) {
+                                toast(Loc.t("map.toast.adsbNoCenter"))
+                            } else {
+                                adsbService.start(
+                                    centerLat = center.latitude,
+                                    centerLon = center.longitude,
+                                    halfWidthDegrees = 2.5,
+                                )
+                                toast("ADSB on — polling OpenSky every 15s")
+                            }
                         }
                     }
                     "chat" -> onOpenTab("chat")

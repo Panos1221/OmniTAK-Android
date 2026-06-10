@@ -105,6 +105,7 @@ internal object LocStrings {
         "map.toast.panning" to "Panning to %s",
         "map.toast.measure" to "Measure mode — tap map to add points",
         "map.toast.copied" to "Copied %s",
+        "map.toast.adsbNoCenter" to "ADSB needs a position — pan the map or wait for a GPS fix",
     )
 
     private val ZH_HANT: Map<String, String> = mapOf(
@@ -180,5 +181,6 @@ internal object LocStrings {
         "map.toast.panning" to "正在移至 %s",
         "map.toast.measure" to "測量模式 — 點擊地圖新增測量點",
         "map.toast.copied" to "已複製 %s",
+        "map.toast.adsbNoCenter" to "ADSB 需要位置 — 請平移地圖或等待 GPS 定位",
     )
 }
