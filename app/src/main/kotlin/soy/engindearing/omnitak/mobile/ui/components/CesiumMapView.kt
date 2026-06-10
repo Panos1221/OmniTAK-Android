@@ -18,6 +18,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.viewinterop.AndroidView
 import org.json.JSONObject
 import org.maplibre.android.geometry.LatLng
+import soy.engindearing.omnitak.mobile.BuildConfig
 import soy.engindearing.omnitak.mobile.data.CoTEvent
 
 /**
@@ -124,6 +125,12 @@ fun CesiumMapView(
                 )
                 val html = ctx.assets.open("cesium_scene.html")
                     .bufferedReader().use { it.readText() }
+                    // Ion token is injected here from BuildConfig (fed by the
+                    // gitignored local.properties) so the committed asset in
+                    // this public repo never carries a literal token. Empty
+                    // token = tokenless Cesium (degraded Ion imagery), not a
+                    // crash.
+                    .replace("__CESIUM_ION_TOKEN__", BuildConfig.CESIUM_ION_TOKEN)
                 loadDataWithBaseURL("https://cesium.com/", html, "text/html", "UTF-8", null)
             }
         },

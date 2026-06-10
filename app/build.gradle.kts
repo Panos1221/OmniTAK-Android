@@ -26,6 +26,21 @@ android {
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables { useSupportLibrary = true }
+
+        // Cesium Ion token lives in local.properties (gitignored) — NEVER in
+        // a committed asset; this is a public repo. CesiumMapView injects it
+        // into cesium_scene.html at WebView load time. The empty default
+        // keeps clean checkouts / CI green (the 3D globe runs tokenless with
+        // degraded Ion imagery instead of failing the build).
+        val localProps = Properties().apply {
+            val f = rootProject.file("local.properties")
+            if (f.exists()) f.inputStream().use { load(it) }
+        }
+        buildConfigField(
+            "String",
+            "CESIUM_ION_TOKEN",
+            "\"${localProps.getProperty("CESIUM_ION_TOKEN") ?: ""}\"",
+        )
     }
 
     // Upload keystore lives outside source control. Set the four props in
@@ -80,7 +95,10 @@ android {
 
     kotlinOptions { jvmTarget = "17" }
 
-    buildFeatures { compose = true }
+    buildFeatures {
+        compose = true
+        buildConfig = true
+    }
 
     // Pull in the existing icon/color/theme resources that already live under
     // app_assets/android/ so we don't duplicate them.
