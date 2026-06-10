@@ -109,6 +109,11 @@ internal object LocStrings {
 
         // Map Overlays sheet
         "overlays.importReadError" to "Import failed: couldn't read “%s” — %s",
+
+        // Servers screen
+        "servers.delete.title" to "Delete “%s”?",
+        "servers.delete.body" to "This removes the server and its enrollment (client certificate reference, CA pin). You may need admin credentials to enroll again.",
+        "servers.delete.confirm" to "Delete",
     )
 
     private val ZH_HANT: Map<String, String> = mapOf(
@@ -188,5 +193,10 @@ internal object LocStrings {
 
         // Map Overlays sheet
         "overlays.importReadError" to "匯入失敗：無法讀取「%s」— %s",
+
+        // Servers screen
+        "servers.delete.title" to "刪除「%s」？",
+        "servers.delete.body" to "這會移除伺服器及其註冊資料（用戶端憑證參照、CA 指紋）。重新註冊可能需要管理員憑證。",
+        "servers.delete.confirm" to "刪除",
     )
 }
