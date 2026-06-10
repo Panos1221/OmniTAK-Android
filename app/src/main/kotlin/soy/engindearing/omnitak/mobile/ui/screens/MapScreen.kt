@@ -254,6 +254,28 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
         scope.launch { snackbar.showSnackbar(msg, withDismissAction = true) }
     }
 
+    // The Cesium globe renders only contacts + self — measurement,
+    // drawings, lasso projection and the ADS-B layer live on the
+    // MapLibre engine. Activating one of those tools while the globe is
+    // up auto-drops to 2D (the KML zoom handlers' proven pattern, and
+    // the iOS precedent) instead of letting the tool silently no-op —
+    // the documented VC77 "dead buttons on the globe" bug class.
+    LaunchedEffect(measurementActive, drawingKind, lassoMode, adsbActive) {
+        if (!userPrefs.cesiumGlobeEnabled) return@LaunchedEffect
+        if (measurementActive || drawingKind != null || lassoMode || adsbActive) {
+            app.userPrefsStore.update { it.copy(cesiumGlobeEnabled = false) }
+            toast(Loc.t("map.toast.globeTo2d"))
+        }
+    }
+    // When the globe takes over, TacticalMap leaves composition and its
+    // MapView is destroyed — drop the stale handle so auto-follow,
+    // center-on-drone and lasso projection no-op cleanly instead of
+    // driving a destroyed map. TacticalMap.onMapReady repopulates it
+    // when the 2D engine comes back.
+    LaunchedEffect(userPrefs.cesiumGlobeEnabled) {
+        if (userPrefs.cesiumGlobeEnabled) mapboxMap = null
+    }
+
     // Re-apply KML overlays to the live style whenever the set changes.
     // (Re-application after a style RELOAD is handled by TacticalMap.onStyleReady.)
     LaunchedEffect(kmlOverlays) {
@@ -380,6 +402,10 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
             zoomInTrigger = zoomInTick,
             zoomOutTrigger = zoomOutTick,
             recenterTrigger = recenterTick,
+            // Pan requests (Go-to-Coordinate, ContactsPanel, radial
+            // Center) fly the globe instead of being silently eaten.
+            panTarget = panTarget,
+            panTargetTick = panTargetTick,
         )
         } else {
         TacticalMap(
@@ -1220,12 +1246,18 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
                     contentDescription = "Center on drone",
                     tint = androidx.compose.ui.graphics.Color(0xFF00E5FF),
                     onClick = {
-                        mapboxMap?.let { m ->
+                        val m = mapboxMap
+                        if (m != null) {
                             val pos = m.cameraPosition
                             m.cameraPosition = org.maplibre.android.camera.CameraPosition.Builder()
                                 .target(LatLng(droneState.latDeg!!, droneState.lonDeg!!))
                                 .zoom(pos.zoom.coerceAtLeast(15.0))
                                 .build()
+                        } else {
+                            // Globe engine active (no MapLibre handle) —
+                            // route through the engine-agnostic pan target.
+                            panTarget = LatLng(droneState.latDeg!!, droneState.lonDeg!!)
+                            panTargetTick += 1
                         }
                     },
                 )

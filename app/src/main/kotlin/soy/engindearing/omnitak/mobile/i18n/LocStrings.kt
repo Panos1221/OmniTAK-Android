@@ -106,6 +106,7 @@ internal object LocStrings {
         "map.toast.measure" to "Measure mode — tap map to add points",
         "map.toast.copied" to "Copied %s",
         "map.toast.adsbNoCenter" to "ADSB needs a position — pan the map or wait for a GPS fix",
+        "map.toast.globeTo2d" to "Switched to 2D map — this tool isn't available on the 3D globe yet",
 
         // Map Overlays sheet
         "overlays.importReadError" to "Import failed: couldn't read “%s” — %s",
@@ -203,6 +204,7 @@ internal object LocStrings {
         "map.toast.measure" to "測量模式 — 點擊地圖新增測量點",
         "map.toast.copied" to "已複製 %s",
         "map.toast.adsbNoCenter" to "ADSB 需要位置 — 請平移地圖或等待 GPS 定位",
+        "map.toast.globeTo2d" to "已切換至 2D 地圖 — 此工具尚不支援 3D 地球",
 
         // Map Overlays sheet
         "overlays.importReadError" to "匯入失敗：無法讀取「%s」— %s",

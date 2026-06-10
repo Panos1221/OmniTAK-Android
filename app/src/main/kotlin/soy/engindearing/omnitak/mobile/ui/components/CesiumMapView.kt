@@ -50,6 +50,12 @@ fun CesiumMapView(
     zoomInTrigger: Int = 0,
     zoomOutTrigger: Int = 0,
     recenterTrigger: Int = 0,
+    // Pan-to-coordinate parity with TacticalMap — Go-to-Coordinate "Go",
+    // ContactsPanel taps and the radial Center action all set a pan
+    // target; the globe flies there via the scene bridge instead of
+    // silently ignoring it (the "panel never appears on Cesium" class).
+    panTarget: LatLng? = null,
+    panTargetTick: Int = 0,
 ) {
     val density = LocalDensity.current.density
     val mainHandler = remember { Handler(Looper.getMainLooper()) }
@@ -161,6 +167,16 @@ fun CesiumMapView(
                     "window.OmniBridge.centerOnSelf({lat:$lat,lon:$lon});", null,
                 )
             }
+        }
+        onDispose { }
+    }
+    DisposableEffect(panTargetTick) {
+        val t = panTarget
+        if (panTargetTick > 0 && t != null && ready.value) {
+            webViewRef.value?.evaluateJavascript(
+                "window.OmniBridge.flyTo({lat:${t.latitude},lon:${t.longitude},range:3000});",
+                null,
+            )
         }
         onDispose { }
     }
