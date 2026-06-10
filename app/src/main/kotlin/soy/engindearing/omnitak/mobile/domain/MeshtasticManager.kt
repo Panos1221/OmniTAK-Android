@@ -412,62 +412,16 @@ class MeshtasticManager(private val context: Context? = null) {
         }
     }
 
-    /** Build a ToRadio { MeshPacket { Data { portnum=1, payload } } } frame. */
-    private fun buildTextMessageToRadio(text: ByteArray, channelIndex: UInt, toNodeNum: UInt): ByteArray {
-        val out = java.io.ByteArrayOutputStream()
-        // Data { 1=portnum varint=1, 2=payload bytes=text }
-        val data = java.io.ByteArrayOutputStream().apply {
-            // tag (1<<3)|0 = 0x08, varint 1
-            write(0x08); write(0x01)
-            // tag (2<<3)|2 = 0x12, length-delim
-            write(0x12)
-            writeVarintTo(this, text.size.toULong())
-            write(text)
-        }.toByteArray()
-        // MeshPacket { 2=to fixed32, 3=channel varint (if non-zero), 4=decoded data, 6=id fixed32, 10=want_ack varint=0 }
-        val pkt = java.io.ByteArrayOutputStream().apply {
-            // to: fixed32 — broadcast (0xFFFFFFFF) for channel-wide chat,
-            // a specific nodeNum for DMs (GAP-124).
-            write(0x15)
-            write(byteArrayOf(
-                (toNodeNum.toInt() and 0xFF).toByte(),
-                ((toNodeNum.toInt() shr 8) and 0xFF).toByte(),
-                ((toNodeNum.toInt() shr 16) and 0xFF).toByte(),
-                ((toNodeNum.toInt() shr 24) and 0xFF).toByte(),
-            ))
-            // channel
-            if (channelIndex != 0u) {
-                write(0x18); writeVarintTo(this, channelIndex.toULong())
-            }
-            // decoded data submessage
-            write(0x22)
-            writeVarintTo(this, data.size.toULong())
-            write(data)
-            // id: random non-zero fixed32
-            val id = (1..Int.MAX_VALUE).random()
-            write(0x35)
-            write(byteArrayOf(
-                (id and 0xFF).toByte(),
-                ((id shr 8) and 0xFF).toByte(),
-                ((id shr 16) and 0xFF).toByte(),
-                ((id shr 24) and 0xFF).toByte(),
-            ))
-        }.toByteArray()
-        // ToRadio { 1=packet length-delim }
-        out.write(0x0A)
-        writeVarintTo(out, pkt.size.toULong())
-        out.write(pkt)
-        return out.toByteArray()
-    }
-
-    private fun writeVarintTo(out: java.io.OutputStream, value: ULong) {
-        var v = value
-        while (v >= 0x80uL) {
-            out.write(((v and 0x7FuL).toInt()) or 0x80)
-            v = v shr 7
-        }
-        out.write(v.toInt() and 0x7F)
-    }
+    /** Build a ToRadio { MeshPacket { Data { portnum=1, payload } } } frame.
+     *  `to` is broadcast (0xFFFFFFFF) for channel-wide chat, a specific
+     *  nodeNum for DMs (GAP-124). Framing lives in [MeshWire]. */
+    private fun buildTextMessageToRadio(text: ByteArray, channelIndex: UInt, toNodeNum: UInt): ByteArray =
+        soy.engindearing.omnitak.mobile.data.MeshWire.buildToRadio(
+            portnum = PORTNUM_TEXT_MESSAGE_APP.toULong(),
+            payload = text,
+            to = toNodeNum,
+            channelIndex = channelIndex,
+        )
 
     /** Conversation id used by [ChatStore] to bucket incoming mesh text by channel. */
     fun meshConversationId(channelIndex: Int): String = "MESH-CH$channelIndex"
