@@ -65,22 +65,18 @@ fun FaaNfzOverlay(
 
     // Project all polygon points at ~5 Hz so they track pan/zoom.
     data class ProjectedGrid(val ceiling: Int, val rings: List<List<PointF>>)
-    var projected by remember { mutableStateOf<List<ProjectedGrid>>(emptyList()) }
-    LaunchedEffect(grids, map) {
-        while (isActive) {
-            projected = grids.map { g ->
-                ProjectedGrid(
-                    ceiling = g.ceilingFeet,
-                    rings = g.polygons.map { ring ->
-                        ring.map { (lat, lon) ->
-                            map.projection.toScreenLocation(LatLng(lat, lon))
-                        }
-                    },
-                )
-            }
-            delay(200)
+    val projected = rememberScreenProjection(map, grids, periodMs = 200) { proj ->
+        grids.map { g ->
+            ProjectedGrid(
+                ceiling = g.ceilingFeet,
+                rings = g.polygons.map { ring ->
+                    ring.map { (lat, lon) ->
+                        proj.toScreenLocation(LatLng(lat, lon))
+                    }
+                },
+            )
         }
-    }
+    } ?: emptyList()
 
     Box(modifier = Modifier.fillMaxSize()) {
         Canvas(modifier = Modifier.fillMaxSize()) {

@@ -65,16 +65,11 @@ fun DroneOverlay(
     // Recompute projected screen position at ~10 Hz so the marker
     // tracks both the camera (pan / zoom) and the drone (telemetry
     // updates) without lag.
-    var screen by remember { mutableStateOf<PointF?>(null) }
-    LaunchedEffect(drone.latDeg, drone.lonDeg, map) {
-        while (isActive) {
-            val pt = drone.latDeg?.let { lat ->
-                drone.lonDeg?.let { lon ->
-                    map.projection.toScreenLocation(LatLng(lat, lon))
-                }
+    val screen = rememberScreenProjection(map, drone.latDeg, drone.lonDeg, periodMs = 100) { proj ->
+        drone.latDeg?.let { lat ->
+            drone.lonDeg?.let { lon ->
+                proj.toScreenLocation(LatLng(lat, lon))
             }
-            screen = pt
-            delay(100)
         }
     }
 

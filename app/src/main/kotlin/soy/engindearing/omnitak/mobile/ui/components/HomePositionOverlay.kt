@@ -45,14 +45,7 @@ fun HomePositionOverlay(
     if (homeLatDeg == null || homeLonDeg == null) return
 
     val density = LocalDensity.current
-    var screen by remember { mutableStateOf<PointF?>(null) }
-    LaunchedEffect(homeLatDeg, homeLonDeg, map) {
-        while (isActive) {
-            screen = map.projection.toScreenLocation(LatLng(homeLatDeg, homeLonDeg))
-            delay(150)
-        }
-    }
-    val pt = screen ?: return
+    val pt = rememberScreenPosition(map, homeLatDeg, homeLonDeg, periodMs = 150) ?: return
     val xDp = with(density) { pt.x.toDp() }
     val yDp = with(density) { pt.y.toDp() }
     Box(modifier = Modifier.fillMaxSize()) {

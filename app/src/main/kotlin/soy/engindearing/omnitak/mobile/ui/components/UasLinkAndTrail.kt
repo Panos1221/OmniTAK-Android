@@ -48,22 +48,18 @@ fun UasLinkAndTrail(
     if (drone.latDeg == null || drone.lonDeg == null) return
 
     // Project drone + operator + all trail points at 10 Hz.
-    var dronePt by remember { mutableStateOf<PointF?>(null) }
-    var operatorPt by remember { mutableStateOf<PointF?>(null) }
-    var trailPts by remember { mutableStateOf<List<Pair<PointF, TrailPoint>>>(emptyList()) }
-
-    LaunchedEffect(drone.latDeg, drone.lonDeg, operator, drone.trail, map) {
-        while (isActive) {
-            dronePt = map.projection.toScreenLocation(LatLng(drone.latDeg, drone.lonDeg))
-            operatorPt = operator?.let {
-                map.projection.toScreenLocation(LatLng(it.lat, it.lon))
-            }
-            trailPts = drone.trail.map { tp ->
-                map.projection.toScreenLocation(LatLng(tp.latDeg, tp.lonDeg)) to tp
-            }
-            delay(100)
-        }
+    val projectedLink = rememberScreenProjection(
+        map, drone.latDeg, drone.lonDeg, operator, drone.trail, periodMs = 100,
+    ) { proj ->
+        Triple(
+            proj.toScreenLocation(LatLng(drone.latDeg, drone.lonDeg)),
+            operator?.let { proj.toScreenLocation(LatLng(it.lat, it.lon)) },
+            drone.trail.map { tp -> proj.toScreenLocation(LatLng(tp.latDeg, tp.lonDeg)) to tp },
+        )
     }
+    val dronePt = projectedLink?.first
+    val operatorPt = projectedLink?.second
+    val trailPts = projectedLink?.third ?: emptyList()
 
     Box(modifier = Modifier.fillMaxSize()) {
         Canvas(modifier = Modifier.fillMaxSize()) {
