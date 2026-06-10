@@ -266,7 +266,7 @@ private fun TopologyRow(node: MeshNode, isOwnNode: Boolean) {
         )
         node.position?.let { pos ->
             Text(
-                "lat ${"%.5f".format(pos.lat)}  lon ${"%.5f".format(pos.lon)}" +
+                soy.engindearing.omnitak.mobile.ui.components.rememberCoordText(pos.lat, pos.lon) +
                     (pos.altitudeM?.let { "  alt ${it}m" } ?: ""),
                 color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f),
                 fontFamily = FontFamily.Monospace,

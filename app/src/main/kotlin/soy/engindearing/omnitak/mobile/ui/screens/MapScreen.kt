@@ -1240,11 +1240,15 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
                             val result = uas.flyTo(ll.latitude, ll.longitude)
                             val msg = when (result) {
                                 is soy.engindearing.omnitak.mobile.domain.UASManager.FlyHereResult.Sent ->
-                                    if (result.clearance != null)
-                                        "UAS → ${"%.4f, %.4f".format(ll.latitude, ll.longitude)} " +
-                                            "(${result.targetMsl.toInt()}m MSL, ${result.clearance.toInt()}m AGL)"
-                                    else
-                                        "UAS → ${"%.4f, %.4f".format(ll.latitude, ll.longitude)} (${result.targetMsl.toInt()}m MSL)"
+                                    soy.engindearing.omnitak.mobile.data.CoordFormatter
+                                        .position(ll.latitude, ll.longitude, userPrefs.coordFormat)
+                                        .let { coordText ->
+                                            if (result.clearance != null)
+                                                "UAS → $coordText " +
+                                                    "(${result.targetMsl.toInt()}m MSL, ${result.clearance.toInt()}m AGL)"
+                                            else
+                                                "UAS → $coordText (${result.targetMsl.toInt()}m MSL)"
+                                        }
                                 is soy.engindearing.omnitak.mobile.domain.UASManager.FlyHereResult.WouldHitTerrain ->
                                     "BLOCKED: target ${result.targetMsl.toInt()}m would clip terrain at " +
                                         "${result.terrainMsl.toInt()}m (clearance ${result.clearance.toInt()}m). Raise cruise alt."
@@ -1269,7 +1273,11 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
                         // MAV_CMD_DO_ORBIT at cruise altitude, default 50 m radius.
                         // Fast-follow: radius slider on the orbit action.
                         scope.launch { uas.orbitPoint(ll.latitude, ll.longitude) }
-                        toast("Orbiting ${"%.4f, %.4f".format(ll.latitude, ll.longitude)} @ 50 m radius")
+                        toast(
+                            "Orbiting " + soy.engindearing.omnitak.mobile.data.CoordFormatter
+                                .position(ll.latitude, ll.longitude, userPrefs.coordFormat) +
+                                " @ 50 m radius"
+                        )
                     }
                     "uas_circle" -> if (ll != null) {
                         // Persistent circle as a real mission upload —
@@ -1400,9 +1408,13 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
                             )
                         )
                     }
+                    // Honor the operator's coordinate-format pref (#3/#4),
+                    // matching the radial "Add @ …" toast above.
+                    val coordText = soy.engindearing.omnitak.mobile.data.CoordFormatter
+                        .position(lat, lon, userPrefs.coordFormat)
                     toast(
-                        if (drop) "Dropped marker at %.5f, %.5f".format(lat, lon)
-                        else "Panning to %.5f, %.5f".format(lat, lon)
+                        if (drop) "Dropped marker at $coordText"
+                        else "Panning to $coordText"
                     )
                 },
                 onDismiss = { coordEntryOpen = false },
