@@ -1,4 +1,4 @@
-package soy.engindearing.omnitak.mobile.data
+package soy.engindearing.adsb
 
 import android.util.Log
 import kotlinx.coroutines.CoroutineScope
