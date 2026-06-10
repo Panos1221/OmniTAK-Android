@@ -239,9 +239,34 @@ fun AppNav() {
                 soy.engindearing.omnitak.mobile.ui.screens.MissionSyncScreen(onBack = { nav.popBackStack() })
             }
             composable("settings") {
-                SettingsScreen(onOpenAbout = { nav.navigate("about") })
+                SettingsScreen(
+                    onOpenAbout = { nav.navigate("about") },
+                    onOpenPlugins = { pluginId -> nav.navigate("settings/plugin/$pluginId") },
+                )
             }
             composable("about") { AboutScreen() }
+            // Top-level Plugins list (reads from PluginRegistry).
+            composable("plugins") {
+                soy.engindearing.omnitak.mobile.ui.screens.PluginsListScreen(
+                    onBack = { nav.popBackStack() },
+                    onOpenPlugin = { pluginId -> nav.navigate("settings/plugin/$pluginId") },
+                )
+            }
+            // Per-plugin detail page (enable toggle + settingsContent), reached
+            // from the Settings Plugins row or the Plugins list.
+            composable(
+                route = "settings/plugin/{pluginId}",
+                arguments = listOf(
+                    androidx.navigation.navArgument("pluginId") {
+                        type = androidx.navigation.NavType.StringType
+                    },
+                ),
+            ) { backStackEntry ->
+                soy.engindearing.omnitak.mobile.ui.screens.PluginDetailScreen(
+                    pluginId = backStackEntry.arguments?.getString("pluginId").orEmpty(),
+                    onBack = { nav.popBackStack() },
+                )
+            }
         }
     }
 

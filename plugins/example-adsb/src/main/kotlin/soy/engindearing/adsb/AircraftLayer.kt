@@ -1,19 +1,24 @@
-package soy.engindearing.omnitak.mobile.ui.components
+package soy.engindearing.adsb
 
 import android.util.Log
 import org.json.JSONArray
 import org.json.JSONObject
 import org.maplibre.android.maps.MapLibreMap
-import soy.engindearing.omnitak.mobile.data.Aircraft
 
 /**
- * Pushes ADS-B aircraft state into the pre-baked `aircraft-src`
- * GeoJson source. The style JSON declares a circle layer + a symbol
- * layer for the callsign so that the emulator GL path renders
- * reliably (see ContactLayer for the same reason).
+ * Pushes ADS-B aircraft state into the pre-baked `aircraft-src` GeoJson source.
  *
- * Each aircraft point carries `heading` and `callsign` properties
- * so the SymbolLayer can rotate + label.
+ * CONTRACT WITH THE HOST: the `aircraft-src` source plus the `aircraft-circle`
+ * and `aircraft-label` layers are declared in the host app's embedded tactical
+ * style JSON (`:app` TacticalMap.buildTacticalStyle). They are MapLibre *style
+ * infrastructure*, not ADS-B logic, so they stay in the host even though only
+ * this plugin feeds them. If the host ever drops them, [update] silently
+ * no-ops (the feeder returns false on a missing source). The style JSON
+ * declares a circle layer + a symbol layer for the callsign so the emulator GL
+ * path renders reliably (see ContactLayer in :app for the same reason).
+ *
+ * Each aircraft point carries `heading` and `callsign` properties so the
+ * SymbolLayer can rotate + label.
  */
 object AircraftLayer {
     const val SOURCE_ID = "aircraft-src"
@@ -21,14 +26,14 @@ object AircraftLayer {
     const val LABEL_LAYER_ID = "aircraft-label"
 
     fun update(map: MapLibreMap, aircraft: List<Aircraft>) {
-        if (!GeoJsonLayerFeeder.push(map, SOURCE_ID, toFeatures(aircraft))) return
+        if (!AdsbGeoJsonFeeder.push(map, SOURCE_ID, toFeatures(aircraft))) return
         if (aircraft.isNotEmpty()) {
             Log.i("AircraftLayer", "pushed ${aircraft.size} aircraft to $SOURCE_ID")
         }
     }
 
     fun clear(map: MapLibreMap) {
-        GeoJsonLayerFeeder.clear(map, SOURCE_ID)
+        AdsbGeoJsonFeeder.clear(map, SOURCE_ID)
     }
 
     private fun toFeatures(aircraft: List<Aircraft>): JSONArray {

@@ -1,4 +1,4 @@
-package soy.engindearing.omnitak.mobile.data
+package soy.engindearing.adsb
 
 /**
  * ADS-B aircraft state vector. Units mirror OpenSky Network:

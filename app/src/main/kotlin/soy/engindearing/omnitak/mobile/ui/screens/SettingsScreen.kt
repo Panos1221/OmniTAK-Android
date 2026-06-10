@@ -23,6 +23,8 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -67,7 +69,10 @@ import soy.engindearing.omnitak.mobile.ui.components.ToolbarEditBus
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun SettingsScreen(onOpenAbout: () -> Unit = {}) {
+fun SettingsScreen(
+    onOpenAbout: () -> Unit = {},
+    onOpenPlugins: (pluginId: String) -> Unit = {},
+) {
     val app = LocalContext.current.applicationContext as OmniTAKApp
     val prefs by app.userPrefsStore.prefs.collectAsState(initial = UserPrefs())
     val scope = rememberCoroutineScope()
@@ -394,6 +399,42 @@ fun SettingsScreen(onOpenAbout: () -> Unit = {}) {
                 selected = Loc.current,
                 onSelect = { lang -> Loc.setLanguage(lang) },
             )
+
+            // Plugins — each plugin registers a Settings row here via
+            // host.registerSettingsRow; tapping it opens the plugin's detail
+            // page (its settingsContent). Reads from the live host registration
+            // list so a plugin that activates/deactivates shows/hides its row.
+            if (app.pluginHost.settingsRows.isNotEmpty()) {
+                SectionHeader("Plugins")
+                app.pluginHost.settingsRows.forEach { row ->
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(8.dp))
+                            .clickable { onOpenPlugins(row.pluginId) }
+                            .padding(vertical = 10.dp, horizontal = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        androidx.compose.material3.Icon(
+                            row.icon,
+                            contentDescription = null,
+                            tint = TacticalAccent,
+                            modifier = Modifier.size(22.dp),
+                        )
+                        Spacer(Modifier.width(12.dp))
+                        Text(
+                            row.label,
+                            color = MaterialTheme.colorScheme.onBackground,
+                            modifier = Modifier.weight(1f),
+                        )
+                        androidx.compose.material3.Icon(
+                            Icons.Filled.ChevronRight,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.4f),
+                        )
+                    }
+                }
+            }
 
             // About — the route was registered in AppNav since 0.1 but
             // nothing navigated to it after the bottom-bar rework dropped
