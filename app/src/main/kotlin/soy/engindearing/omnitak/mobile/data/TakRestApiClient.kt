@@ -10,18 +10,10 @@ import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.longOrNull
-import java.io.ByteArrayInputStream
+import soy.engindearing.omnitak.mobile.data.net.TakTls
 import java.net.HttpURLConnection
 import java.net.URL
-import java.security.KeyStore
-import java.security.SecureRandom
-import java.security.cert.X509Certificate
 import javax.net.ssl.HttpsURLConnection
-import javax.net.ssl.KeyManager
-import javax.net.ssl.KeyManagerFactory
-import javax.net.ssl.SSLContext
-import javax.net.ssl.SSLSession
-import javax.net.ssl.X509TrustManager
 
 /**
  * TAK Server Marti REST API client — mission + data-package sync. The Android
@@ -31,8 +23,9 @@ import javax.net.ssl.X509TrustManager
  *
  * One instance is bound to one [TAKServer]; [MissionSyncManager] spins up one
  * per enabled server and aggregates. mTLS uses the operator's imported `.p12`
- * (via [CertVault]); server trust is dev-mode trust-all, matching
- * [TAKConnection] until CA pinning lands.
+ * (via [CertVault]); server trust comes from [TakTls] — enrollment CA pin
+ * when one exists, system trust otherwise — exactly matching [TAKConnection],
+ * so the REST plane can no longer lag the streaming plane's trust policy.
  *
  * Dialect tolerance (verified against the 4-server matrix — TAK Server 5.7,
  * OpenTAKServer 1.7.x, taky 0.10):
@@ -262,10 +255,7 @@ class TakRestApiClient(
                 val raw = "$user:$pass".toByteArray(Charsets.UTF_8)
                 setRequestProperty("Authorization", "Basic " + Base64.encodeToString(raw, Base64.NO_WRAP))
             }
-            val ctx = SSLContext.getInstance("TLS")
-            ctx.init(loadKeyManagers(), arrayOf(TrustAll), SecureRandom())
-            sslSocketFactory = ctx.socketFactory
-            hostnameVerifier = AcceptAllHostnames
+            TakTls.configure(this, server, certVault)
         }
         return try {
             conn.connect()
@@ -296,10 +286,7 @@ class TakRestApiClient(
                 val raw = "$user:$pass".toByteArray(Charsets.UTF_8)
                 setRequestProperty("Authorization", "Basic " + Base64.encodeToString(raw, Base64.NO_WRAP))
             }
-            val ctx = SSLContext.getInstance("TLS")
-            ctx.init(loadKeyManagers(), arrayOf(TrustAll), SecureRandom())
-            sslSocketFactory = ctx.socketFactory
-            hostnameVerifier = AcceptAllHostnames
+            TakTls.configure(this, server, certVault)
         }
         return try {
             conn.connect()
@@ -315,22 +302,6 @@ class TakRestApiClient(
         }
     }
 
-    /** Client KeyManagers from the operator's imported `.p12`, or null. */
-    private fun loadKeyManagers(): Array<KeyManager>? {
-        val name = server.certificateName ?: return null
-        val pass = server.certificatePassword ?: return null
-        val bytes = certVault?.read(name) ?: return null
-        return runCatching {
-            val ks = KeyStore.getInstance("PKCS12")
-            ByteArrayInputStream(bytes).use { ks.load(it, pass.toCharArray()) }
-            val kmf = KeyManagerFactory.getInstance(KeyManagerFactory.getDefaultAlgorithm())
-            kmf.init(ks, pass.toCharArray())
-            kmf.keyManagers
-        }.onFailure {
-            Log.w(TAG, "Cert load failed: ${it.javaClass.simpleName}: ${it.message}")
-        }.getOrNull()
-    }
-
     private fun httpReason(code: Int, body: String): String = when (code) {
         401 -> "Authentication required"
         403 -> "Access forbidden"
@@ -339,16 +310,6 @@ class TakRestApiClient(
     }
 
     class ApiException(message: String, cause: Throwable? = null) : Exception(message, cause)
-
-    private object TrustAll : X509TrustManager {
-        override fun checkClientTrusted(chain: Array<X509Certificate>?, authType: String?) {}
-        override fun checkServerTrusted(chain: Array<X509Certificate>?, authType: String?) {}
-        override fun getAcceptedIssuers(): Array<X509Certificate> = emptyArray()
-    }
-
-    private object AcceptAllHostnames : javax.net.ssl.HostnameVerifier {
-        override fun verify(hostname: String?, session: SSLSession?) = true
-    }
 
     companion object {
         private const val TAG = "TakRestApiClient"

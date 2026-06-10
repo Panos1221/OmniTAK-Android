@@ -6,6 +6,7 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonPrimitive
+import soy.engindearing.omnitak.mobile.data.net.TakTls
 import java.io.ByteArrayInputStream
 import java.io.OutputStreamWriter
 import java.net.HttpURLConnection
@@ -14,9 +15,6 @@ import java.security.KeyStore
 import java.security.cert.CertificateFactory
 import java.security.cert.X509Certificate
 import javax.net.ssl.HttpsURLConnection
-import javax.net.ssl.SSLContext
-import javax.net.ssl.SSLSession
-import javax.net.ssl.X509TrustManager
 import kotlin.io.encoding.ExperimentalEncodingApi
 
 /**
@@ -299,11 +297,11 @@ class CSREnrollmentService(
         val conn = url.openConnection() as HttpURLConnection
         conn.connectTimeout = 10_000
         conn.readTimeout = 15_000
+        // First-contact TOFU bypass — explicit operator opt-in only (the
+        // Quick Connect switch defaults OFF). Without it the platform
+        // default trust + hostname verification applies.
         if (config.trustSelfSigned && conn is HttpsURLConnection) {
-            val ctx = SSLContext.getInstance("TLS")
-            ctx.init(null, arrayOf(TrustAll), java.security.SecureRandom())
-            conn.sslSocketFactory = ctx.socketFactory
-            conn.hostnameVerifier = AcceptAllHostnames
+            TakTls.configureUntrusted(conn)
         }
         return conn
     }
@@ -326,16 +324,6 @@ class CSREnrollmentService(
     private fun basicAuth(config: Config): String {
         val raw = "${config.username}:${config.password}".toByteArray(Charsets.UTF_8)
         return "Basic " + Base64.encodeToString(raw, Base64.NO_WRAP)
-    }
-
-    private object TrustAll : X509TrustManager {
-        override fun checkClientTrusted(p0: Array<X509Certificate>?, p1: String?) {}
-        override fun checkServerTrusted(p0: Array<X509Certificate>?, p1: String?) {}
-        override fun getAcceptedIssuers(): Array<X509Certificate> = emptyArray()
-    }
-
-    private object AcceptAllHostnames : javax.net.ssl.HostnameVerifier {
-        override fun verify(hostname: String?, session: SSLSession?) = true
     }
 
     private fun pemToDer(pem: String): ByteArray {

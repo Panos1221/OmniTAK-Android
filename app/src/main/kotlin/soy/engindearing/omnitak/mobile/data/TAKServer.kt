@@ -36,6 +36,12 @@ data class TAKServer(
     // Same plaintext caveat as [password]; the CertVault stores the .p12
     // bytes themselves in app-internal storage (off the JSON blob).
     val certificatePassword: String? = null,
+    // Explicit opt-out of server TLS validation (trust-all + no hostname
+    // check) for this server. Default false — every connection plane
+    // (streaming socket, Marti REST) validates against the enrollment CA
+    // pin or the system trust store unless the operator flips this.
+    // Decodes as false from pre-0.36 JSON blobs (kotlinx default).
+    val allowUntrustedTls: Boolean = false,
 ) {
     val displayName: String get() = "$name ($host:$port)"
 
