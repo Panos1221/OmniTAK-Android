@@ -58,6 +58,8 @@ import soy.engindearing.omnitak.mobile.data.CoordFormat
 import soy.engindearing.omnitak.mobile.data.DistanceUnit
 import soy.engindearing.omnitak.mobile.data.MapProvider
 import soy.engindearing.omnitak.mobile.data.UserPrefs
+import soy.engindearing.omnitak.mobile.domain.ConnectionState
+import soy.engindearing.omnitak.mobile.ui.components.GybDeviceSheet
 import soy.engindearing.omnitak.mobile.ui.theme.TacticalAccent
 import soy.engindearing.omnitak.mobile.ui.theme.TacticalBackground
 import soy.engindearing.omnitak.mobile.ui.theme.TacticalSurface
@@ -340,6 +342,47 @@ fun SettingsScreen(onOpenAbout: () -> Unit = {}) {
                         }
                     },
                 )
+            }
+
+            // gyb device picker — scan / connect / disconnect + link status.
+            // Without this row the toggle above only started stream
+            // collectors on a BLE client that never connected to anything;
+            // the whole detection pipeline was unreachable on Android.
+            if (prefs.gybDetectorEnabled) {
+                val gybState by app.gybManager.connectionState.collectAsState()
+                var showGybSheet by remember { mutableStateOf(false) }
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(8.dp))
+                        .clickable { showGybSheet = true }
+                        .padding(vertical = 10.dp, horizontal = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            Loc.t("settings.gybManage"),
+                            color = MaterialTheme.colorScheme.onBackground,
+                        )
+                        Text(
+                            when (val s = gybState) {
+                                ConnectionState.Disconnected -> Loc.t("gyb.state.disconnected")
+                                is ConnectionState.Connecting -> Loc.t("gyb.state.connecting", s.serverName)
+                                is ConnectionState.Connected -> Loc.t("gyb.state.connected", s.serverName)
+                                is ConnectionState.Failed -> Loc.t("gyb.state.failed", s.reason)
+                            },
+                            color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
+                    Text("›", color = TacticalAccent, fontWeight = FontWeight.Bold)
+                }
+                if (showGybSheet) {
+                    GybDeviceSheet(
+                        gybManager = app.gybManager,
+                        onDismiss = { showGybSheet = false },
+                    )
+                }
             }
 
             // Language — switches the UI language live, no restart. Bound

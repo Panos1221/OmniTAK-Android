@@ -173,8 +173,10 @@ class OmniTAKApp : Application() {
         // Phase 3 — external gyb_detect sensor. When enabled, the manager's
         // collectors run and parsed drones flow gyb → RemoteIdTrackStore →
         // RemoteIdToCoTConverter → ContactStore, sharing the `RID-` UID with
-        // the on-device scanner so the same drone never double-plots. Actual
-        // BLE connect/disconnect is driven from Settings.
+        // the on-device scanner so the same drone never double-plots.
+        // Scan/connect/disconnect live in Settings → GybDeviceSheet; the
+        // manager auto-reconnects to the persisted last device on start()
+        // and after a BLE drop (with backoff), and stops with the toggle.
         appScope.launch {
             userPrefsStore.prefs
                 .map { it.gybDetectorEnabled }
@@ -203,6 +205,15 @@ class OmniTAKApp : Application() {
             cotRemove = { uid -> contactStore.remove(uid) },
             scope = appScope,
             trackStore = remoteIdTrackStore,
+            // cachedPrefs is eagerly collected in onCreate, so by the time
+            // the toggle-driven start() fires this read is non-suspending
+            // and current.
+            lastDeviceAddress = { cachedPrefs.value.gybLastDeviceAddress },
+            persistLastDevice = { addr ->
+                appScope.launch {
+                    userPrefsStore.update { it.copy(gybLastDeviceAddress = addr) }
+                }
+            },
         )
     }
     val drawingStore: DrawingStore by lazy { DrawingStore() }
