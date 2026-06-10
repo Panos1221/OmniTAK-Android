@@ -211,6 +211,10 @@ dependencies {
     // Real org.json impl so JVM tests can exercise JSONObject/JSONArray
     // (e.g. CesiumEntityJson serialization). Android stubs them otherwise.
     testImplementation("org.json:json:20240303")
+    // Real XmlPullParser impl (same trick as org.json above) so JVM tests
+    // exercise the production CoTParser/ChatXml path — the mockable
+    // android.jar makes XmlPullParserFactory.newInstance() return null.
+    testImplementation("net.sf.kxml:kxml2:2.3.0")
 
     // Instrumented tests — symbology validation runs on a real device or
     // emulator because MapLibre's SurfaceView renders through native GL
