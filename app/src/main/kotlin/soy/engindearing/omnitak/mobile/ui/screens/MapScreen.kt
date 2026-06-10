@@ -16,7 +16,6 @@ import androidx.compose.material.icons.filled.LocalFireDepartment
 import androidx.compose.material.icons.filled.RadioButtonUnchecked
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Explore
-import androidx.compose.material.icons.filled.Flight
 import androidx.compose.material.icons.filled.Groups
 import androidx.compose.material.icons.filled.Layers
 import androidx.compose.material.icons.filled.LocationOn
@@ -192,19 +191,20 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
     LaunchedEffect(coordEntryGen) {
         if (coordEntryGen > 0L) coordEntryOpen = true
     }
-    val adsbService = remember { soy.engindearing.omnitak.mobile.data.AdsbService() }
-    val rawAircraft by adsbService.aircraft.collectAsState()
-    val adsbActive by adsbService.active.collectAsState()
-    DisposableEffect(adsbService) { onDispose { adsbService.stop() } }
+    // ADS-B is now a plugin (:plugins:example-adsb). The plugin owns its
+    // AdsbService, its map overlay (which paints via AircraftLayer on the live
+    // MapLibre handle) and its on/off settings toggle. MapScreen no longer
+    // plumbs aircraft into TacticalMap — it only renders the plugin's
+    // registered overlays (below) and feeds the camera seam the plugin needs
+    // (camera-center provider for box seeding + camera-follow recenter).
+    val adsbPlugin = app.adsbPlugin
+    val adsbActive by adsbPlugin.service.active.collectAsState()
 
     // Drone telemetry from UASManager — the connected UAS gets its own
     // DroneLayer (programmatic source/layer added at runtime), which
     // pops visually above ADS-B traffic and self so the drone isn't
-    // lost in the generic aircraft circle. We still expose the drone
-    // through the regular aircraft list for the historical hooks
-    // (lasso, etc.) but the dedicated layer is what the operator sees.
+    // lost in the generic aircraft circle.
     val droneState by uas.state.collectAsState()
-    val aircraft = rawAircraft
     // Pass the drone separately to TacticalMap → DroneLayer renders it
     // as a distinct cyan ring + callsign label, above the aircraft circle.
     val droneForMap = if (droneState.hasFix()) droneState else null
@@ -255,14 +255,19 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
     }
 
     // The Cesium globe renders only contacts + self — measurement,
-    // drawings, lasso projection and the ADS-B layer live on the
-    // MapLibre engine. Activating one of those tools while the globe is
-    // up auto-drops to 2D (the KML zoom handlers' proven pattern, and
-    // the iOS precedent) instead of letting the tool silently no-op —
-    // the documented VC77 "dead buttons on the globe" bug class.
-    LaunchedEffect(measurementActive, drawingKind, lassoMode, adsbActive) {
+    // drawings and lasso projection live on the MapLibre engine.
+    // Activating one of those tools while the globe is up auto-drops to 2D
+    // (the KML zoom handlers' proven pattern, and the iOS precedent) instead
+    // of letting the tool silently no-op — the documented VC77 "dead buttons
+    // on the globe" bug class.
+    //
+    // ADS-B is NOT in this guard: as a plugin its map overlay self-limits to
+    // MapLibre (the handle is null on the globe → it no-ops), exactly as the
+    // pre-plugin code never painted aircraft on the globe. So enabling ADS-B
+    // does not force a drop to 2D — identical to today's behavior.
+    LaunchedEffect(measurementActive, drawingKind, lassoMode) {
         if (!userPrefs.cesiumGlobeEnabled) return@LaunchedEffect
-        if (measurementActive || drawingKind != null || lassoMode || adsbActive) {
+        if (measurementActive || drawingKind != null || lassoMode) {
             app.userPrefsStore.update { it.copy(cesiumGlobeEnabled = false) }
             toast(Loc.t("map.toast.globeTo2d"))
         }
@@ -373,10 +378,22 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
         app.mapCameraStore.update(target.latitude, target.longitude, zoom)
     }
     // Keep the ADSB query box following the viewport — significant pans
-    // move the box, the next 15s poll picks it up. No-op while inactive.
+    // move the box, the next 15s poll picks it up. Routed through the plugin;
+    // no-op while the plugin's service is inactive. (The plugin owns the
+    // recenter logic; MapScreen only feeds it the live camera target.)
     LaunchedEffect(cameraTarget, adsbActive) {
         val t = cameraTarget ?: return@LaunchedEffect
-        if (adsbActive) adsbService.recenterIfNeeded(t.latitude, t.longitude)
+        if (adsbActive) adsbPlugin.onCameraChanged(t.latitude, t.longitude)
+    }
+    // Wire the plugin's camera-center provider so its settings toggle seeds the
+    // OpenSky box on what the operator is looking at (camera target, else own
+    // position) — the exact behavior the old Tools-drawer button had. Re-set
+    // whenever the inputs change so the provider always reads the latest view.
+    LaunchedEffect(cameraTarget, selfFix) {
+        adsbPlugin.cameraCenterProvider = {
+            val c = cameraTarget ?: selfFix?.let { LatLng(it.lat, it.lon) }
+            c?.let { soy.engindearing.omnitak.plugin.PluginLatLng(it.latitude, it.longitude) }
+        }
     }
 
     Box(
@@ -407,6 +424,16 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
             panTarget = panTarget,
             panTargetTick = panTargetTick,
         )
+        // Plugin map overlays on the GLOBE engine. The handle is null here
+        // (no MapLibreMap on Cesium), so an overlay that can only draw on
+        // MapLibre — like ADS-B — no-ops, matching today's behavior. The loop
+        // STILL runs on both engines so a future Cesium-capable plugin isn't
+        // silently dropped on the globe (the documented VC77 bug class).
+        androidx.compose.runtime.CompositionLocalProvider(
+            soy.engindearing.omnitak.plugin.LocalMapEngineHandle provides null,
+        ) {
+            app.pluginHost.mapOverlays.forEach { it.content() }
+        }
         } else {
         TacticalMap(
             modifier = Modifier.fillMaxSize(),
@@ -494,7 +521,6 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
                     kotlin.math.round(c.longitude * 2.0) / 2.0,
                 )
             } else null,
-            aircraft = if (aircraftVisible) aircraft else emptyList(),
             panTarget = panTarget,
             panTargetTick = panTargetTick,
             followMeActive = followMeActive,
@@ -509,6 +535,16 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
                     .applyRaster(style, rasterImagery, app.rasterOverlayStore)
             },
         )
+        // Plugin map overlays on the MAPLIBRE engine. The handle is the live
+        // MapLibreMap (captured via onMapReady above; null briefly until the
+        // map is ready). The ADS-B plugin's overlay casts it to MapLibreMap
+        // and feeds AircraftLayer — the exact GL render path the pre-plugin
+        // code used, byte-for-byte.
+        androidx.compose.runtime.CompositionLocalProvider(
+            soy.engindearing.omnitak.plugin.LocalMapEngineHandle provides mapboxMap,
+        ) {
+            app.pluginHost.mapOverlays.forEach { it.content() }
+        }
         }
 
         // Issue #16 — lasso freehand multi-select overlay. Renders
@@ -1141,7 +1177,9 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
                 ToolEntry("draw", Icons.Filled.Brush, "Drawing"),
                 ToolEntry("measure", Icons.Filled.Straighten, "Measure"),
                 ToolEntry("layers", Icons.Filled.Layers, "Layers"),
-                ToolEntry("adsb", Icons.Filled.Flight, if (adsbActive) "ADSB on" else "ADSB"),
+                // ADS-B moved to the ADS-B plugin — its on/off control now
+                // lives in Settings → Plugins → ADS-B (the plugin's
+                // settingsContent), not the Tools drawer.
                 ToolEntry("chat", Icons.Filled.Chat, "Chat"),
                 ToolEntry("missionsync", Icons.Filled.Sync, "Mission Sync"),
                 ToolEntry("fema", Icons.Filled.LocalFireDepartment, "FEMA / IC"),
@@ -1161,30 +1199,6 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
                     }
                     "draw" -> drawingPickerOpen = true
                     "layers" -> layersSheetOpen = true
-                    "adsb" -> {
-                        if (adsbActive) {
-                            adsbService.stop()
-                            toast("ADSB off")
-                        } else {
-                            // Center the OpenSky query on what the operator
-                            // is looking at (camera target), else their own
-                            // position. The old hardcoded Bay Area box made
-                            // this feature dead for everyone outside ~250 km
-                            // of Mountain View.
-                            val center = cameraTarget
-                                ?: selfFix?.let { LatLng(it.lat, it.lon) }
-                            if (center == null) {
-                                toast(Loc.t("map.toast.adsbNoCenter"))
-                            } else {
-                                adsbService.start(
-                                    centerLat = center.latitude,
-                                    centerLon = center.longitude,
-                                    halfWidthDegrees = 2.5,
-                                )
-                                toast("ADSB on — polling OpenSky every 15s")
-                            }
-                        }
-                    }
                     "chat" -> onOpenTab("chat")
                     "missionsync" -> onOpenTab("missionsync")
                     "fema" -> {
@@ -1296,6 +1310,11 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
                 }
                 add(RadialAction("center", Icons.Filled.Explore, "Center"))
                 add(RadialAction("add", Icons.Filled.Add, "Add"))
+                // Plugin-contributed radial actions (none from the bundled
+                // ADS-B plugin; exercised by the probe plugin + unit tests).
+                app.pluginHost.radialActions.forEach { r ->
+                    add(RadialAction(r.action.id, r.action.icon, r.action.label))
+                }
             },
             onSelect = { action ->
                 val ll = radialLatLng
@@ -1398,11 +1417,22 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
                         }
                         toast("Survey mission uploading — 200 m box, 30 m spacing")
                     }
-                    // Every advertised action is wired above — an unknown
-                    // id is a programming error, not something to paper
-                    // over with a coordinate toast (the old stub behavior
-                    // that made Measure/Copy/Center look implemented).
-                    else -> {}
+                    // Plugin-contributed radial actions: dispatch to the
+                    // registered onSelect with the long-press coordinate.
+                    // Every built-in action is wired above, so an id that
+                    // isn't a plugin's is a programming error (no silent
+                    // coordinate-toast stub).
+                    else -> {
+                        val plugin = app.pluginHost.radialActions
+                            .firstOrNull { it.action.id == action.id }
+                        if (plugin != null && ll != null) {
+                            plugin.onSelect(
+                                soy.engindearing.omnitak.plugin.PluginLatLng(
+                                    ll.latitude, ll.longitude,
+                                )
+                            )
+                        }
+                    }
                 }
             },
             onDismiss = {

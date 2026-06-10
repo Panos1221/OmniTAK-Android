@@ -55,6 +55,12 @@ class OmniTAKApp : Application() {
         // `certVault`), so kicking it off here also wakes those lazies.
         DataPackageBootstrap(this, certVault, serverManager).runIfNeeded()
 
+        // Plugin SDK — register the bundled plugins and activate the ones whose
+        // enable flag is true (default true on first run, so existing testers
+        // see ADS-B exactly as before). activate() only registers hooks; it does
+        // NOT start any network poll, so this stays cheap and launch-safe.
+        loadBundledPlugins()
+
         // Eagerly populate cachedPrefs so non-suspend sinks (cotSink,
         // mesh broadcast toggles) can read prefs.value immediately.
         appScope.launch {
@@ -194,6 +200,18 @@ class OmniTAKApp : Application() {
     // Eagerly-cached prefs snapshot for non-suspending sinks (cotSink,
     // mesh broadcast lambdas). Initialized to defaults until DataStore emits.
     private val cachedPrefs = MutableStateFlow(soy.engindearing.omnitak.mobile.data.UserPrefs())
+
+    /** Single plugin host instance shared by [loadBundledPlugins] and the
+     *  screens that consume registrations (MapScreen overlays/radial,
+     *  SettingsScreen rows). Holds the registered hooks. */
+    val pluginHost: soy.engindearing.omnitak.mobile.ui.plugin.AppPluginHost by lazy {
+        soy.engindearing.omnitak.mobile.ui.plugin.AppPluginHost()
+    }
+
+    /** The bundled ADS-B reference plugin instance. Held so the host can wire
+     *  its camera-center provider + camera-follow at the MapScreen seam. */
+    val adsbPlugin: soy.engindearing.adsb.AdsbPlugin by lazy { soy.engindearing.adsb.AdsbPlugin() }
+
     val contactStore: ContactStore by lazy { ContactStore() }
     /** External gyb_detect sensor over BLE GATT (Phase 3 of the gy6 plan).
      *  Parsed drones merge into ContactStore via the shared RID- UID;
@@ -411,6 +429,9 @@ class OmniTAKApp : Application() {
             // unknown; map that to null so SelfPositionBroadcaster omits
             // <status> rather than emitting a misleading number.
             batteryProvider = ::readDeviceBatteryPercent,
+            // Plugin SDK — fan inbound CoT (after core ingest) to any
+            // plugin-registered handlers. Inert until a plugin registers one.
+            pluginCoTDispatch = { event -> pluginHost.dispatchCoT(event) },
         )
     }
 
@@ -445,6 +466,31 @@ class OmniTAKApp : Application() {
         val bm = getSystemService(Context.BATTERY_SERVICE) as? BatteryManager ?: return null
         val level = bm.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY)
         return if (level in 0..100) level else null
+    }
+
+    /** SharedPreferences carrying the per-plugin `plugin_<id>_enabled` flags.
+     *  Deliberately SEPARATE from the DataStore UserPrefsStore — the plugin
+     *  enable flag is the RFC-specified SharedPreferences boolean, while
+     *  ADS-B's `aircraftVisible` layer-visibility pref stays in DataStore. */
+    fun pluginPrefs() = getSharedPreferences("omnitak_plugins", MODE_PRIVATE)
+
+    /**
+     * Register the bundled plugins and activate the enabled ones. Compile-time
+     * modules only — there is no dynamic/remote code here; the plugin classes
+     * are statically linked into the app, which keeps OmniTAK Play-Store
+     * compliant.
+     *
+     * Each plugin's hooks are tagged with its id (via the registry's
+     * `onActivating` bracket → [pluginHost.withActivating]) so disabling a
+     * plugin later removes exactly its hooks.
+     */
+    private fun loadBundledPlugins() {
+        soy.engindearing.omnitak.plugin.PluginRegistry.register(adsbPlugin)
+        soy.engindearing.omnitak.plugin.PluginRegistry.activateEnabled(
+            host = pluginHost.asPluginHost(),
+            prefs = pluginPrefs(),
+            onActivating = { id, activate -> pluginHost.withActivating(id) { activate() } },
+        )
     }
 
     /** Bridges Meshtastic node updates into the active server's CoT

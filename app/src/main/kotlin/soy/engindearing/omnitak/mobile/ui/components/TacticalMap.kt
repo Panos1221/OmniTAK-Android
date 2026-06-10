@@ -24,7 +24,6 @@ import org.maplibre.android.location.modes.RenderMode
 import soy.engindearing.omnitak.mobile.R
 import org.maplibre.android.maps.MapView
 import org.maplibre.android.maps.Style
-import soy.engindearing.omnitak.mobile.data.Aircraft
 import soy.engindearing.omnitak.mobile.data.CoTEvent
 import soy.engindearing.omnitak.mobile.data.Drawing
 import soy.engindearing.omnitak.mobile.data.MapProvider
@@ -60,7 +59,12 @@ fun TacticalMap(
     measurementPoints: List<LatLng> = emptyList(),
     drawings: List<Drawing> = emptyList(),
     gridCenter: LatLng? = null,
-    aircraft: List<Aircraft> = emptyList(),
+    // NOTE: ADS-B aircraft are no longer plumbed through TacticalMap. They are
+    // rendered by the ADS-B plugin's map overlay (:plugins:example-adsb), which
+    // feeds the `aircraft-src` GeoJSON source baked into the style JSON below
+    // via the live MapLibreMap handle. The source + `aircraft-circle` /
+    // `aircraft-label` layers stay in this module's style as MapLibre *style
+    // infrastructure* — see buildTacticalStyle and AircraftLayer's contract.
     panTarget: LatLng? = null,
     panTargetTick: Int = 0,
     followMeActive: Boolean = false,
@@ -98,7 +102,6 @@ fun TacticalMap(
     val currentMeasurementPoints by rememberUpdatedState(measurementPoints)
     val currentDrawings by rememberUpdatedState(drawings)
     val currentGridCenter by rememberUpdatedState(gridCenter)
-    val currentAircraft by rememberUpdatedState(aircraft)
     val currentCameraIdle by rememberUpdatedState(onCameraIdle)
     val currentMapReady by rememberUpdatedState(onMapReady)
     val currentStyleReady by rememberUpdatedState(onStyleReady)
@@ -135,7 +138,9 @@ fun TacticalMap(
                     MeasurementLayer.update(map, currentMeasurementPoints)
                     DrawingLayer.update(map, currentDrawings)
                     currentGridCenter?.let { GridLayer.update(map, it) }
-                    AircraftLayer.update(map, currentAircraft)
+                    // ADS-B aircraft are fed by the ADS-B plugin's overlay via
+                    // the live map handle — not from here. The `aircraft-src`
+                    // source stays empty until the plugin pushes into it.
                     if (currentLocationEnabled) {
                         activateLocation(map, style, context, useMilStdSelfSymbol, selfTeamColor)
                     }
@@ -296,7 +301,9 @@ fun TacticalMap(
                     MeasurementLayer.update(map, currentMeasurementPoints)
                     DrawingLayer.update(map, currentDrawings)
                     currentGridCenter?.let { GridLayer.update(map, it) }
-                    AircraftLayer.update(map, currentAircraft)
+                    // ADS-B re-push after a style reload is handled by the
+                    // plugin overlay's LaunchedEffect(map, …), which re-runs
+                    // when the new MapLibreMap/style lands. Nothing to do here.
                     currentStyleReady?.invoke(map, style)
                     // Apply 3D tilt AFTER the style (which carries the
                     // terrain source) finishes loading — deterministic vs
@@ -338,12 +345,8 @@ fun TacticalMap(
         onDispose { }
     }
 
-    DisposableEffect(mapView, aircraft) {
-        mapView.getMapAsync { map ->
-            if (map.style != null) AircraftLayer.update(map, aircraft)
-        }
-        onDispose { }
-    }
+    // (ADS-B's DisposableEffect(mapView, aircraft) moved into the plugin's
+    // AdsbMapOverlay, which owns aircraft painting via the live map handle.)
 
     // Pan camera to an arbitrary LatLng — used by the Teams panel to
     // jump the map onto a tapped contact. The tick parameter lets the
@@ -583,6 +586,12 @@ private const val TACTICAL_STYLE_HEAD = """
     }
 """
 
+// CONTRACT WITH THE ADS-B PLUGIN: the `aircraft-src` GeoJSON source plus the
+// `aircraft-circle` and `aircraft-label` layers below are MapLibre style
+// infrastructure shared with :plugins:example-adsb. The plugin's AircraftLayer
+// feeds the source via the live map handle. Do NOT remove them thinking they
+// belong to ADS-B logic — the plugin's AircraftLayer.update silently no-ops if
+// the source is gone, and aircraft stop rendering.
 private const val TACTICAL_STYLE_OVERLAYS = """,
     "contacts-src": {
       "type": "geojson",

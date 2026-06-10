@@ -11,6 +11,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import soy.engindearing.omnitak.mobile.data.CertVault
 import soy.engindearing.omnitak.mobile.data.ChatXml
+import soy.engindearing.omnitak.mobile.data.CoTEvent
 import soy.engindearing.omnitak.mobile.data.CoTParser
 import soy.engindearing.omnitak.mobile.data.LocationProvider
 import soy.engindearing.omnitak.mobile.data.TAKConnection
@@ -39,6 +40,11 @@ class ServerManager(
     // Issue #11 — wired from OmniTAKApp to read BatteryManager. Lambda
     // (not Context) keeps this class headless for unit tests.
     private val batteryProvider: () -> Int? = { null },
+    // Plugin SDK seam — invoked for every inbound CoT event AFTER the core
+    // ContactStore ingests it (per the plugin RFC). Wired from OmniTAKApp to
+    // AppPluginHost.dispatchCoT. Nullable + a plain lambda keeps this class
+    // headless for unit tests and inert when no plugin registers a CoT handler.
+    private val pluginCoTDispatch: ((CoTEvent) -> Boolean)? = null,
 ) {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
@@ -133,7 +139,15 @@ class ServerManager(
                 if (chat != null) {
                     chatStore?.ingest(chat)
                 } else {
-                    CoTParser.parse(xml)?.let { contactStore?.ingest(it) }
+                    CoTParser.parse(xml)?.let { event ->
+                        // Core store first (per the plugin RFC: handlers run
+                        // AFTER the core ContactStore ingests), then fan the
+                        // event out to any plugin-registered CoT handlers. The
+                        // return value is advisory in v1 — ingest already
+                        // happened, so "consumed" does not un-ingest.
+                        contactStore?.ingest(event)
+                        pluginCoTDispatch?.invoke(event)
+                    }
                 }
             }
         }
