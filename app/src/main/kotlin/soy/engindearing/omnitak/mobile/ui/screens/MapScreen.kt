@@ -217,6 +217,9 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
     val rasterImagery by app.rasterOverlayStore.overlays.collectAsState()
     val snackbar = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
+    // Radial "Copy Coords" — Compose clipboard handle, resolved here
+    // because LocalClipboardManager is composition-local.
+    val clipboard = androidx.compose.ui.platform.LocalClipboardManager.current
 
     // Issue #16 — Lasso freehand multi-select.
     // The MapLibreMap reference is captured via TacticalMap.onMapReady
@@ -1199,7 +1202,10 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
             actions = buildList {
                 add(RadialAction("drop", Icons.Filled.Place, "Drop Marker"))
                 add(RadialAction("measure", Icons.Filled.Straighten, "Measure"))
-                add(RadialAction("nav", Icons.Filled.Navigation, "Navigate"))
+                // "Navigate" removed — Android has no route-planning /
+                // turn-by-turn engine yet (iOS executeNavigate rides
+                // routePlanningService). Re-add when that engine lands;
+                // an action that does nothing is worse than no action.
                 add(RadialAction("layers", Icons.Filled.Layers, "Layers"))
                 add(RadialAction("copy", Icons.Filled.LocationOn, "Copy Coords"))
                 if (uasConnected) {
@@ -1225,7 +1231,36 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
                 radialLatLng = null
                 when (action.id) {
                     "drop" -> if (ll != null) markerSheetLatLng = ll
+                    // "Add" = quick-add at the long-press point — same
+                    // marker-creation sheet as Drop (GAP-052 parity with
+                    // iOS RadialMenuActionExecutor).
+                    "add" -> if (ll != null) markerSheetLatLng = ll
                     "layers" -> layersSheetOpen = true
+                    "measure" -> {
+                        // Enter measure mode seeded with the long-press
+                        // point — matches iOS executeMeasure.
+                        measurementActive = true
+                        measurementPoints = ll?.let { listOf(it) } ?: emptyList()
+                        toast(Loc.t("map.toast.measure"))
+                    }
+                    "copy" -> if (ll != null) {
+                        val coord = soy.engindearing.omnitak.mobile.data.CoordFormatter
+                            .position(ll.latitude, ll.longitude, userPrefs.coordFormat)
+                        clipboard.setText(androidx.compose.ui.text.AnnotatedString(coord))
+                        toast(Loc.t("map.toast.copied", coord))
+                    }
+                    "center" -> if (ll != null) {
+                        panTarget = ll
+                        panTargetTick += 1
+                        if (followMeActive) mutatePref { it.copy(followMeActive = false) }
+                        toast(
+                            Loc.t(
+                                "map.toast.panning",
+                                soy.engindearing.omnitak.mobile.data.CoordFormatter
+                                    .position(ll.latitude, ll.longitude, userPrefs.coordFormat),
+                            )
+                        )
+                    }
                     "uas_fly_here" -> if (ll != null) {
                         // MAV_CMD_DO_REPOSITION at the operator's cruise
                         // altitude, after a TAK Terrain safety check.
@@ -1291,17 +1326,11 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
                         }
                         toast("Survey mission uploading — 200 m box, 30 m spacing")
                     }
-                    else -> {
-                        // Respect the operator's coordinate-format pref (Lat/Lon,
-                        // DMS, MGRS, UTM) so the "Add @ …" toast matches the
-                        // SelfPositionCard readout instead of always lat/lon.
-                        val coord = ll?.let {
-                            soy.engindearing.omnitak.mobile.data.CoordFormatter.position(
-                                it.latitude, it.longitude, userPrefs.coordFormat,
-                            )
-                        } ?: ""
-                        toast("${action.label}${if (coord.isNotEmpty()) " @ $coord" else ""}")
-                    }
+                    // Every advertised action is wired above — an unknown
+                    // id is a programming error, not something to paper
+                    // over with a coordinate toast (the old stub behavior
+                    // that made Measure/Copy/Center look implemented).
+                    else -> {}
                 }
             },
             onDismiss = {

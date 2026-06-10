@@ -103,6 +103,8 @@ internal object LocStrings {
         "marker.toast.droppedSent" to "Dropped marker at %s — sent to server",
         "marker.toast.droppedLocal" to "Dropped marker at %s — local only (no server)",
         "map.toast.panning" to "Panning to %s",
+        "map.toast.measure" to "Measure mode — tap map to add points",
+        "map.toast.copied" to "Copied %s",
     )
 
     private val ZH_HANT: Map<String, String> = mapOf(
@@ -176,5 +178,7 @@ internal object LocStrings {
         "marker.toast.droppedSent" to "已在 %s 放置標記 — 已傳送至伺服器",
         "marker.toast.droppedLocal" to "已在 %s 放置標記 — 僅本機（未連線伺服器）",
         "map.toast.panning" to "正在移至 %s",
+        "map.toast.measure" to "測量模式 — 點擊地圖新增測量點",
+        "map.toast.copied" to "已複製 %s",
     )
 }
