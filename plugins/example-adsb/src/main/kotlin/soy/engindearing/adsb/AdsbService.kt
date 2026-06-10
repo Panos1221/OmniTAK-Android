@@ -1,4 +1,4 @@
-package soy.engindearing.omnitak.mobile.data
+package soy.engindearing.adsb
 
 import android.util.Log
 import kotlinx.coroutines.CoroutineScope
@@ -44,6 +44,13 @@ class AdsbService {
     private val _lastError = MutableStateFlow<String?>(null)
     val lastError: StateFlow<String?> = _lastError.asStateFlow()
 
+    // Live query-box center. The poll loop re-reads these every tick so
+    // [recenterIfNeeded] can follow the operator's map viewport without
+    // restarting the service.
+    @Volatile private var curLat = 0.0
+    @Volatile private var curLon = 0.0
+    @Volatile private var curHalfWidth = 1.5
+
     fun start(
         centerLat: Double,
         centerLon: Double,
@@ -51,10 +58,13 @@ class AdsbService {
         refreshSeconds: Long = 15L,
     ) {
         stop()
+        curLat = centerLat
+        curLon = centerLon
+        curHalfWidth = halfWidthDegrees
         _active.value = true
         pollJob = scope.launch {
             while (coroutineContext.isActive) {
-                runCatching { fetchOnce(centerLat, centerLon, halfWidthDegrees) }
+                runCatching { fetchOnce(curLat, curLon, curHalfWidth) }
                     .onFailure { t ->
                         Log.w(TAG, "ADSB fetch failed: ${t.javaClass.simpleName}: ${t.message}")
                         _lastError.value = t.message ?: t.javaClass.simpleName
@@ -62,6 +72,21 @@ class AdsbService {
                 delay(refreshSeconds * 1000L)
             }
         }
+    }
+
+    /**
+     * Follow the map camera: move the query box when the viewport has
+     * drifted significantly (more than half the box's half-width) from
+     * the current center. Cheap no-op otherwise, so calling this on
+     * every camera-idle event is fine. The next poll tick picks up the
+     * new box. Returns true when the box moved.
+     */
+    fun recenterIfNeeded(lat: Double, lon: Double): Boolean {
+        if (!_active.value) return false
+        if (!shouldRecenter(curLat, curLon, lat, lon, curHalfWidth)) return false
+        curLat = lat
+        curLon = lon
+        return true
     }
 
     fun stop() {
@@ -106,6 +131,24 @@ class AdsbService {
 
     companion object {
         private const val TAG = "AdsbService"
+
+        /**
+         * True when (newLat,newLon) is more than half of [halfWidth]
+         * away from the current center on either axis — far enough
+         * that aircraft near the viewport edge would start falling
+         * outside the query box. Pure function for unit testing.
+         */
+        fun shouldRecenter(
+            curLat: Double,
+            curLon: Double,
+            newLat: Double,
+            newLon: Double,
+            halfWidth: Double,
+        ): Boolean {
+            val threshold = halfWidth / 2.0
+            return kotlin.math.abs(newLat - curLat) > threshold ||
+                kotlin.math.abs(newLon - curLon) > threshold
+        }
 
         /**
          * OpenSky /states/all returns: { "time": Long, "states": [[...], [...], ...] }

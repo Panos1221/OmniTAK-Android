@@ -114,7 +114,7 @@ fun FemaMarkerPaletteSheet(
             )
             latLng?.let {
                 Text(
-                    "%.5f, %.5f".format(it.latitude, it.longitude),
+                    rememberCoordText(it.latitude, it.longitude),
                     color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f),
                     fontFamily = FontFamily.Monospace,
                     style = MaterialTheme.typography.bodySmall,

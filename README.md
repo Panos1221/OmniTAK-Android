@@ -100,6 +100,22 @@ app/src/main/kotlin/soy/engindearing/omnitak/mobile/
 
 The app is pure Kotlin + Compose with no native bridge. A future release will integrate the shared OmniTAK Rust core via JNI — its source is being prepared for separate open-source release as **OmniTAK-Core**.
 
+### Plugins
+
+OmniTAK ships a compile-time plugin SDK (`:plugins:plugin-sdk`) and a reference
+plugin (`:plugins:example-adsb`, the ADS-B aircraft overlay). Plugins are
+statically-linked Gradle modules — no dynamic/remote code, so the app stays
+Play-Store compliant. See **[docs/PLUGIN_AUTHORING.md](docs/PLUGIN_AUTHORING.md)**
+for the contract, the host seams (map overlay / radial / CoT / settings), and a
+step-by-step "add a plugin" guide. Plugin authoring mirrors the iOS SDK so a
+plugin ports across platforms in about a day.
+
+```
+plugins/
+├── plugin-sdk/      # OmniTAKPlugin, PluginHost, PluginRegistry, value types
+└── example-adsb/    # ADS-B reference plugin (OpenSky overlay + settings)
+```
+
 ## Permissions
 
 | Permission | Why |
@@ -135,6 +151,7 @@ OmniTAK-Android uses the following open-source components:
 - [AndroidX](https://developer.android.com/jetpack/androidx) — Apache 2.0
 - [kotlinx.serialization](https://github.com/Kotlin/kotlinx.serialization) — Apache 2.0
 - [Jetpack Compose](https://developer.android.com/jetpack/compose) — Apache 2.0
+- [Unishox2](https://github.com/siara-cc/Unishox2) (siara-cc) — Apache 2.0 — pure-Kotlin port for Meshtastic TAKPacket string compression
 
 ## Acknowledgments
 

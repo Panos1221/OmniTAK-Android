@@ -18,6 +18,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.viewinterop.AndroidView
 import org.json.JSONObject
 import org.maplibre.android.geometry.LatLng
+import soy.engindearing.omnitak.mobile.BuildConfig
 import soy.engindearing.omnitak.mobile.data.CoTEvent
 
 /**
@@ -49,6 +50,12 @@ fun CesiumMapView(
     zoomInTrigger: Int = 0,
     zoomOutTrigger: Int = 0,
     recenterTrigger: Int = 0,
+    // Pan-to-coordinate parity with TacticalMap — Go-to-Coordinate "Go",
+    // ContactsPanel taps and the radial Center action all set a pan
+    // target; the globe flies there via the scene bridge instead of
+    // silently ignoring it (the "panel never appears on Cesium" class).
+    panTarget: LatLng? = null,
+    panTargetTick: Int = 0,
 ) {
     val density = LocalDensity.current.density
     val mainHandler = remember { Handler(Looper.getMainLooper()) }
@@ -124,6 +131,12 @@ fun CesiumMapView(
                 )
                 val html = ctx.assets.open("cesium_scene.html")
                     .bufferedReader().use { it.readText() }
+                    // Ion token is injected here from BuildConfig (fed by the
+                    // gitignored local.properties) so the committed asset in
+                    // this public repo never carries a literal token. Empty
+                    // token = tokenless Cesium (degraded Ion imagery), not a
+                    // crash.
+                    .replace("__CESIUM_ION_TOKEN__", BuildConfig.CESIUM_ION_TOKEN)
                 loadDataWithBaseURL("https://cesium.com/", html, "text/html", "UTF-8", null)
             }
         },
@@ -154,6 +167,16 @@ fun CesiumMapView(
                     "window.OmniBridge.centerOnSelf({lat:$lat,lon:$lon});", null,
                 )
             }
+        }
+        onDispose { }
+    }
+    DisposableEffect(panTargetTick) {
+        val t = panTarget
+        if (panTargetTick > 0 && t != null && ready.value) {
+            webViewRef.value?.evaluateJavascript(
+                "window.OmniBridge.flyTo({lat:${t.latitude},lon:${t.longitude},range:3000});",
+                null,
+            )
         }
         onDispose { }
     }

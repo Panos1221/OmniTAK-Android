@@ -82,7 +82,9 @@ fun EnrollServerScreen(onDone: () -> Unit) {
     var enrollPortText by remember { mutableStateOf("8446") }
     var username by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
-    var trustSelfSigned by remember { mutableStateOf(true) }
+    // Secure by default: certificate validation stays ON unless the operator
+    // explicitly opts into the self-signed bypass for this one enrollment.
+    var trustSelfSigned by remember { mutableStateOf(false) }
     var passwordVisible by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     var isEnrolling by remember { mutableStateOf(false) }
@@ -285,6 +287,17 @@ fun EnrollServerScreen(onDone: () -> Unit) {
                     )
                 }
                 Switch(checked = trustSelfSigned, onCheckedChange = { trustSelfSigned = it })
+            }
+
+            if (trustSelfSigned) {
+                Text(
+                    "Warning: certificate validation is disabled for this enrollment. " +
+                        "Anyone on the network path can impersonate the server and capture " +
+                        "your credentials. Only enable on networks you control.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                    modifier = Modifier.fillMaxWidth(),
+                )
             }
 
             error?.let { msg ->

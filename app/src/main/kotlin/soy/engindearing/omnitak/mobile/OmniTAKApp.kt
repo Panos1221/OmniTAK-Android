@@ -8,6 +8,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
@@ -25,6 +27,8 @@ import soy.engindearing.omnitak.mobile.domain.DataPackageBootstrap
 import soy.engindearing.omnitak.mobile.domain.DrawingStore
 import soy.engindearing.omnitak.mobile.domain.MapCameraStore
 import soy.engindearing.omnitak.mobile.domain.MeshtasticCoTBridge
+import soy.engindearing.omnitak.mobile.domain.MeshCoTRouter
+import soy.engindearing.omnitak.mobile.domain.SelfPositionBroadcaster
 import soy.engindearing.omnitak.mobile.domain.TAKConnectionService
 import soy.engindearing.omnitak.mobile.domain.MeshtasticManager
 import soy.engindearing.omnitak.mobile.domain.ServerManager
@@ -33,6 +37,11 @@ class OmniTAKApp : Application() {
 
     override fun onCreate() {
         super.onCreate()
+
+        // Restore the operator's UI language (or match the device locale)
+        // before any Activity composes, so the first frame renders in the
+        // right language. Mirrors iOS's LocalizationManager init.
+        soy.engindearing.omnitak.mobile.i18n.Loc.init(this)
 
         // Load the canonical CoT-type → SIDC catalogue from
         // assets/cot_types.json. Silent failure keeps the hardcoded
@@ -45,6 +54,18 @@ class OmniTAKApp : Application() {
         // Touches `serverManager` (and through it `userPrefsStore`,
         // `certVault`), so kicking it off here also wakes those lazies.
         DataPackageBootstrap(this, certVault, serverManager).runIfNeeded()
+
+        // Plugin SDK — register the bundled plugins and activate the ones whose
+        // enable flag is true (default true on first run, so existing testers
+        // see ADS-B exactly as before). activate() only registers hooks; it does
+        // NOT start any network poll, so this stays cheap and launch-safe.
+        loadBundledPlugins()
+
+        // Eagerly populate cachedPrefs so non-suspend sinks (cotSink,
+        // mesh broadcast toggles) can read prefs.value immediately.
+        appScope.launch {
+            userPrefsStore.prefs.collect { cachedPrefs.value = it }
+        }
 
         // Issue #5 — start a foreground service while we're holding a
         // connection so Doze doesn't kill the read loop within ~10s of
@@ -92,6 +113,30 @@ class OmniTAKApp : Application() {
             mapCameraStore.seedFromPrefs(saved)
         }
 
+        // Off-grid mesh plan Step 1b — broadcaster is now owned here so it
+        // starts when EITHER a TAK server OR Meshtastic radio is connected.
+        // ServerManager's own startPliBroadcast/stopPliBroadcast is kept
+        // for the server-PPLI path; the app-level broadcaster handles the
+        // COMBINED (server + mesh) lifecycle with mesh TX wired in.
+        // distinctUntilChanged on the derived bool avoids spurious restarts.
+        appScope.launch {
+            combine(
+                serverManager.connectionState,
+                meshtastic.activeConnectionState,
+            ) { serverState, meshState ->
+                serverState is ConnectionState.Connected ||
+                    meshState is ConnectionState.Connected
+            }
+                .distinctUntilChanged()
+                .collect { eitherConnected ->
+                    if (eitherConnected) {
+                        startAppBroadcaster()
+                    } else {
+                        stopAppBroadcaster()
+                    }
+                }
+        }
+
         // Phase 2 of the gy6 plan — FAA Remote ID BLE scanner.
         // Lifecycle is driven by `remoteIdScanEnabled` so operators can
         // opt out of the always-on BLE scan (battery cost). When a
@@ -117,25 +162,78 @@ class OmniTAKApp : Application() {
                 for (uasId in changedIds) {
                     val track = remoteIdScanner.tracks.firstOrNull { it.uasId == uasId }
                     if (track == null) {
-                        // Stale-purged track: drop the marker so the map
-                        // stops showing a ghost.
-                        contactStore.remove(
-                            "RID-$uasId",
-                        )
+                        // Stale-purged track: drop the drone + pilot markers
+                        // so the map stops showing a ghost.
+                        contactStore.remove("RID-$uasId")
+                        contactStore.remove("RID-OP-$uasId")
                     } else {
+                        // Emit the drone and/or operator (pilot) markers.
                         soy.engindearing.omnitak.mobile.data.remoteid.RemoteIdToCoTConverter
-                            .toCoT(track)
-                            ?.let { contactStore.ingest(it) }
+                            .toCoTs(track)
+                            .forEach { contactStore.ingest(it) }
                     }
                 }
             }
+        }
+
+        // Phase 3 — external gyb_detect sensor. When enabled, the manager's
+        // collectors run and parsed drones flow gyb → RemoteIdTrackStore →
+        // RemoteIdToCoTConverter → ContactStore, sharing the `RID-` UID with
+        // the on-device scanner so the same drone never double-plots.
+        // Scan/connect/disconnect live in Settings → GybDeviceSheet; the
+        // manager auto-reconnects to the persisted last device on start()
+        // and after a BLE drop (with backoff), and stops with the toggle.
+        appScope.launch {
+            userPrefsStore.prefs
+                .map { it.gybDetectorEnabled }
+                .distinctUntilChanged()
+                .collect { enabled ->
+                    if (enabled) gybManager.start() else gybManager.stop()
+                }
         }
     }
 
     // Application-scoped singletons. Screens reach these via
     // LocalContext.current.applicationContext as OmniTAKApp.
     private val appScope = CoroutineScope(Dispatchers.Default + SupervisorJob())
+
+    // Eagerly-cached prefs snapshot for non-suspending sinks (cotSink,
+    // mesh broadcast lambdas). Initialized to defaults until DataStore emits.
+    private val cachedPrefs = MutableStateFlow(soy.engindearing.omnitak.mobile.data.UserPrefs())
+
+    /** Single plugin host instance shared by [loadBundledPlugins] and the
+     *  screens that consume registrations (MapScreen overlays/radial,
+     *  SettingsScreen rows). Holds the registered hooks. */
+    val pluginHost: soy.engindearing.omnitak.mobile.ui.plugin.AppPluginHost by lazy {
+        soy.engindearing.omnitak.mobile.ui.plugin.AppPluginHost()
+    }
+
+    /** The bundled ADS-B reference plugin instance. Held so the host can wire
+     *  its camera-center provider + camera-follow at the MapScreen seam. */
+    val adsbPlugin: soy.engindearing.adsb.AdsbPlugin by lazy { soy.engindearing.adsb.AdsbPlugin() }
+
     val contactStore: ContactStore by lazy { ContactStore() }
+    /** External gyb_detect sensor over BLE GATT (Phase 3 of the gy6 plan).
+     *  Parsed drones merge into ContactStore via the shared RID- UID;
+     *  driven by `gybDetectorEnabled` in [onCreate]. */
+    val gybManager: soy.engindearing.omnitak.mobile.domain.GybManager by lazy {
+        soy.engindearing.omnitak.mobile.domain.GybManager(
+            context = this,
+            cotSink = { event -> contactStore.ingest(event) },
+            cotRemove = { uid -> contactStore.remove(uid) },
+            scope = appScope,
+            trackStore = remoteIdTrackStore,
+            // cachedPrefs is eagerly collected in onCreate, so by the time
+            // the toggle-driven start() fires this read is non-suspending
+            // and current.
+            lastDeviceAddress = { cachedPrefs.value.gybLastDeviceAddress },
+            persistLastDevice = { addr ->
+                appScope.launch {
+                    userPrefsStore.update { it.copy(gybLastDeviceAddress = addr) }
+                }
+            },
+        )
+    }
     val drawingStore: DrawingStore by lazy { DrawingStore() }
     val mapCameraStore: MapCameraStore by lazy { MapCameraStore(userPrefsStore) }
     val chatStore: ChatStore by lazy {
@@ -153,7 +251,50 @@ class OmniTAKApp : Application() {
             // Phase 4: portnum-72 ATAK-plugin payloads decode straight
             // into CoT events; route them into the same ingest sink the
             // node-table bridge uses so they surface as map contacts.
-            mgr.cotSink = { event -> contactStore.ingest(event) }
+            // Off-grid Phase 1 Step 3: b-t-f events are GeoChat and must
+            // route to chatStore, not contactStore. Self-echo is dropped
+            // (events from our own UID would double-display — mirrors iOS).
+            mgr.cotSink = { event ->
+                // Drop self-echo: skip events whose UID or callsign matches ours.
+                // Uses cachedPrefs.value (non-suspending) since cotSink is a
+                // plain lambda invoked from a coroutine, not a suspend lambda.
+                val selfUid = cachedPrefs.value.selfUid
+                val selfCallsign = cachedPrefs.value.callsign
+                val isSelf = (selfUid.isNotBlank() && event.uid == selfUid) ||
+                    (selfCallsign.isNotBlank() && event.callsign == selfCallsign)
+                if (!isSelf) {
+                    when (MeshCoTRouter.classify(event)) {
+                        MeshCoTRouter.Destination.CHAT -> {
+                            // Convert b-t-f CoTEvent to ChatMessage and ingest.
+                            // Try rawXml first (full GeoChat parse); fall back to
+                            // building a ChatMessage directly from CoTEvent fields.
+                            val selfUidNow = selfUid.ifBlank { null }
+                            val chatMsg = event.rawXml?.let {
+                                runCatching {
+                                    soy.engindearing.omnitak.mobile.data.ChatXml.parse(it, selfUidNow)
+                                }.getOrNull()
+                            } ?: run {
+                                // Manual ChatMessage from CoTEvent fields.
+                                val senderCallsign = event.callsign ?: event.uid
+                                val convId = soy.engindearing.omnitak.mobile.data.ChatRoom.ALL_USERS
+                                soy.engindearing.omnitak.mobile.data.ChatMessage(
+                                    id = event.uid,
+                                    conversationId = convId,
+                                    senderUid = event.uid,
+                                    senderCallsign = senderCallsign,
+                                    text = event.remarks.ifBlank { "[mesh chat]" },
+                                    timeIso = event.timeIso
+                                        ?: soy.engindearing.omnitak.mobile.data.CotXml.isoMillis(),
+                                    status = soy.engindearing.omnitak.mobile.data.ChatStatus.RECEIVED,
+                                    isFromSelf = false,
+                                )
+                            }
+                            chatStore.ingest(chatMsg)
+                        }
+                        MeshCoTRouter.Destination.CONTACT -> contactStore.ingest(event)
+                    }
+                }
+            }
             // GAP-109 read-back — admin responses to our get_*_request
             // calls fold into the device-config store on a background
             // coroutine. Screen collects from the store and re-renders.
@@ -211,12 +352,69 @@ class OmniTAKApp : Application() {
         soy.engindearing.omnitak.mobile.data.RasterOverlayStore(this)
     }
 
+    /** Single Remote ID track roster shared by the phone scanner and the
+     *  gyb sensor. One store means either source refreshes a drone's
+     *  lastSeen and the stale purge only drops a track when BOTH sensors
+     *  have gone silent — two private stores used to delete each other's
+     *  live RID-/RID-OP- markers. */
+    val remoteIdTrackStore: soy.engindearing.omnitak.mobile.data.remoteid.RemoteIdTrackStore by lazy {
+        soy.engindearing.omnitak.mobile.data.remoteid.RemoteIdTrackStore()
+    }
+
     /** FAA Remote ID BLE scanner (Phase 2 of the gy6 plan). Starts/stops
      *  from a coroutine in [onCreate] driven by `remoteIdScanEnabled`. */
     val remoteIdScanner: soy.engindearing.omnitak.mobile.data.remoteid.RemoteIdScanner by lazy {
-        soy.engindearing.omnitak.mobile.data.remoteid.RemoteIdScanner(this)
+        soy.engindearing.omnitak.mobile.data.remoteid.RemoteIdScanner(this, remoteIdTrackStore)
     }
     val certVault: CertVault by lazy { CertVault(this) }
+
+    // Off-grid mesh plan Step 1b — single app-owned broadcaster instance.
+    // Null until startAppBroadcaster() is called. Thread-safe via @Volatile.
+    @Volatile private var appBroadcaster: SelfPositionBroadcaster? = null
+    // The prefs collector feeding the broadcaster's lambda getters. Held so
+    // stopAppBroadcaster() can cancel it — every connect→disconnect cycle
+    // used to leak one infinite collector coroutine in process-lifetime
+    // appScope (a field device flapping connectivity for days accumulated
+    // hundreds, all re-running on every prefs write).
+    @Volatile private var broadcasterPrefsJob: kotlinx.coroutines.Job? = null
+
+    private fun startAppBroadcaster() {
+        if (appBroadcaster != null) return
+        val fixFlow = locationProvider.fix
+        // Eagerly cache the mesh-broadcast prefs as StateFlows so the
+        // lambda getters in SelfPositionBroadcaster can read .value
+        // without suspending — they're called inside a non-suspending context.
+        val broadcastOverMeshFlow = kotlinx.coroutines.flow.MutableStateFlow(true)
+        val meshIntervalMsFlow = kotlinx.coroutines.flow.MutableStateFlow(30_000L)
+        broadcasterPrefsJob?.cancel()
+        broadcasterPrefsJob = appScope.launch {
+            userPrefsStore.prefs.collect { p ->
+                broadcastOverMeshFlow.value = p.broadcastOverMesh
+                meshIntervalMsFlow.value = p.meshBroadcastIntervalSecs.coerceIn(30, 60).toLong() * 1000L
+            }
+        }
+        appBroadcaster = SelfPositionBroadcaster(
+            scope = appScope,
+            prefsStore = userPrefsStore,
+            sendCoT = { xml -> serverManager.sendCoT(xml) },
+            locationFix = fixFlow,
+            batteryProvider = ::readDeviceBatteryPercent,
+            sendToMesh = { event -> meshtastic.sendCoTOverMesh(event) },
+            meshConnected = { meshtastic.activeConnectionState.value is ConnectionState.Connected },
+            meshBroadcastEnabled = { broadcastOverMeshFlow.value },
+            // Lambda, not a snapshot — the operator's interval pref now
+            // applies to a running broadcaster instead of freezing at the
+            // pre-DataStore 30 s default.
+            meshThrottleMs = { meshIntervalMsFlow.value },
+        ).also { it.start() }
+    }
+
+    private fun stopAppBroadcaster() {
+        appBroadcaster?.stop()
+        appBroadcaster = null
+        broadcasterPrefsJob?.cancel()
+        broadcasterPrefsJob = null
+    }
     val locationProvider: LocationProvider by lazy { LocationProvider(this) }
     val serverManager: ServerManager by lazy {
         ServerManager(
@@ -231,6 +429,9 @@ class OmniTAKApp : Application() {
             // unknown; map that to null so SelfPositionBroadcaster omits
             // <status> rather than emitting a misleading number.
             batteryProvider = ::readDeviceBatteryPercent,
+            // Plugin SDK — fan inbound CoT (after core ingest) to any
+            // plugin-registered handlers. Inert until a plugin registers one.
+            pluginCoTDispatch = { event -> pluginHost.dispatchCoT(event) },
         )
     }
 
@@ -265,6 +466,31 @@ class OmniTAKApp : Application() {
         val bm = getSystemService(Context.BATTERY_SERVICE) as? BatteryManager ?: return null
         val level = bm.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY)
         return if (level in 0..100) level else null
+    }
+
+    /** SharedPreferences carrying the per-plugin `plugin_<id>_enabled` flags.
+     *  Deliberately SEPARATE from the DataStore UserPrefsStore — the plugin
+     *  enable flag is the RFC-specified SharedPreferences boolean, while
+     *  ADS-B's `aircraftVisible` layer-visibility pref stays in DataStore. */
+    fun pluginPrefs() = getSharedPreferences("omnitak_plugins", MODE_PRIVATE)
+
+    /**
+     * Register the bundled plugins and activate the enabled ones. Compile-time
+     * modules only — there is no dynamic/remote code here; the plugin classes
+     * are statically linked into the app, which keeps OmniTAK Play-Store
+     * compliant.
+     *
+     * Each plugin's hooks are tagged with its id (via the registry's
+     * `onActivating` bracket → [pluginHost.withActivating]) so disabling a
+     * plugin later removes exactly its hooks.
+     */
+    private fun loadBundledPlugins() {
+        soy.engindearing.omnitak.plugin.PluginRegistry.register(adsbPlugin)
+        soy.engindearing.omnitak.plugin.PluginRegistry.activateEnabled(
+            host = pluginHost.asPluginHost(),
+            prefs = pluginPrefs(),
+            onActivating = { id, activate -> pluginHost.withActivating(id) { activate() } },
+        )
     }
 
     /** Bridges Meshtastic node updates into the active server's CoT

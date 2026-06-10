@@ -125,7 +125,7 @@ private fun ContactRow(contact: CoTEvent, onSelect: (CoTEvent) -> Unit) {
                 fontWeight = FontWeight.SemiBold,
             )
             Text(
-                "%.5f, %.5f".format(contact.lat, contact.lon) + " · " +
+                rememberCoordText(contact.lat, contact.lon) + " · " +
                     contact.affiliation.name.lowercase(),
                 color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
                 style = MaterialTheme.typography.labelSmall,

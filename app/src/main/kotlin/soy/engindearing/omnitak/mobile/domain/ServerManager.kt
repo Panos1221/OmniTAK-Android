@@ -7,9 +7,11 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.firstOrNull
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import soy.engindearing.omnitak.mobile.data.CertVault
 import soy.engindearing.omnitak.mobile.data.ChatXml
+import soy.engindearing.omnitak.mobile.data.CoTEvent
 import soy.engindearing.omnitak.mobile.data.CoTParser
 import soy.engindearing.omnitak.mobile.data.LocationProvider
 import soy.engindearing.omnitak.mobile.data.TAKConnection
@@ -38,6 +40,11 @@ class ServerManager(
     // Issue #11 — wired from OmniTAKApp to read BatteryManager. Lambda
     // (not Context) keeps this class headless for unit tests.
     private val batteryProvider: () -> Int? = { null },
+    // Plugin SDK seam — invoked for every inbound CoT event AFTER the core
+    // ContactStore ingests it (per the plugin RFC). Wired from OmniTAKApp to
+    // AppPluginHost.dispatchCoT. Nullable + a plain lambda keeps this class
+    // headless for unit tests and inert when no plugin registers a CoT handler.
+    private val pluginCoTDispatch: ((CoTEvent) -> Boolean)? = null,
 ) {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
@@ -82,6 +89,12 @@ class ServerManager(
     // ConcurrentHashMap because reconcile runs on the store-collector
     // coroutine while connect/disconnect can be called from the UI thread.
     private val connections = ConcurrentHashMap<String, TAKConnection>()
+    // Guards the containsKey→put window in connect()/disconnect(): two
+    // concurrent connect(server) calls (reconcile coroutine + UI thread)
+    // could otherwise both construct a live TAKConnection, with the loser
+    // of the map put leaking its socket + read loop and double-ingesting
+    // every CoT frame until process death.
+    private val connectionsLock = Any()
     private val stateJobs = ConcurrentHashMap<String, kotlinx.coroutines.Job>()
     private val receivedJobs = ConcurrentHashMap<String, kotlinx.coroutines.Job>()
     // Single PLI broadcaster — self-position fans out to every connected
@@ -95,7 +108,7 @@ class ServerManager(
      * second call for an already-connected server is a no-op (matches iOS
      * where every enabled server is connected at once, not one-at-a-time).
      */
-    fun connect(server: TAKServer) {
+    fun connect(server: TAKServer): Unit = synchronized(connectionsLock) {
         if (connections.containsKey(server.id)) return
         // Reset the shared ↓/↑ counters only when going from zero live
         // sockets to the first one, so adding a 2nd server doesn't zero them.
@@ -107,7 +120,7 @@ class ServerManager(
         connections[server.id] = conn
         stateJobs[server.id] = scope.launch {
             conn.state.collect { state ->
-                _serverStates.value = _serverStates.value + (server.id to state)
+                _serverStates.update { it + (server.id to state) }
                 recomputeAggregate()
                 // PLI broadcaster lives as long as ≥1 server is connected.
                 if (_connectedServerIds.value.isNotEmpty()) startPliBroadcast()
@@ -116,7 +129,7 @@ class ServerManager(
         }
         receivedJobs[server.id] = scope.launch {
             conn.received.collect { xml ->
-                _messagesReceived.value = _messagesReceived.value + 1
+                _messagesReceived.update { it + 1 }
                 // A frame is either a chat event or a contact/marker event,
                 // depending on the CoT type. Parsing chat first is cheap
                 // (string probe) and avoids double-ingesting as a contact.
@@ -126,7 +139,15 @@ class ServerManager(
                 if (chat != null) {
                     chatStore?.ingest(chat)
                 } else {
-                    CoTParser.parse(xml)?.let { contactStore?.ingest(it) }
+                    CoTParser.parse(xml)?.let { event ->
+                        // Core store first (per the plugin RFC: handlers run
+                        // AFTER the core ContactStore ingests), then fan the
+                        // event out to any plugin-registered CoT handlers. The
+                        // return value is advisory in v1 — ingest already
+                        // happened, so "consumed" does not un-ingest.
+                        contactStore?.ingest(event)
+                        pluginCoTDispatch?.invoke(event)
+                    }
                 }
             }
         }
@@ -174,16 +195,16 @@ class ServerManager(
         for (conn in targets) {
             if (conn.send(xml)) anyOk = true
         }
-        if (anyOk) _messagesSent.value = _messagesSent.value + 1
+        if (anyOk) _messagesSent.update { it + 1 }
         return anyOk
     }
 
     /** Disconnect a single server by id, leaving the others connected. */
-    fun disconnect(serverId: String) {
+    fun disconnect(serverId: String): Unit = synchronized(connectionsLock) {
         connections.remove(serverId)?.disconnect()
         stateJobs.remove(serverId)?.cancel()
         receivedJobs.remove(serverId)?.cancel()
-        _serverStates.value = _serverStates.value - serverId
+        _serverStates.update { it - serverId }
         recomputeAggregate()
         if (_connectedServerIds.value.isEmpty()) stopPliBroadcast()
     }
@@ -216,23 +237,18 @@ class ServerManager(
         }
     }
 
+    // Off-grid mesh plan Step 1b: PPLI broadcaster ownership moved to
+    // OmniTAKApp so it starts when EITHER a server OR mesh radio is
+    // connected. ServerManager's PLI methods are retained as stubs to
+    // preserve the call sites (stateJobs collectors call them); they are
+    // intentional no-ops — the app-level broadcaster handles everything.
     private fun startPliBroadcast() {
-        if (pliBroadcaster != null || userPrefsStore == null) return
-        // GAP-030b — thread the live FusedLocationProviderClient fix
-        // through so PPLI carries real GPS instead of a SF default.
-        // Empty StateFlow when no provider is wired (older callers/tests).
-        val fixFlow = locationProvider?.fix
-            ?: kotlinx.coroutines.flow.MutableStateFlow(null)
-        pliBroadcaster = SelfPositionBroadcaster(
-            scope = scope,
-            prefsStore = userPrefsStore,
-            sendCoT = { xml -> sendCoT(xml) },
-            locationFix = fixFlow,
-            batteryProvider = batteryProvider,
-        ).also { it.start() }
+        // Intentional no-op: broadcaster is owned by OmniTAKApp.
+        // Left in place so callers in stateJobs collectors compile without change.
     }
 
     private fun stopPliBroadcast() {
+        // Intentional no-op: broadcaster is owned by OmniTAKApp.
         pliBroadcaster?.stop()
         pliBroadcaster = null
     }

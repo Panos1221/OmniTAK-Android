@@ -3,8 +3,6 @@ package soy.engindearing.omnitak.mobile.ui.navigation
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.SnackbarHost
-import androidx.compose.material3.SnackbarHostState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -58,8 +56,6 @@ fun AppNav() {
     var showAddPalette by remember { mutableStateOf(false) }
     var showKmlOverlays by remember { mutableStateOf(false) }
     var editing by remember { mutableStateOf(false) }
-    val snackbarHostState = remember { SnackbarHostState() }
-    val snackbarScope = rememberCoroutineScope()
 
     fun navigateTo(route: String) {
         nav.navigate(route) {
@@ -180,7 +176,6 @@ fun AppNav() {
                 },
             )
         },
-        snackbarHost = { SnackbarHost(snackbarHostState) },
     ) { inner: PaddingValues ->
         NavHost(
             navController = nav,
@@ -243,8 +238,35 @@ fun AppNav() {
             composable("missionsync") {
                 soy.engindearing.omnitak.mobile.ui.screens.MissionSyncScreen(onBack = { nav.popBackStack() })
             }
-            composable("settings") { SettingsScreen() }
+            composable("settings") {
+                SettingsScreen(
+                    onOpenAbout = { nav.navigate("about") },
+                    onOpenPlugins = { pluginId -> nav.navigate("settings/plugin/$pluginId") },
+                )
+            }
             composable("about") { AboutScreen() }
+            // Top-level Plugins list (reads from PluginRegistry).
+            composable("plugins") {
+                soy.engindearing.omnitak.mobile.ui.screens.PluginsListScreen(
+                    onBack = { nav.popBackStack() },
+                    onOpenPlugin = { pluginId -> nav.navigate("settings/plugin/$pluginId") },
+                )
+            }
+            // Per-plugin detail page (enable toggle + settingsContent), reached
+            // from the Settings Plugins row or the Plugins list.
+            composable(
+                route = "settings/plugin/{pluginId}",
+                arguments = listOf(
+                    androidx.navigation.navArgument("pluginId") {
+                        type = androidx.navigation.NavType.StringType
+                    },
+                ),
+            ) { backStackEntry ->
+                soy.engindearing.omnitak.mobile.ui.screens.PluginDetailScreen(
+                    pluginId = backStackEntry.arguments?.getString("pluginId").orEmpty(),
+                    onBack = { nav.popBackStack() },
+                )
+            }
         }
     }
 
@@ -281,6 +303,11 @@ fun AppNav() {
                 navigateTo("map")
                 showKmlOverlays = true
             },
+            onGoToCoordinate = {
+                showToolsLauncher = false
+                navigateTo("map")
+                soy.engindearing.omnitak.mobile.ui.components.CoordinateEntryEvents.requestOpen()
+            },
             map3dEnabled = prefs.map3dEnabled,
             cesiumGlobeEnabled = prefs.cesiumGlobeEnabled,
             onToggleTerrain3D = {
@@ -293,12 +320,6 @@ fun AppNav() {
             onToggleGlobe = {
                 scope.launch {
                     app.userPrefsStore.update { it.copy(cesiumGlobeEnabled = !it.cesiumGlobeEnabled) }
-                }
-            },
-            onFullTools = {
-                showToolsLauncher = false
-                snackbarScope.launch {
-                    snackbarHostState.showSnackbar("Full Tools — porting the iOS grid next")
                 }
             },
         )

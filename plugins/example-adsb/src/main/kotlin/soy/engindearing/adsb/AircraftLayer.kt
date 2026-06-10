@@ -1,20 +1,24 @@
-package soy.engindearing.omnitak.mobile.ui.components
+package soy.engindearing.adsb
 
 import android.util.Log
 import org.json.JSONArray
 import org.json.JSONObject
 import org.maplibre.android.maps.MapLibreMap
-import org.maplibre.android.style.sources.GeoJsonSource
-import soy.engindearing.omnitak.mobile.data.Aircraft
 
 /**
- * Pushes ADS-B aircraft state into the pre-baked `aircraft-src`
- * GeoJson source. The style JSON declares a circle layer + a symbol
- * layer for the callsign so that the emulator GL path renders
- * reliably (see ContactLayer for the same reason).
+ * Pushes ADS-B aircraft state into the pre-baked `aircraft-src` GeoJson source.
  *
- * Each aircraft point carries `heading` and `callsign` properties
- * so the SymbolLayer can rotate + label.
+ * CONTRACT WITH THE HOST: the `aircraft-src` source plus the `aircraft-circle`
+ * and `aircraft-label` layers are declared in the host app's embedded tactical
+ * style JSON (`:app` TacticalMap.buildTacticalStyle). They are MapLibre *style
+ * infrastructure*, not ADS-B logic, so they stay in the host even though only
+ * this plugin feeds them. If the host ever drops them, [update] silently
+ * no-ops (the feeder returns false on a missing source). The style JSON
+ * declares a circle layer + a symbol layer for the callsign so the emulator GL
+ * path renders reliably (see ContactLayer in :app for the same reason).
+ *
+ * Each aircraft point carries `heading` and `callsign` properties so the
+ * SymbolLayer can rotate + label.
  */
 object AircraftLayer {
     const val SOURCE_ID = "aircraft-src"
@@ -22,27 +26,17 @@ object AircraftLayer {
     const val LABEL_LAYER_ID = "aircraft-label"
 
     fun update(map: MapLibreMap, aircraft: List<Aircraft>) {
-        val style = map.style ?: return
-        val src = style.getSourceAs<GeoJsonSource>(SOURCE_ID) ?: return
-        val fc = toFeatureCollection(aircraft)
-        src.setGeoJson(
-            org.maplibre.geojson.FeatureCollection.fromJson(fc.toString())
-        )
+        if (!AdsbGeoJsonFeeder.push(map, SOURCE_ID, toFeatures(aircraft))) return
         if (aircraft.isNotEmpty()) {
             Log.i("AircraftLayer", "pushed ${aircraft.size} aircraft to $SOURCE_ID")
         }
     }
 
     fun clear(map: MapLibreMap) {
-        val src = map.style?.getSourceAs<GeoJsonSource>(SOURCE_ID) ?: return
-        src.setGeoJson(
-            org.maplibre.geojson.FeatureCollection.fromJson(
-                """{"type":"FeatureCollection","features":[]}"""
-            )
-        )
+        AdsbGeoJsonFeeder.clear(map, SOURCE_ID)
     }
 
-    private fun toFeatureCollection(aircraft: List<Aircraft>): JSONObject {
+    private fun toFeatures(aircraft: List<Aircraft>): JSONArray {
         val features = JSONArray()
         aircraft.forEach { a ->
             features.put(
@@ -66,8 +60,6 @@ object AircraftLayer {
                     )
             )
         }
-        return JSONObject()
-            .put("type", "FeatureCollection")
-            .put("features", features)
+        return features
     }
 }

@@ -61,14 +61,14 @@ object AtakPluginParser {
 
         // XML fast-path — older ATAK plugin clients shove raw CoT XML
         // directly into the portnum-72 payload, no protobuf wrapper.
+        // CoTParser is XmlPullParserFactory-backed, so the same code
+        // runs on-device AND on plain-JVM unit tests — the old
+        // string-extraction fallback (which diverged from production
+        // behavior) is gone.
         if (looksLikeXML(payload)) {
             val xml = runCatching { String(payload, Charsets.UTF_8) }.getOrNull()
                 ?: return null
-            // Try the production XmlPullParser-backed CoTParser first
-            // (full-featured on Android); fall back to a string-based
-            // extractor on plain JVM (unit tests, where android.util.Xml
-            // isn't available).
-            return tryAndroidCoTParser(xml) ?: parseCoTXmlFallback(xml)
+            return CoTParser.parse(xml)
         }
 
         // Try TAKMessage protobuf path. If that fails, try a bare CoTEvent
@@ -224,10 +224,13 @@ object AtakPluginParser {
             staleIso = staleIso,
             callsign = callsign,
             remarks = detail.remarks ?: "",
+            // Team (group) data — required for off-grid mesh so receivers
+            // can colour-code contacts by team without a server relay.
+            teamName = detail.groupName,
+            teamRole = detail.groupRole,
             // Preserve the protobuf-derived CoT XML so existing CoT
             // pipelines (ContactStore, marker rendering) can mine the
             // structured Detail fields we don't carry on CoTEvent today.
-            // TODO: widen CoTEvent.detail to carry group/takv/track.
             rawXml = cotXml,
         )
     }
@@ -484,56 +487,12 @@ object AtakPluginParser {
         how: String,
         lat: Double, lon: Double, hae: Double, ce: Double, le: Double,
         detailXml: String,
-    ): String {
-        val t = timeIso ?: ""
-        val s = staleIso ?: t
-        return buildString {
-            append("<?xml version=\"1.0\" encoding=\"UTF-8\"?>")
-            append("<event version=\"2.0\" uid=\"${escape(uid)}\" type=\"${escape(type)}\"")
-            if (t.isNotEmpty()) append(" time=\"$t\" start=\"$t\"")
-            if (s.isNotEmpty()) append(" stale=\"$s\"")
-            append(" how=\"${escape(how)}\">")
-            append("<point lat=\"$lat\" lon=\"$lon\" hae=\"$hae\" ce=\"$ce\" le=\"$le\"/>")
-            append(detailXml)
-            append("</event>")
-        }
-    }
-
-    /** Bare-bones XML fallback that does not depend on `android.util.Xml`
-     *  so unit tests can exercise it. Pulls the same fields the real
-     *  [CoTParser] does. */
-    internal fun parseCoTXmlFallback(xml: String): CoTEvent? {
-        val uid = extractAttr(xml, "event", "uid") ?: return null
-        val type = extractAttr(xml, "event", "type") ?: return null
-        val time = extractAttr(xml, "event", "time")
-        val stale = extractAttr(xml, "event", "stale")
-        val lat = extractAttr(xml, "point", "lat")?.toDoubleOrNull() ?: return null
-        val lon = extractAttr(xml, "point", "lon")?.toDoubleOrNull() ?: return null
-        val hae = extractAttr(xml, "point", "hae")?.toDoubleOrNull() ?: 0.0
-        val ce = extractAttr(xml, "point", "ce")?.toDoubleOrNull() ?: 9_999_999.0
-        val le = extractAttr(xml, "point", "le")?.toDoubleOrNull() ?: 9_999_999.0
-        val callsign = extractAttr(xml, "contact", "callsign")
-        return CoTEvent(
-            uid = uid,
-            type = type,
-            lat = lat,
-            lon = lon,
-            hae = hae,
-            ce = ce,
-            le = le,
-            timeIso = time,
-            staleIso = stale,
-            callsign = callsign,
-            rawXml = xml,
-        )
-    }
-
-    /** Try the production CoTParser (Android-only). Wrapped in
-     *  reflection-via-runCatching so unit tests on a plain JVM don't
-     *  blow up linking against `android.util.Xml`. */
-    private fun tryAndroidCoTParser(xml: String): CoTEvent? = runCatching {
-        CoTParser.parse(xml)
-    }.getOrNull()
+    ): String = CotXml.buildEvent(
+        uid = uid, type = type, how = how,
+        lat = lat, lon = lon, hae = hae, ce = ce, le = le,
+        timeIso = timeIso, staleIso = staleIso ?: timeIso,
+        detailXml = detailXml,
+    )
 
     private fun looksLikeXML(bytes: ByteArray): Boolean {
         var i = 0
@@ -568,26 +527,7 @@ object AtakPluginParser {
 
     // region Misc helpers -------------------------------------------------
 
-    private fun escape(s: String): String = s
-        .replace("&", "&amp;")
-        .replace("<", "&lt;")
-        .replace(">", "&gt;")
-        .replace("\"", "&quot;")
-
-    private fun extractAttr(xml: String, tag: String, attr: String): String? {
-        val openIdx = xml.indexOf("<$tag")
-        if (openIdx < 0) return null
-        val closeIdx = xml.indexOf('>', openIdx)
-        if (closeIdx < 0) return null
-        val region = xml.substring(openIdx, closeIdx)
-        val key = "$attr=\""
-        val k = region.indexOf(key)
-        if (k < 0) return null
-        val start = k + key.length
-        val end = region.indexOf('"', start)
-        if (end < 0) return null
-        return unescape(region.substring(start, end))
-    }
+    private fun escape(s: String): String = CotXml.escape(s)
 
     private fun extractInnerText(tag: String, xml: String): String? {
         val open = "<$tag>"
@@ -599,20 +539,10 @@ object AtakPluginParser {
         return unescape(xml.substring(o + open.length, c))
     }
 
-    private fun unescape(s: String): String = s
-        .replace("&lt;", "<")
-        .replace("&gt;", ">")
-        .replace("&quot;", "\"")
-        .replace("&apos;", "'")
-        .replace("&amp;", "&")
+    private fun unescape(s: String): String = CotXml.unescape(s)
 
-    private fun isoFromMillis(ms: ULong): String {
-        if (ms == 0uL) return ""
-        val date = java.util.Date(ms.toLong())
-        val fmt = java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSSXXX", java.util.Locale.US)
-        fmt.timeZone = java.util.TimeZone.getTimeZone("UTC")
-        return fmt.format(date)
-    }
+    private fun isoFromMillis(ms: ULong): String =
+        if (ms == 0uL) "" else CotXml.isoMillis(ms.toLong())
 
     // endregion
 }

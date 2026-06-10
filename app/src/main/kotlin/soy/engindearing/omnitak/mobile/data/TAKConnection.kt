@@ -16,19 +16,12 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
+import soy.engindearing.omnitak.mobile.data.net.TakTls
 import soy.engindearing.omnitak.mobile.domain.ConnectionState
 import java.io.BufferedReader
-import java.io.ByteArrayInputStream
 import java.net.InetSocketAddress
 import java.net.Socket
-import java.security.KeyStore
-import java.security.SecureRandom
-import javax.net.ssl.KeyManager
-import javax.net.ssl.KeyManagerFactory
-import javax.net.ssl.SSLContext
 import javax.net.ssl.SSLSocket
-import javax.net.ssl.TrustManager
-import javax.net.ssl.X509TrustManager
 import kotlin.coroutines.coroutineContext
 
 /**
@@ -127,91 +120,40 @@ class TAKConnection(
      * TLS otherwise. TAK servers default to mTLS — without a client cert the
      * server closes the connection at handshake (PEER_DID_NOT_RETURN_A_CERTIFICATE).
      *
-     * Server-side trust resolves in this order (#38 / GAP-106):
+     * Server-side trust is resolved by [TakTls] — the same policy the Marti
+     * REST plane uses (#38 / GAP-106):
      *   1. CA pin written during Quick Connect enrollment (preferred).
-     *   2. System trust store — for legacy `.p12` imports without a pin.
-     * No trust-all path remains.
+     *   2. System trust store + hostname verification — legacy `.p12`
+     *      imports without a pin and publicly-trusted server certs.
+     *   3. Trust-all ONLY when the operator explicitly set
+     *      [TAKServer.allowUntrustedTls].
      */
     private fun openTlsSocket(): Socket {
-        val keyManagers = loadClientKeyManagers()
+        val keyManagers = TakTls.clientKeyManagers(
+            server.certificateName, server.certificatePassword, certVault,
+        )
         if (keyManagers == null) {
             Log.w(TAG, "⚠ TLS without client cert — server may reject. Import a .p12 if mTLS is required.")
         } else {
             Log.i(TAG, "TLS with client cert ${server.certificateName} (mTLS)")
         }
-        val trustManager = loadServerTrustManager()
-        val ctx = SSLContext.getInstance("TLS")
-        ctx.init(keyManagers, arrayOf<TrustManager>(trustManager), SecureRandom())
+        val trust = TakTls.serverTrust(server, certVault)
+        val ctx = TakTls.sslContext(keyManagers, trust.trustManager)
         val s = ctx.socketFactory.createSocket() as SSLSocket
         s.tcpNoDelay = true
         s.soTimeout = READ_TIMEOUT_MS
+        if (trust.verifiesHostname) {
+            // System-trust path: verify the cert's SAN/CN against the host
+            // we dialed, matching the REST plane's default verifier. The
+            // pinned path skips this — the per-server pin IS the identity
+            // (TAK servers are routinely dialed by IP / internal names).
+            val params = s.sslParameters
+            params.endpointIdentificationAlgorithm = "HTTPS"
+            s.sslParameters = params
+        }
         s.connect(InetSocketAddress(server.host, server.port), CONNECT_TIMEOUT_MS.toInt())
         s.startHandshake()
         return s
-    }
-
-    /**
-     * Build the server-trust X509TrustManager for this connection.
-     *
-     * Prefers the enrollment-time CA pin (TAKServer.caCertificateName →
-     * CertVault → CaTrust.trustManagerFor). Falls back to the system
-     * trust store when no pin exists or the pin file fails to load —
-     * legacy `.p12` imports from before Quick Connect existed end up on
-     * this branch.
-     *
-     * Never returns a trust-all manager. If a server presents a cert
-     * the pinned CA didn't sign (or the system bundle doesn't trust),
-     * the handshake fails — that's the point.
-     */
-    private fun loadServerTrustManager(): X509TrustManager {
-        val caName = server.caCertificateName
-        val vault = certVault
-        if (caName != null && vault != null) {
-            val bytes = vault.read(caName)
-            if (bytes != null) {
-                val chain = runCatching { CaTrust.decodePemChain(bytes) }.getOrElse {
-                    Log.w(TAG, "CA pin '$caName' parse failed: ${it.javaClass.simpleName}: ${it.message}")
-                    emptyList()
-                }
-                if (chain.isNotEmpty()) {
-                    Log.i(TAG, "TLS trust: pinned CA(s) from '$caName' (${chain.size} cert)")
-                    return CaTrust.trustManagerFor(chain)
-                }
-                Log.w(TAG, "CA pin '$caName' present but yielded no certs — falling back to system trust")
-            } else {
-                Log.w(TAG, "CA pin '$caName' missing from vault — falling back to system trust")
-            }
-        }
-        Log.i(TAG, "TLS trust: system trust store (no CA pin for this server)")
-        return CaTrust.systemTrustManager()
-    }
-
-    /**
-     * Build a KeyManager array from the operator-imported `.p12`. Returns
-     * null when the server has no cert configured or the import failed —
-     * both cases fall through to anonymous TLS (which most TAK servers
-     * will reject, but we leave the option for non-mTLS deployments).
-     */
-    private fun loadClientKeyManagers(): Array<KeyManager>? {
-        val name = server.certificateName ?: return null
-        val pass = server.certificatePassword ?: return null
-        val vault = certVault ?: run {
-            Log.w(TAG, "Cert configured but no vault available — skipping client auth.")
-            return null
-        }
-        val bytes = vault.read(name) ?: run {
-            Log.w(TAG, "Cert '$name' missing from vault — skipping client auth.")
-            return null
-        }
-        return runCatching {
-            val ks = KeyStore.getInstance("PKCS12")
-            ByteArrayInputStream(bytes).use { ks.load(it, pass.toCharArray()) }
-            val kmf = KeyManagerFactory.getInstance(KeyManagerFactory.getDefaultAlgorithm())
-            kmf.init(ks, pass.toCharArray())
-            kmf.keyManagers
-        }.onFailure {
-            Log.w(TAG, "Cert load failed: ${it.javaClass.simpleName}: ${it.message}")
-        }.getOrNull()
     }
 
     private suspend fun readLoop(sock: Socket) {

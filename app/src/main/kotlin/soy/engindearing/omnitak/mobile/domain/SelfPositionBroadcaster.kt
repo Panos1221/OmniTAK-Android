@@ -9,13 +9,12 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import soy.engindearing.omnitak.mobile.data.CoTEvent
+import soy.engindearing.omnitak.mobile.data.CotXml
 import soy.engindearing.omnitak.mobile.data.SelfFix
 import soy.engindearing.omnitak.mobile.data.UserPrefs
 import soy.engindearing.omnitak.mobile.data.UserPrefsStore
-import java.text.SimpleDateFormat
-import java.util.Date
 import java.util.Locale
-import java.util.TimeZone
 import java.util.UUID
 
 /**
@@ -45,7 +44,28 @@ class SelfPositionBroadcaster internal constructor(
     private val batteryProvider: () -> Int? = { null },
     private val intervalMs: Long = DEFAULT_INTERVAL_MS,
     private val staleSeconds: Long = DEFAULT_STALE_SECONDS,
+    // Off-grid mesh PPLI support — when non-null, self-position is also
+    // sent over the Meshtastic radio at a throttled rate so two operators
+    // with radios and NO server can still see each other.
+    private val sendToMesh: (suspend (CoTEvent) -> Boolean)? = null,
+    private val meshConnected: () -> Boolean = { false },
+    private val meshBroadcastEnabled: () -> Boolean = { true },
+    // Lambda (like meshBroadcastEnabled) so the operator's
+    // meshBroadcastIntervalSecs pref applies live to a running
+    // broadcaster — a Long parameter froze whatever value was cached at
+    // construction time (usually the 30 s default, before DataStore emitted).
+    private val meshThrottleMs: () -> Long = { 30_000L },
+    // Single source of wire identity (#9): production routes through
+    // UserPrefsStore.ensureSelfUid via the secondary constructor so
+    // exactly one code path mints the ANDROID-<uuid>. The default here
+    // only exists for lambda-constructed unit tests.
+    private val mintSelfUid: suspend () -> String = {
+        val generated = "ANDROID-${UUID.randomUUID()}"
+        updatePrefs { it.copy(selfUid = generated) }
+        generated
+    },
 ) {
+    @Volatile private var lastMeshSendMs: Long = 0L
     constructor(
         scope: CoroutineScope,
         prefsStore: UserPrefsStore,
@@ -54,6 +74,10 @@ class SelfPositionBroadcaster internal constructor(
         batteryProvider: () -> Int? = { null },
         intervalMs: Long = DEFAULT_INTERVAL_MS,
         staleSeconds: Long = DEFAULT_STALE_SECONDS,
+        sendToMesh: (suspend (CoTEvent) -> Boolean)? = null,
+        meshConnected: () -> Boolean = { false },
+        meshBroadcastEnabled: () -> Boolean = { true },
+        meshThrottleMs: () -> Long = { 30_000L },
     ) : this(
         scope = scope,
         prefsFlow = prefsStore.prefs,
@@ -63,6 +87,11 @@ class SelfPositionBroadcaster internal constructor(
         batteryProvider = batteryProvider,
         intervalMs = intervalMs,
         staleSeconds = staleSeconds,
+        sendToMesh = sendToMesh,
+        meshConnected = meshConnected,
+        meshBroadcastEnabled = meshBroadcastEnabled,
+        meshThrottleMs = meshThrottleMs,
+        mintSelfUid = { prefsStore.ensureSelfUid() },
     )
 
     private var job: Job? = null
@@ -92,9 +121,7 @@ class SelfPositionBroadcaster internal constructor(
     private suspend fun ensureSelfUid(): UserPrefs {
         val current = currentPrefs()
         if (current.selfUid.isNotBlank()) return current
-        val generated = "ANDROID-${UUID.randomUUID()}"
-        updatePrefs { it.copy(selfUid = generated) }
-        return current.copy(selfUid = generated)
+        return current.copy(selfUid = mintSelfUid())
     }
 
     private suspend fun currentPrefs(): UserPrefs = prefsFlow.first()
@@ -142,6 +169,32 @@ class SelfPositionBroadcaster internal constructor(
         } else {
             Log.w(TAG, "PPLI send failed (no socket?)")
         }
+
+        // Off-grid mesh PPLI — throttled to meshThrottleMs so we don’t
+        // flood LoRa bandwidth. wantAck=false is mandatory (LoRa risk).
+        val meshFn = sendToMesh
+        if (meshFn != null && meshConnected() && meshBroadcastEnabled()) {
+            val now = System.currentTimeMillis()
+            if (now - lastMeshSendMs >= meshThrottleMs()) {
+                val meshEvent = CoTEvent(
+                    uid = prefs.selfUid.ifBlank { "ANDROID-fallback" },
+                    type = "a-f-G-U-C",
+                    lat = lat,
+                    lon = lon,
+                    hae = hae,
+                    ce = ce,
+                    callsign = prefs.callsign,
+                    teamName = prefs.team,
+                )
+                val meshOk = meshFn(meshEvent)
+                if (meshOk) {
+                    lastMeshSendMs = now
+                    Log.d(TAG, "Mesh PPLI sent — ${prefs.callsign} @ $lat,$lon")
+                } else {
+                    Log.w(TAG, "Mesh PPLI send failed")
+                }
+            }
+        }
     }
 
     companion object {
@@ -170,26 +223,11 @@ class SelfPositionBroadcaster internal constructor(
             batteryPercent: Int? = null,
         ): String {
             val now = System.currentTimeMillis()
-            val time = isoUtc(now)
-            val stale = isoUtc(now + staleSeconds * 1000L)
-            val safeCallsign = escapeXml(callsign)
-            val safeTeam = escapeXml(team.replaceFirstChar { it.uppercase() })
+            val safeCallsign = CotXml.escape(callsign)
+            val safeTeam = CotXml.escape(team.replaceFirstChar { it.uppercase() })
             // CoT track speed is m/s.
             val speedMs = speedKmh / 3.6
-            return buildString {
-                append("<?xml version=\"1.0\" encoding=\"UTF-8\"?>")
-                append("<event version=\"2.0\"")
-                append(" uid=\"").append(escapeXml(uid)).append('"')
-                append(" type=\"a-f-G-U-C\"")
-                append(" time=\"").append(time).append('"')
-                append(" start=\"").append(time).append('"')
-                append(" stale=\"").append(stale).append('"')
-                append(" how=\"m-g\">")
-                append("<point lat=\"").append(lat).append('"')
-                append(" lon=\"").append(lon).append('"')
-                append(" hae=\"").append(formatDouble(hae)).append('"')
-                append(" ce=\"").append(formatDouble(ce)).append('"')
-                append(" le=\"9999999.0\"/>")
+            val detail = buildString {
                 append("<detail>")
                 append("<contact callsign=\"").append(safeCallsign).append("\" endpoint=\"*:-1:stcp\"/>")
                 append("<__group name=\"").append(safeTeam).append("\" role=\"Team Member\"/>")
@@ -203,26 +241,16 @@ class SelfPositionBroadcaster internal constructor(
                 append("<uid Droid=\"").append(safeCallsign).append("\"/>")
                 append("<usericon iconsetpath=\"COT_MAPPING_2525B/a-f/a-f-G-U-C\"/>")
                 append("</detail>")
-                append("</event>")
             }
+            return CotXml.buildEvent(
+                uid = uid,
+                type = "a-f-G-U-C",
+                how = "m-g",
+                lat = lat, lon = lon, hae = hae, ce = ce,
+                timeIso = CotXml.isoMillis(now),
+                staleIso = CotXml.isoMillis(now + staleSeconds * 1000L),
+                detailXml = detail,
+            )
         }
-
-        private fun formatDouble(v: Double): String =
-            if (v == v.toLong().toDouble()) "${v.toLong()}.0" else v.toString()
-
-        private val ISO_FMT = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", Locale.US).apply {
-            timeZone = TimeZone.getTimeZone("UTC")
-        }
-
-        private fun isoUtc(epochMs: Long): String = synchronized(ISO_FMT) {
-            ISO_FMT.format(Date(epochMs))
-        }
-
-        private fun escapeXml(s: String): String = s
-            .replace("&", "&amp;")
-            .replace("<", "&lt;")
-            .replace(">", "&gt;")
-            .replace("\"", "&quot;")
-            .replace("'", "&apos;")
     }
 }

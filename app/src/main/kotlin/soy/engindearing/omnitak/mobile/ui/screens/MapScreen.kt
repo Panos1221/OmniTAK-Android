@@ -16,7 +16,6 @@ import androidx.compose.material.icons.filled.LocalFireDepartment
 import androidx.compose.material.icons.filled.RadioButtonUnchecked
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Explore
-import androidx.compose.material.icons.filled.Flight
 import androidx.compose.material.icons.filled.Groups
 import androidx.compose.material.icons.filled.Layers
 import androidx.compose.material.icons.filled.LocationOn
@@ -64,6 +63,7 @@ import soy.engindearing.omnitak.mobile.data.Drawing
 import soy.engindearing.omnitak.mobile.data.DrawingKind
 import soy.engindearing.omnitak.mobile.data.GeoMath
 import soy.engindearing.omnitak.mobile.domain.ConnectionState
+import soy.engindearing.omnitak.mobile.i18n.Loc
 import soy.engindearing.omnitak.mobile.ui.components.ATAKStatusBar
 import soy.engindearing.omnitak.mobile.ui.components.ContactsPanel
 import soy.engindearing.omnitak.mobile.ui.components.LayersDialog
@@ -183,19 +183,28 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
     var teamsPanelOpen by remember { mutableStateOf(false) }
     var panTarget by remember { mutableStateOf<LatLng?>(null) }
     var panTargetTick by remember { mutableStateOf(0) }
-    val adsbService = remember { soy.engindearing.omnitak.mobile.data.AdsbService() }
-    val rawAircraft by adsbService.aircraft.collectAsState()
-    val adsbActive by adsbService.active.collectAsState()
-    DisposableEffect(adsbService) { onDispose { adsbService.stop() } }
+    // "Go to Coordinate" sheet (TWD97 / MGRS / Lat-Lon). Opened from the
+    // Tools popup via CoordinateEntryEvents; reference coord = map centre
+    // so 5+5 TWD97 grid input recovers the right 100 km cell.
+    var coordEntryOpen by remember { mutableStateOf(false) }
+    val coordEntryGen by soy.engindearing.omnitak.mobile.ui.components.CoordinateEntryEvents.openGeneration.collectAsState()
+    LaunchedEffect(coordEntryGen) {
+        if (coordEntryGen > 0L) coordEntryOpen = true
+    }
+    // ADS-B is now a plugin (:plugins:example-adsb). The plugin owns its
+    // AdsbService, its map overlay (which paints via AircraftLayer on the live
+    // MapLibre handle) and its on/off settings toggle. MapScreen no longer
+    // plumbs aircraft into TacticalMap — it only renders the plugin's
+    // registered overlays (below) and feeds the camera seam the plugin needs
+    // (camera-center provider for box seeding + camera-follow recenter).
+    val adsbPlugin = app.adsbPlugin
+    val adsbActive by adsbPlugin.service.active.collectAsState()
 
     // Drone telemetry from UASManager — the connected UAS gets its own
     // DroneLayer (programmatic source/layer added at runtime), which
     // pops visually above ADS-B traffic and self so the drone isn't
-    // lost in the generic aircraft circle. We still expose the drone
-    // through the regular aircraft list for the historical hooks
-    // (lasso, etc.) but the dedicated layer is what the operator sees.
+    // lost in the generic aircraft circle.
     val droneState by uas.state.collectAsState()
-    val aircraft = rawAircraft
     // Pass the drone separately to TacticalMap → DroneLayer renders it
     // as a distinct cyan ring + callsign label, above the aircraft circle.
     val droneForMap = if (droneState.hasFix()) droneState else null
@@ -208,6 +217,9 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
     val rasterImagery by app.rasterOverlayStore.overlays.collectAsState()
     val snackbar = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
+    // Radial "Copy Coords" — Compose clipboard handle, resolved here
+    // because LocalClipboardManager is composition-local.
+    val clipboard = androidx.compose.ui.platform.LocalClipboardManager.current
 
     // Issue #16 — Lasso freehand multi-select.
     // The MapLibreMap reference is captured via TacticalMap.onMapReady
@@ -240,6 +252,33 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
 
     fun toast(msg: String) {
         scope.launch { snackbar.showSnackbar(msg, withDismissAction = true) }
+    }
+
+    // The Cesium globe renders only contacts + self — measurement,
+    // drawings and lasso projection live on the MapLibre engine.
+    // Activating one of those tools while the globe is up auto-drops to 2D
+    // (the KML zoom handlers' proven pattern, and the iOS precedent) instead
+    // of letting the tool silently no-op — the documented VC77 "dead buttons
+    // on the globe" bug class.
+    //
+    // ADS-B is NOT in this guard: as a plugin its map overlay self-limits to
+    // MapLibre (the handle is null on the globe → it no-ops), exactly as the
+    // pre-plugin code never painted aircraft on the globe. So enabling ADS-B
+    // does not force a drop to 2D — identical to today's behavior.
+    LaunchedEffect(measurementActive, drawingKind, lassoMode) {
+        if (!userPrefs.cesiumGlobeEnabled) return@LaunchedEffect
+        if (measurementActive || drawingKind != null || lassoMode) {
+            app.userPrefsStore.update { it.copy(cesiumGlobeEnabled = false) }
+            toast(Loc.t("map.toast.globeTo2d"))
+        }
+    }
+    // When the globe takes over, TacticalMap leaves composition and its
+    // MapView is destroyed — drop the stale handle so auto-follow,
+    // center-on-drone and lasso projection no-op cleanly instead of
+    // driving a destroyed map. TacticalMap.onMapReady repopulates it
+    // when the 2D engine comes back.
+    LaunchedEffect(userPrefs.cesiumGlobeEnabled) {
+        if (userPrefs.cesiumGlobeEnabled) mapboxMap = null
     }
 
     // Re-apply KML overlays to the live style whenever the set changes.
@@ -295,6 +334,68 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
         soy.engindearing.omnitak.mobile.ui.components.KmlOverlayEvents.consumed()
     }
 
+    // Shared engine inputs — Cesium and MapLibre consume the SAME filtered
+    // contact list and gesture handlers, hoisted once so a fix lands on
+    // both engines together. Per-engine copies are the documented OmniTAK
+    // bug class "wired into one engine but missing from the other" (VC 77's
+    // dead 3D zoom buttons came from exactly this split).
+    val visibleContacts: List<soy.engindearing.omnitak.mobile.data.CoTEvent> =
+        if (contactsVisible) {
+            if (meshNodesVisible) contacts.values.toList()
+            // Hide mesh-origin contacts — they all share the `MESHTASTIC-`
+            // UID prefix produced by `MeshtasticCoTConverter.takUid`.
+            else contacts.values.filterNot { it.uid.startsWith("MESHTASTIC-") }
+        } else {
+            emptyList()
+        }
+    val handleMapLongPress: (LatLng, Offset) -> Unit = { latLng, offset ->
+        if (!measurementActive) {
+            radialLatLng = latLng
+            radialAnchor = offset
+        }
+    }
+    val handleContactTap: (soy.engindearing.omnitak.mobile.data.CoTEvent) -> Unit = { event ->
+        if (!measurementActive) {
+            editingMarker = event
+            markerSheetLatLng = LatLng(event.lat, event.lon)
+        }
+    }
+    // Compose-observable camera target — MapCameraStore's plain fields
+    // don't trigger recomposition, so viewport-dependent layers (grid,
+    // ADSB box) hang off this state instead. Seeded from the persisted
+    // camera so cold start has a center before the first idle event.
+    var cameraTarget by remember {
+        mutableStateOf(
+            run {
+                val lat = app.mapCameraStore.lastTargetLat
+                val lon = app.mapCameraStore.lastTargetLon
+                if (lat != null && lon != null) LatLng(lat, lon) else null
+            }
+        )
+    }
+    val handleCameraChanged: (LatLng, Double) -> Unit = { target, zoom ->
+        cameraTarget = target
+        app.mapCameraStore.update(target.latitude, target.longitude, zoom)
+    }
+    // Keep the ADSB query box following the viewport — significant pans
+    // move the box, the next 15s poll picks it up. Routed through the plugin;
+    // no-op while the plugin's service is inactive. (The plugin owns the
+    // recenter logic; MapScreen only feeds it the live camera target.)
+    LaunchedEffect(cameraTarget, adsbActive) {
+        val t = cameraTarget ?: return@LaunchedEffect
+        if (adsbActive) adsbPlugin.onCameraChanged(t.latitude, t.longitude)
+    }
+    // Wire the plugin's camera-center provider so its settings toggle seeds the
+    // OpenSky box on what the operator is looking at (camera target, else own
+    // position) — the exact behavior the old Tools-drawer button had. Re-set
+    // whenever the inputs change so the provider always reads the latest view.
+    LaunchedEffect(cameraTarget, selfFix) {
+        adsbPlugin.cameraCenterProvider = {
+            val c = cameraTarget ?: selfFix?.let { LatLng(it.lat, it.lon) }
+            c?.let { soy.engindearing.omnitak.plugin.PluginLatLng(it.latitude, it.longitude) }
+        }
+    }
+
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -306,36 +407,33 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
         // menu the 2D/terrain engines use, tapping a contact opens its sheet.
         soy.engindearing.omnitak.mobile.ui.components.CesiumMapView(
             modifier = Modifier.fillMaxSize(),
-            contacts = if (contactsVisible) {
-                if (meshNodesVisible) contacts.values.toList()
-                else contacts.values.filterNot { it.uid.startsWith("MESHTASTIC-") }
-            } else {
-                emptyList()
-            },
+            contacts = visibleContacts,
             selfLat = selfFix?.lat,
             selfLon = selfFix?.lon,
             selfCallsign = userPrefs.callsign,
-            onLongPress = { latLng, offset ->
-                if (!measurementActive) {
-                    radialLatLng = latLng
-                    radialAnchor = offset
-                }
-            },
-            onContactTap = { event ->
-                if (!measurementActive) {
-                    editingMarker = event
-                    markerSheetLatLng = LatLng(event.lat, event.lon)
-                }
-            },
-            onCameraChanged = { target, zoom ->
-                app.mapCameraStore.update(target.latitude, target.longitude, zoom)
-            },
+            onLongPress = handleMapLongPress,
+            onContactTap = handleContactTap,
+            onCameraChanged = handleCameraChanged,
             // Same control ticks the 2D map uses — make +/- and "center on
             // me" drive the globe (VC 77: buttons did nothing on 3D).
             zoomInTrigger = zoomInTick,
             zoomOutTrigger = zoomOutTick,
             recenterTrigger = recenterTick,
+            // Pan requests (Go-to-Coordinate, ContactsPanel, radial
+            // Center) fly the globe instead of being silently eaten.
+            panTarget = panTarget,
+            panTargetTick = panTargetTick,
         )
+        // Plugin map overlays on the GLOBE engine. The handle is null here
+        // (no MapLibreMap on Cesium), so an overlay that can only draw on
+        // MapLibre — like ADS-B — no-ops, matching today's behavior. The loop
+        // STILL runs on both engines so a future Cesium-capable plugin isn't
+        // silently dropped on the globe (the documented VC77 bug class).
+        androidx.compose.runtime.CompositionLocalProvider(
+            soy.engindearing.omnitak.plugin.LocalMapEngineHandle provides null,
+        ) {
+            app.pluginHost.mapOverlays.forEach { it.content() }
+        }
         } else {
         TacticalMap(
             modifier = Modifier.fillMaxSize(),
@@ -355,24 +453,14 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
             },
             initialZoom = app.mapCameraStore.lastZoom
                 ?: if (selfFix != null) 12.0 else FALLBACK_GLOBAL_ZOOM,
-            onCameraIdle = { target, zoom ->
-                app.mapCameraStore.update(target.latitude, target.longitude, zoom)
-            },
+            onCameraIdle = handleCameraChanged,
             onMapReady = { map -> mapboxMap = map },
             // GAP-101 / GAP-107 — react to the basemap selection from Settings.
             // WMTS_CUSTOM uses the operator-pasted XYZ tile URL.
             styleJson = styleJsonForProvider(userPrefs.mapProvider, userPrefs.customTileUrl, terrain3d = map3dEnabled),
             terrain3d = map3dEnabled,
-            onMapLongPress = { latLng, offset ->
-                if (measurementActive) return@TacticalMap
-                radialLatLng = latLng
-                radialAnchor = offset
-            },
-            onContactTap = { event ->
-                if (measurementActive) return@TacticalMap
-                editingMarker = event
-                markerSheetLatLng = LatLng(event.lat, event.lon)
-            },
+            onMapLongPress = handleMapLongPress,
+            onContactTap = handleContactTap,
             onMapSingleTap = onMapSingleTap@ { latLng ->
                 // Hit-test existing mission waypoints first so a tap on
                 // a pin opens its edit sheet instead of adding a new
@@ -412,23 +500,27 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
             recenterTrigger = recenterTick,
             zoomInTrigger = zoomInTick,
             zoomOutTrigger = zoomOutTick,
-            contacts = if (contactsVisible) {
-                if (meshNodesVisible) contacts.values
-                // Hide mesh-origin contacts — they all share the
-                // `MESHTASTIC-` UID prefix produced by
-                // `MeshtasticCoTConverter.takUid`.
-                else contacts.values.filterNot { it.uid.startsWith("MESHTASTIC-") }
-            } else {
-                emptyList()
-            },
+            contacts = visibleContacts,
             measurementPoints = measurementPoints,
             drawings = if (drawingsVisible) {
                 drawings + buildInProgressDrawing(drawingKind, drawingPoints)
             } else {
                 emptyList()
             },
-            gridCenter = if (gridEnabled) LatLng(37.42, -122.08) else null,
-            aircraft = if (aircraftVisible) aircraft else emptyList(),
+            // Graticule follows the viewport (was hardcoded to Mountain
+            // View — invisible for any user outside ±2° of the
+            // Googleplex). Quantized to 0.5° so micro-pans don't re-push
+            // the GeoJSON; the ±2° box still covers the view with ≤0.25°
+            // of drift before the next camera-idle refresh.
+            gridCenter = if (gridEnabled) {
+                val c = cameraTarget
+                    ?: selfFix?.let { LatLng(it.lat, it.lon) }
+                    ?: FALLBACK_GLOBAL_VIEW
+                LatLng(
+                    kotlin.math.round(c.latitude * 2.0) / 2.0,
+                    kotlin.math.round(c.longitude * 2.0) / 2.0,
+                )
+            } else null,
             panTarget = panTarget,
             panTargetTick = panTargetTick,
             followMeActive = followMeActive,
@@ -443,6 +535,16 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
                     .applyRaster(style, rasterImagery, app.rasterOverlayStore)
             },
         )
+        // Plugin map overlays on the MAPLIBRE engine. The handle is the live
+        // MapLibreMap (captured via onMapReady above; null briefly until the
+        // map is ready). The ADS-B plugin's overlay casts it to MapLibreMap
+        // and feeds AircraftLayer — the exact GL render path the pre-plugin
+        // code used, byte-for-byte.
+        androidx.compose.runtime.CompositionLocalProvider(
+            soy.engindearing.omnitak.plugin.LocalMapEngineHandle provides mapboxMap,
+        ) {
+            app.pluginHost.mapOverlays.forEach { it.content() }
+        }
         }
 
         // Issue #16 — lasso freehand multi-select overlay. Renders
@@ -929,13 +1031,15 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
                 },
                 onBulkDelete = {
                     val n = lassoSelection.totalCount
-                    val mySelfUid = userPrefs.callsign.takeIf { it.isNotBlank() }
-                    val selfFixUid = selfFix?.let { "OMNI-${userPrefs.callsign}" }
+                    // Wire identity is the persisted EUD UID (#9) — the
+                    // callsign is a display label and never matches real
+                    // ContactStore uids, so guarding on it was a no-op.
+                    val mySelfUid = userPrefs.selfUid.takeIf { it.isNotBlank() }
                     val targetEvents = selectedEvents
                     // Self-marker guard: never accidentally delete our
                     // own CoT — that would propagate "delete me" to
                     // every peer.
-                    val protected = setOfNotNull(mySelfUid, selfFixUid)
+                    val protected = setOfNotNull(mySelfUid)
                     val toRemove = targetEvents.filterNot { it.uid in protected }
 
                     // 1) Local removal — ContactStore is the source of
@@ -954,7 +1058,9 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
                     //    if the connection is down the local removal
                     //    still stands.
                     scope.launch {
-                        val senderUid = mySelfUid ?: "OMNI-${java.util.UUID.randomUUID()}"
+                        // Tombstones go out under the same persisted EUD
+                        // UID as PPLI/chat/markers — not the callsign.
+                        val senderUid = app.userPrefsStore.ensureSelfUid()
                         toRemove.forEach { e ->
                             val xml = soy.engindearing.omnitak.mobile.domain.CotBuilders
                                 .buildDeleteEvent(targetUid = e.uid, senderUid = senderUid)
@@ -1071,7 +1177,9 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
                 ToolEntry("draw", Icons.Filled.Brush, "Drawing"),
                 ToolEntry("measure", Icons.Filled.Straighten, "Measure"),
                 ToolEntry("layers", Icons.Filled.Layers, "Layers"),
-                ToolEntry("adsb", Icons.Filled.Flight, if (adsbActive) "ADSB on" else "ADSB"),
+                // ADS-B moved to the ADS-B plugin — its on/off control now
+                // lives in Settings → Plugins → ADS-B (the plugin's
+                // settingsContent), not the Tools drawer.
                 ToolEntry("chat", Icons.Filled.Chat, "Chat"),
                 ToolEntry("missionsync", Icons.Filled.Sync, "Mission Sync"),
                 ToolEntry("fema", Icons.Filled.LocalFireDepartment, "FEMA / IC"),
@@ -1091,23 +1199,6 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
                     }
                     "draw" -> drawingPickerOpen = true
                     "layers" -> layersSheetOpen = true
-                    "adsb" -> {
-                        if (adsbActive) {
-                            adsbService.stop()
-                            toast("ADSB off")
-                        } else {
-                            // Bay Area box until we plumb the live camera
-                            // center through — matches the emulator's
-                            // default Mountain View GPS so aircraft stay
-                            // on-screen during dev.
-                            adsbService.start(
-                                centerLat = 37.42,
-                                centerLon = -122.08,
-                                halfWidthDegrees = 2.5,
-                            )
-                            toast("ADSB on — polling OpenSky every 15s")
-                        }
-                    }
                     "chat" -> onOpenTab("chat")
                     "missionsync" -> onOpenTab("missionsync")
                     "fema" -> {
@@ -1169,12 +1260,18 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
                     contentDescription = "Center on drone",
                     tint = androidx.compose.ui.graphics.Color(0xFF00E5FF),
                     onClick = {
-                        mapboxMap?.let { m ->
+                        val m = mapboxMap
+                        if (m != null) {
                             val pos = m.cameraPosition
                             m.cameraPosition = org.maplibre.android.camera.CameraPosition.Builder()
                                 .target(LatLng(droneState.latDeg!!, droneState.lonDeg!!))
                                 .zoom(pos.zoom.coerceAtLeast(15.0))
                                 .build()
+                        } else {
+                            // Globe engine active (no MapLibre handle) —
+                            // route through the engine-agnostic pan target.
+                            panTarget = LatLng(droneState.latDeg!!, droneState.lonDeg!!)
+                            panTargetTick += 1
                         }
                     },
                 )
@@ -1191,7 +1288,10 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
             actions = buildList {
                 add(RadialAction("drop", Icons.Filled.Place, "Drop Marker"))
                 add(RadialAction("measure", Icons.Filled.Straighten, "Measure"))
-                add(RadialAction("nav", Icons.Filled.Navigation, "Navigate"))
+                // "Navigate" removed — Android has no route-planning /
+                // turn-by-turn engine yet (iOS executeNavigate rides
+                // routePlanningService). Re-add when that engine lands;
+                // an action that does nothing is worse than no action.
                 add(RadialAction("layers", Icons.Filled.Layers, "Layers"))
                 add(RadialAction("copy", Icons.Filled.LocationOn, "Copy Coords"))
                 if (uasConnected) {
@@ -1210,6 +1310,11 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
                 }
                 add(RadialAction("center", Icons.Filled.Explore, "Center"))
                 add(RadialAction("add", Icons.Filled.Add, "Add"))
+                // Plugin-contributed radial actions (none from the bundled
+                // ADS-B plugin; exercised by the probe plugin + unit tests).
+                app.pluginHost.radialActions.forEach { r ->
+                    add(RadialAction(r.action.id, r.action.icon, r.action.label))
+                }
             },
             onSelect = { action ->
                 val ll = radialLatLng
@@ -1217,7 +1322,36 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
                 radialLatLng = null
                 when (action.id) {
                     "drop" -> if (ll != null) markerSheetLatLng = ll
+                    // "Add" = quick-add at the long-press point — same
+                    // marker-creation sheet as Drop (GAP-052 parity with
+                    // iOS RadialMenuActionExecutor).
+                    "add" -> if (ll != null) markerSheetLatLng = ll
                     "layers" -> layersSheetOpen = true
+                    "measure" -> {
+                        // Enter measure mode seeded with the long-press
+                        // point — matches iOS executeMeasure.
+                        measurementActive = true
+                        measurementPoints = ll?.let { listOf(it) } ?: emptyList()
+                        toast(Loc.t("map.toast.measure"))
+                    }
+                    "copy" -> if (ll != null) {
+                        val coord = soy.engindearing.omnitak.mobile.data.CoordFormatter
+                            .position(ll.latitude, ll.longitude, userPrefs.coordFormat)
+                        clipboard.setText(androidx.compose.ui.text.AnnotatedString(coord))
+                        toast(Loc.t("map.toast.copied", coord))
+                    }
+                    "center" -> if (ll != null) {
+                        panTarget = ll
+                        panTargetTick += 1
+                        if (followMeActive) mutatePref { it.copy(followMeActive = false) }
+                        toast(
+                            Loc.t(
+                                "map.toast.panning",
+                                soy.engindearing.omnitak.mobile.data.CoordFormatter
+                                    .position(ll.latitude, ll.longitude, userPrefs.coordFormat),
+                            )
+                        )
+                    }
                     "uas_fly_here" -> if (ll != null) {
                         // MAV_CMD_DO_REPOSITION at the operator's cruise
                         // altitude, after a TAK Terrain safety check.
@@ -1228,11 +1362,15 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
                             val result = uas.flyTo(ll.latitude, ll.longitude)
                             val msg = when (result) {
                                 is soy.engindearing.omnitak.mobile.domain.UASManager.FlyHereResult.Sent ->
-                                    if (result.clearance != null)
-                                        "UAS → ${"%.4f, %.4f".format(ll.latitude, ll.longitude)} " +
-                                            "(${result.targetMsl.toInt()}m MSL, ${result.clearance.toInt()}m AGL)"
-                                    else
-                                        "UAS → ${"%.4f, %.4f".format(ll.latitude, ll.longitude)} (${result.targetMsl.toInt()}m MSL)"
+                                    soy.engindearing.omnitak.mobile.data.CoordFormatter
+                                        .position(ll.latitude, ll.longitude, userPrefs.coordFormat)
+                                        .let { coordText ->
+                                            if (result.clearance != null)
+                                                "UAS → $coordText " +
+                                                    "(${result.targetMsl.toInt()}m MSL, ${result.clearance.toInt()}m AGL)"
+                                            else
+                                                "UAS → $coordText (${result.targetMsl.toInt()}m MSL)"
+                                        }
                                 is soy.engindearing.omnitak.mobile.domain.UASManager.FlyHereResult.WouldHitTerrain ->
                                     "BLOCKED: target ${result.targetMsl.toInt()}m would clip terrain at " +
                                         "${result.terrainMsl.toInt()}m (clearance ${result.clearance.toInt()}m). Raise cruise alt."
@@ -1257,7 +1395,11 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
                         // MAV_CMD_DO_ORBIT at cruise altitude, default 50 m radius.
                         // Fast-follow: radius slider on the orbit action.
                         scope.launch { uas.orbitPoint(ll.latitude, ll.longitude) }
-                        toast("Orbiting ${"%.4f, %.4f".format(ll.latitude, ll.longitude)} @ 50 m radius")
+                        toast(
+                            "Orbiting " + soy.engindearing.omnitak.mobile.data.CoordFormatter
+                                .position(ll.latitude, ll.longitude, userPrefs.coordFormat) +
+                                " @ 50 m radius"
+                        )
                     }
                     "uas_circle" -> if (ll != null) {
                         // Persistent circle as a real mission upload —
@@ -1275,16 +1417,21 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
                         }
                         toast("Survey mission uploading — 200 m box, 30 m spacing")
                     }
+                    // Plugin-contributed radial actions: dispatch to the
+                    // registered onSelect with the long-press coordinate.
+                    // Every built-in action is wired above, so an id that
+                    // isn't a plugin's is a programming error (no silent
+                    // coordinate-toast stub).
                     else -> {
-                        // Respect the operator's coordinate-format pref (Lat/Lon,
-                        // DMS, MGRS, UTM) so the "Add @ …" toast matches the
-                        // SelfPositionCard readout instead of always lat/lon.
-                        val coord = ll?.let {
-                            soy.engindearing.omnitak.mobile.data.CoordFormatter.position(
-                                it.latitude, it.longitude, userPrefs.coordFormat,
+                        val plugin = app.pluginHost.radialActions
+                            .firstOrNull { it.action.id == action.id }
+                        if (plugin != null && ll != null) {
+                            plugin.onSelect(
+                                soy.engindearing.omnitak.plugin.PluginLatLng(
+                                    ll.latitude, ll.longitude,
+                                )
                             )
-                        } ?: ""
-                        toast("${action.label}${if (coord.isNotEmpty()) " @ $coord" else ""}")
+                        }
                     }
                 }
             },
@@ -1306,19 +1453,33 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
                 val ll = markerSheetLatLng
                 if (ll != null) {
                     val uid = editingMarker?.uid ?: "local-${System.currentTimeMillis()}"
-                    app.contactStore.ingest(
-                        CoTEvent(
-                            uid = uid,
-                            type = "a-${result.affiliation.code}-G-U-C",
-                            lat = ll.latitude,
-                            lon = ll.longitude,
-                            hae = result.altitudeMeters ?: 0.0,
-                            callsign = result.callsign,
-                            remarks = result.remarks,
-                        )
+                    val event = CoTEvent(
+                        uid = uid,
+                        type = "a-${result.affiliation.code}-G-U-C",
+                        lat = ll.latitude,
+                        lon = ll.longitude,
+                        hae = result.altitudeMeters ?: 0.0,
+                        callsign = result.callsign,
+                        remarks = result.remarks,
                     )
-                    val verb = if (editingMarker != null) "Updated" else "Saved"
-                    toast("$verb ${result.affiliation.name.lowercase()} marker “${result.callsign}”")
+                    app.contactStore.ingest(event)
+                    val verb = if (editingMarker != null) Loc.t("marker.verb.updated")
+                    else Loc.t("marker.verb.saved")
+                    // Broadcast the marker to every connected server so
+                    // teammates actually see it — same path the FEMA
+                    // palette uses. The local ingest above stands on its
+                    // own for offline work; the toast tells the operator
+                    // which of the two actually happened.
+                    scope.launch {
+                        val xml = soy.engindearing.omnitak.mobile.domain.CotBuilders
+                            .rebuildEvent(event, destUids = emptyList())
+                        val sent = runCatching { app.serverManager.sendCoT(xml) }
+                            .getOrDefault(false)
+                        toast(
+                            if (sent) Loc.t("marker.toast.sent", verb, result.callsign)
+                            else Loc.t("marker.toast.local", verb, result.callsign)
+                        )
+                    }
                 }
                 markerSheetLatLng = null
                 editingMarker = null
@@ -1362,6 +1523,53 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
                 editingMarker = null
             },
         )
+
+        // "Go to Coordinate" — TWD97 (7+7 / 5+5) / MGRS / Lat-Lon entry.
+        if (coordEntryOpen) {
+            soy.engindearing.omnitak.mobile.ui.components.CoordinateEntrySheet(
+                // Reference for 5+5 TWD97: last camera centre, else self-fix.
+                refLat = app.mapCameraStore.lastTargetLat ?: selfFix?.lat,
+                refLon = app.mapCameraStore.lastTargetLon ?: selfFix?.lon,
+                onGo = { lat, lon, drop ->
+                    coordEntryOpen = false
+                    panTarget = LatLng(lat, lon)
+                    panTargetTick += 1
+                    if (followMeActive) mutatePref { it.copy(followMeActive = false) }
+                    // Honor the operator's coordinate-format pref (#3/#4),
+                    // matching the radial "Add @ …" toast above.
+                    val coordText = soy.engindearing.omnitak.mobile.data.CoordFormatter
+                        .position(lat, lon, userPrefs.coordFormat)
+                    if (drop) {
+                        val uid = "local-${System.currentTimeMillis()}"
+                        val event = CoTEvent(
+                            uid = uid,
+                            type = "a-f-G-U-C",
+                            lat = lat,
+                            lon = lon,
+                            hae = 0.0,
+                            callsign = "Marker ${contacts.size + 1}",
+                            remarks = "",
+                        )
+                        app.contactStore.ingest(event)
+                        // Same broadcast contract as MarkerEditSheet —
+                        // peers see the dropped marker, offline stays local.
+                        scope.launch {
+                            val xml = soy.engindearing.omnitak.mobile.domain.CotBuilders
+                                .rebuildEvent(event, destUids = emptyList())
+                            val sent = runCatching { app.serverManager.sendCoT(xml) }
+                                .getOrDefault(false)
+                            toast(
+                                if (sent) Loc.t("marker.toast.droppedSent", coordText)
+                                else Loc.t("marker.toast.droppedLocal", coordText)
+                            )
+                        }
+                    } else {
+                        toast(Loc.t("map.toast.panning", coordText))
+                    }
+                },
+                onDismiss = { coordEntryOpen = false },
+            )
+        }
 
         soy.engindearing.omnitak.mobile.ui.components.FemaMarkerPaletteSheet(
             visible = femaPaletteLatLng != null,

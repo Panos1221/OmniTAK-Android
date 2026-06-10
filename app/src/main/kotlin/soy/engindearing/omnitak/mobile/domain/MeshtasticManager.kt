@@ -25,12 +25,10 @@ import soy.engindearing.omnitak.mobile.data.AtakPluginParser
 import soy.engindearing.omnitak.mobile.data.ChatMessage
 import soy.engindearing.omnitak.mobile.data.ChatStatus
 import soy.engindearing.omnitak.mobile.data.MeshDeviceConfig
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
-import java.util.TimeZone
 import soy.engindearing.omnitak.mobile.data.AtakPluginSerializer
 import soy.engindearing.omnitak.mobile.data.CoTEvent
+import soy.engindearing.omnitak.mobile.data.TakPacketParser
+import soy.engindearing.omnitak.mobile.data.TakPacketSerializer
 import soy.engindearing.omnitak.mobile.data.FromRadioFrame
 import soy.engindearing.omnitak.mobile.data.MeshConnectionType
 import soy.engindearing.omnitak.mobile.data.MeshNode
@@ -304,18 +302,22 @@ class MeshtasticManager(private val context: Context? = null) {
                 }
             }
             PORTNUM_ATAK_PLUGIN, PORTNUM_ATAK_FORWARDER -> {
-                val event = AtakPluginParser.parse(packet.payload)
+                // Phase 2: try TAKPacket (atak.proto) first for interop with stock
+                // Meshtastic ATAK Plugin / gateway. Fall back to Phase-1 TAKMessage
+                // parser for OmniTAK-to-OmniTAK links and older clients.
+                val event = TakPacketParser.parse(packet.payload, packet.from)
+                    ?: AtakPluginParser.parse(packet.payload)
                 if (event != null) {
                     runCatching { cotSink?.invoke(event) }
                         .onFailure { Log.w(TAG, "cotSink failed for ATAK plugin event: ${it.message}") }
                     Log.i(
                         TAG,
-                        "RX ATAK plugin from ${packet.from.toString(16)} -> CoT ${event.uid} ($PORTNUM_ATAK_PLUGIN bytes=${packet.payload.size})",
+                        "RX ATAK plugin from ${packet.from.toString(16)} -> CoT ${event.uid} (bytes=${packet.payload.size})",
                     )
                 } else {
                     Log.w(
                         TAG,
-                        "RX ATAK plugin from ${packet.from.toString(16)} unparseable, ${packet.payload.size}B",
+                        "RX ATAK plugin from ${packet.from.toString(16)} unparseable (tried TAKPacket+TAKMessage), ${packet.payload.size}B",
                     )
                 }
             }
@@ -353,7 +355,7 @@ class MeshtasticManager(private val context: Context? = null) {
                     ?: node?.shortName?.takeIf { it.isNotBlank() }
                     ?: "Node ${"%08x".format(nodeId.toInt())}"
                 val now = System.currentTimeMillis()
-                val nowIso = chatTimeFormatter.format(Date(now))
+                val nowIso = soy.engindearing.omnitak.mobile.data.CotXml.isoSeconds(now)
                 val isDm = myNum != null && packet.to != BROADCAST_ADDR && packet.to == myNum
                 val conversationId = if (isDm) {
                     meshDmConversationId(nodeId)
@@ -410,62 +412,16 @@ class MeshtasticManager(private val context: Context? = null) {
         }
     }
 
-    /** Build a ToRadio { MeshPacket { Data { portnum=1, payload } } } frame. */
-    private fun buildTextMessageToRadio(text: ByteArray, channelIndex: UInt, toNodeNum: UInt): ByteArray {
-        val out = java.io.ByteArrayOutputStream()
-        // Data { 1=portnum varint=1, 2=payload bytes=text }
-        val data = java.io.ByteArrayOutputStream().apply {
-            // tag (1<<3)|0 = 0x08, varint 1
-            write(0x08); write(0x01)
-            // tag (2<<3)|2 = 0x12, length-delim
-            write(0x12)
-            writeVarintTo(this, text.size.toULong())
-            write(text)
-        }.toByteArray()
-        // MeshPacket { 2=to fixed32, 3=channel varint (if non-zero), 4=decoded data, 6=id fixed32, 10=want_ack varint=0 }
-        val pkt = java.io.ByteArrayOutputStream().apply {
-            // to: fixed32 — broadcast (0xFFFFFFFF) for channel-wide chat,
-            // a specific nodeNum for DMs (GAP-124).
-            write(0x15)
-            write(byteArrayOf(
-                (toNodeNum.toInt() and 0xFF).toByte(),
-                ((toNodeNum.toInt() shr 8) and 0xFF).toByte(),
-                ((toNodeNum.toInt() shr 16) and 0xFF).toByte(),
-                ((toNodeNum.toInt() shr 24) and 0xFF).toByte(),
-            ))
-            // channel
-            if (channelIndex != 0u) {
-                write(0x18); writeVarintTo(this, channelIndex.toULong())
-            }
-            // decoded data submessage
-            write(0x22)
-            writeVarintTo(this, data.size.toULong())
-            write(data)
-            // id: random non-zero fixed32
-            val id = (1..Int.MAX_VALUE).random()
-            write(0x35)
-            write(byteArrayOf(
-                (id and 0xFF).toByte(),
-                ((id shr 8) and 0xFF).toByte(),
-                ((id shr 16) and 0xFF).toByte(),
-                ((id shr 24) and 0xFF).toByte(),
-            ))
-        }.toByteArray()
-        // ToRadio { 1=packet length-delim }
-        out.write(0x0A)
-        writeVarintTo(out, pkt.size.toULong())
-        out.write(pkt)
-        return out.toByteArray()
-    }
-
-    private fun writeVarintTo(out: java.io.OutputStream, value: ULong) {
-        var v = value
-        while (v >= 0x80uL) {
-            out.write(((v and 0x7FuL).toInt()) or 0x80)
-            v = v shr 7
-        }
-        out.write(v.toInt() and 0x7F)
-    }
+    /** Build a ToRadio { MeshPacket { Data { portnum=1, payload } } } frame.
+     *  `to` is broadcast (0xFFFFFFFF) for channel-wide chat, a specific
+     *  nodeNum for DMs (GAP-124). Framing lives in [MeshWire]. */
+    private fun buildTextMessageToRadio(text: ByteArray, channelIndex: UInt, toNodeNum: UInt): ByteArray =
+        soy.engindearing.omnitak.mobile.data.MeshWire.buildToRadio(
+            portnum = PORTNUM_TEXT_MESSAGE_APP.toULong(),
+            payload = text,
+            to = toNodeNum,
+            channelIndex = channelIndex,
+        )
 
     /** Conversation id used by [ChatStore] to bucket incoming mesh text by channel. */
     fun meshConversationId(channelIndex: Int): String = "MESH-CH$channelIndex"
@@ -530,7 +486,14 @@ class MeshtasticManager(private val context: Context? = null) {
      * [MeshtasticBleClient.sendToRadio] (chunked at the negotiated MTU).
      */
     suspend fun sendCoTOverMesh(event: CoTEvent, channelIndex: UInt = 0u): Boolean {
-        val payload = AtakPluginSerializer.serialize(event)
+        // Phase 2: Emit standard TAKPacket (atak.proto) for interop with stock
+        // Meshtastic ATAK Plugin, Meshtastic phone-app TAK role, and the
+        // TAK_Meshtastic_Gateway. The MeshPacket wrapper still uses
+        // AtakPluginSerializer.buildToRadio (portnum 72 framing).
+        val payload = when {
+            event.type == "b-t-f" -> TakPacketSerializer.serializeChat(event)
+            else -> TakPacketSerializer.serializePli(event)
+        }
         val toRadio = AtakPluginSerializer.buildToRadio(
             payloadBytes = payload,
             channelIndex = channelIndex,
@@ -590,10 +553,6 @@ class MeshtasticManager(private val context: Context? = null) {
         private const val GET_CONFIG_POSITION = 1
         private const val GET_CONFIG_LORA = 5
 
-        private val chatTimeFormatter = SimpleDateFormat(
-            "yyyy-MM-dd'T'HH:mm:ss'Z'",
-            Locale.US,
-        ).apply { timeZone = TimeZone.getTimeZone("UTC") }
         private const val PORTNUM_ATAK_PLUGIN = 72
         // Some ATAK plugin builds send via portnum 257 (ATAK_FORWARDER)
         // — accept both so OmniTAK can interop with both clients.

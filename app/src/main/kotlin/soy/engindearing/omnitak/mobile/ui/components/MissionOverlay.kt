@@ -55,15 +55,11 @@ fun MissionOverlay(
     val density = LocalDensity.current
 
     // Project all waypoints to screen pixels at 10 Hz.
-    var screenPts by remember { mutableStateOf<List<PointF>>(emptyList()) }
-    LaunchedEffect(mission.waypoints, map) {
-        while (isActive) {
-            screenPts = mission.waypoints.map { wp ->
-                map.projection.toScreenLocation(LatLng(wp.latDeg, wp.lonDeg))
-            }
-            delay(100)
+    val screenPts = rememberScreenProjection(map, mission.waypoints, periodMs = 100) { proj ->
+        mission.waypoints.map { wp ->
+            proj.toScreenLocation(LatLng(wp.latDeg, wp.lonDeg))
         }
-    }
+    } ?: emptyList()
     if (screenPts.isEmpty()) return
 
     Box(modifier = Modifier.fillMaxSize()) {

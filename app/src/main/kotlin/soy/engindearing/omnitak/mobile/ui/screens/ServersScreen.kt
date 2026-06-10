@@ -41,6 +41,7 @@ import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -52,6 +53,7 @@ import androidx.compose.ui.unit.dp
 import soy.engindearing.omnitak.mobile.OmniTAKApp
 import soy.engindearing.omnitak.mobile.data.TAKServer
 import soy.engindearing.omnitak.mobile.domain.ConnectionState
+import soy.engindearing.omnitak.mobile.i18n.Loc
 import soy.engindearing.omnitak.mobile.ui.theme.HostileRed
 import soy.engindearing.omnitak.mobile.ui.theme.NeutralYellow
 import soy.engindearing.omnitak.mobile.ui.theme.TacticalAccent
@@ -68,6 +70,13 @@ fun ServersScreen(onAdd: () -> Unit, onQuickConnect: () -> Unit = {}) {
     // Per-server live state — every card reflects its own connection, not
     // just whichever server happens to be "active" (multi-server).
     val serverStates by manager.serverStates.collectAsState()
+    // Delete is destructive (a row carries enrollment artifacts — cert,
+    // CA pin — that may need admin credentials to redo), so a fat-finger
+    // on the trash icon must confirm first. Same pattern as the
+    // overlays sheet's "Delete all overlays?" dialog.
+    var pendingDelete by androidx.compose.runtime.remember {
+        androidx.compose.runtime.mutableStateOf<TAKServer?>(null)
+    }
 
     Scaffold(
         containerColor = TacticalBackground,
@@ -129,7 +138,7 @@ fun ServersScreen(onAdd: () -> Unit, onQuickConnect: () -> Unit = {}) {
                         connState = thisState,
                         onTap = { manager.setActive(server.id) },
                         onToggle = { manager.toggleEnabled(server.id) },
-                        onDelete = { manager.deleteServer(server.id) },
+                        onDelete = { pendingDelete = server },
                         onConnectToggle = {
                             // Connect/disconnect just this server — others stay up.
                             if (connectedToThis) manager.disconnect(server.id)
@@ -139,6 +148,27 @@ fun ServersScreen(onAdd: () -> Unit, onQuickConnect: () -> Unit = {}) {
                 }
             }
         }
+    }
+
+    pendingDelete?.let { server ->
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { pendingDelete = null },
+            title = { Text(Loc.t("servers.delete.title", server.name)) },
+            text = { Text(Loc.t("servers.delete.body")) },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        manager.deleteServer(server.id)
+                        pendingDelete = null
+                    },
+                ) { Text(Loc.t("servers.delete.confirm"), color = HostileRed) }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingDelete = null }) {
+                    Text(Loc.t("common.cancel"))
+                }
+            },
+        )
     }
 }
 

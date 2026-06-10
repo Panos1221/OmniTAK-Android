@@ -9,9 +9,9 @@ import java.io.ByteArrayOutputStream
 
 /**
  * JVM unit tests for the portnum-72 ATAK plugin parser/serializer pair.
- * The XML fallback test deliberately invokes [AtakPluginParser.parse]
- * which routes through `parseCoTXmlFallback` on a plain JVM (no
- * `android.util.Xml`).
+ * Raw-XML payloads route through the production [CoTParser] (built on
+ * XmlPullParserFactory, so it runs on plain JVM) — tests exercise the
+ * exact on-device path.
  */
 class AtakPluginParserTest {
 
@@ -208,6 +208,40 @@ class AtakPluginParserTest {
         for (i in 0 until 8) {
             out.write(((bits ushr (i * 8)) and 0xFFL).toInt())
         }
+    }
+
+
+    // region Off-grid mesh tests (Phase 1) ---------------------------------
+
+    @Test fun b_t_f_geochat_xml_parses_callsign_and_remarks() {
+        val xml = "<event version=\"2.0\" uid=\"GeoChat.test.All.abc\" type=\"b-t-f\" how=\"h-g-i-g-o\">"
+            .plus("<point lat=\"0.0\" lon=\"0.0\" hae=\"0.0\" ce=\"9999999\" le=\"9999999\"/>")
+            .plus("<detail><contact callsign=\"MESH-ALPHA\"/>")
+            .plus("<remarks>Hello from mesh</remarks></detail></event>")
+        val event = AtakPluginParser.parse(xml.toByteArray(Charsets.UTF_8))
+        assertNotNull("b-t-f XML must parse", event)
+        event!!
+        assertEquals("b-t-f", event.type)
+        assertEquals("MESH-ALPHA", event.callsign)
+        assertTrue("remarks must contain message", event.remarks.contains("Hello from mesh"))
+    }
+
+    @Test fun b_t_f_protobuf_round_trips_callsign_remarks() {
+        val original = CoTEvent(
+            uid = "GeoChat.ANDROID-x.All Chat Rooms.xyz",
+            type = "b-t-f",
+            lat = 0.0,
+            lon = 0.0,
+            callsign = "BRAVO-2",
+            remarks = "Test mesh message",
+        )
+        val payload = AtakPluginSerializer.serialize(original)
+        val decoded = AtakPluginParser.parse(payload)
+        assertNotNull(decoded)
+        decoded!!
+        assertEquals("b-t-f", decoded.type)
+        assertEquals("BRAVO-2", decoded.callsign)
+        assertTrue(decoded.remarks.contains("Test mesh message"))
     }
 
     // endregion

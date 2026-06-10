@@ -1,7 +1,6 @@
 package soy.engindearing.omnitak.mobile.data
 
 import java.io.ByteArrayOutputStream
-import kotlin.random.Random
 
 /**
  * GAP-109a — write Meshtastic device settings via admin-port (portnum 6).
@@ -26,9 +25,7 @@ import kotlin.random.Random
  * field, which the rest of the codebase has deliberately avoided
  * (see [MeshtasticProtoParser] / [AtakPluginSerializer]).
  *
- * **Wire helpers are duplicated here on purpose** — extracting them
- * into a shared `ProtoWire` object would be a fine follow-up but
- * touches three call sites and is out of scope for this slice.
+ * Wire primitives + ToRadio framing live in [MeshWire].
  */
 object AdminMessageSerializer {
 
@@ -46,8 +43,8 @@ object AdminMessageSerializer {
         val owner = encodeOwner(longName = longName, shortName = shortName)
         // AdminMessage.set_owner = field 32, wire type 2 (length-delimited submessage).
         val admin = ByteArrayOutputStream().apply {
-            appendTag(this, field = 32, wire = 2)
-            appendVarint(this, owner.size.toULong())
+            MeshWire.appendTag(this, field = 32, wire = 2)
+            MeshWire.appendVarint(this, owner.size.toULong())
             write(owner)
         }.toByteArray()
         return wrapToRadio(admin)
@@ -60,20 +57,20 @@ object AdminMessageSerializer {
     fun buildSetDeviceRole(role: MeshRole): ByteArray {
         // DeviceConfig.role = field 1, varint of the proto-enum ordinal.
         val deviceConfig = ByteArrayOutputStream().apply {
-            appendVarintField(this, field = 1, value = roleProtoOrdinal(role).toULong())
+            MeshWire.appendVarintField(this, field = 1, value = roleProtoOrdinal(role).toULong())
         }.toByteArray()
 
         // Config.device = field 1, wire type 2 (oneof submessage).
         val config = ByteArrayOutputStream().apply {
-            appendTag(this, field = 1, wire = 2)
-            appendVarint(this, deviceConfig.size.toULong())
+            MeshWire.appendTag(this, field = 1, wire = 2)
+            MeshWire.appendVarint(this, deviceConfig.size.toULong())
             write(deviceConfig)
         }.toByteArray()
 
         // AdminMessage.set_config = field 34, wire type 2.
         val admin = ByteArrayOutputStream().apply {
-            appendTag(this, field = 34, wire = 2)
-            appendVarint(this, config.size.toULong())
+            MeshWire.appendTag(this, field = 34, wire = 2)
+            MeshWire.appendVarint(this, config.size.toULong())
             write(config)
         }.toByteArray()
         return wrapToRadio(admin)
@@ -87,18 +84,18 @@ object AdminMessageSerializer {
         val safe = secs.coerceIn(0, 24 * 60 * 60).toULong()
         // PositionConfig.position_broadcast_secs = field 4, varint.
         val positionConfig = ByteArrayOutputStream().apply {
-            appendVarintField(this, field = 4, value = safe)
+            MeshWire.appendVarintField(this, field = 4, value = safe)
         }.toByteArray()
         // Config.position = field 2, wire type 2.
         val config = ByteArrayOutputStream().apply {
-            appendTag(this, field = 2, wire = 2)
-            appendVarint(this, positionConfig.size.toULong())
+            MeshWire.appendTag(this, field = 2, wire = 2)
+            MeshWire.appendVarint(this, positionConfig.size.toULong())
             write(positionConfig)
         }.toByteArray()
         // AdminMessage.set_config = field 34.
         val admin = ByteArrayOutputStream().apply {
-            appendTag(this, field = 34, wire = 2)
-            appendVarint(this, config.size.toULong())
+            MeshWire.appendTag(this, field = 34, wire = 2)
+            MeshWire.appendVarint(this, config.size.toULong())
             write(config)
         }.toByteArray()
         return wrapToRadio(admin)
@@ -120,18 +117,18 @@ object AdminMessageSerializer {
         // Channel.index = 1 (varint, default 0 means primary), settings = field 2.
         val channel = ByteArrayOutputStream().apply {
             // Index 0 — the primary channel.
-            appendVarintField(this, field = 1, value = 0UL)
+            MeshWire.appendVarintField(this, field = 1, value = 0UL)
             // Settings submessage at field 2.
-            appendTag(this, field = 2, wire = 2)
-            appendVarint(this, settings.size.toULong())
+            MeshWire.appendTag(this, field = 2, wire = 2)
+            MeshWire.appendVarint(this, settings.size.toULong())
             write(settings)
             // Channel.role = field 3, varint. PRIMARY = 1.
-            appendVarintField(this, field = 3, value = 1UL)
+            MeshWire.appendVarintField(this, field = 3, value = 1UL)
         }.toByteArray()
         // AdminMessage.set_channel = field 33.
         val admin = ByteArrayOutputStream().apply {
-            appendTag(this, field = 33, wire = 2)
-            appendVarint(this, channel.size.toULong())
+            MeshWire.appendTag(this, field = 33, wire = 2)
+            MeshWire.appendVarint(this, channel.size.toULong())
             write(channel)
         }.toByteArray()
         return wrapToRadio(admin)
@@ -142,7 +139,7 @@ object AdminMessageSerializer {
     /** AdminMessage.get_owner_request = field 3 (bool). */
     fun buildGetOwnerRequest(): ByteArray {
         val admin = ByteArrayOutputStream().apply {
-            appendVarintField(this, field = 3, value = 1UL)
+            MeshWire.appendVarintField(this, field = 3, value = 1UL)
         }.toByteArray()
         return wrapToRadio(admin)
     }
@@ -154,7 +151,7 @@ object AdminMessageSerializer {
      */
     fun buildGetConfigRequest(configType: Int): ByteArray {
         val admin = ByteArrayOutputStream().apply {
-            appendVarintField(this, field = 5, value = configType.toULong())
+            MeshWire.appendVarintField(this, field = 5, value = configType.toULong())
         }.toByteArray()
         return wrapToRadio(admin)
     }
@@ -164,7 +161,7 @@ object AdminMessageSerializer {
         val admin = ByteArrayOutputStream().apply {
             // Index in get_channel_request is 1-based; channel 0 is requested as 1.
             val zeroBased = channelIndex.coerceAtLeast(0)
-            appendVarintField(this, field = 1, value = (zeroBased + 1).toULong())
+            MeshWire.appendVarintField(this, field = 1, value = (zeroBased + 1).toULong())
         }.toByteArray()
         return wrapToRadio(admin)
     }
@@ -175,19 +172,19 @@ object AdminMessageSerializer {
     fun buildSetLoraPreset(preset: MeshChannelPreset): ByteArray {
         // LoRaConfig.use_preset = field 1 (bool), modem_preset = field 2 (enum).
         val loraConfig = ByteArrayOutputStream().apply {
-            appendVarintField(this, field = 1, value = 1UL)
-            appendVarintField(this, field = 2, value = presetProtoOrdinal(preset).toULong())
+            MeshWire.appendVarintField(this, field = 1, value = 1UL)
+            MeshWire.appendVarintField(this, field = 2, value = presetProtoOrdinal(preset).toULong())
         }.toByteArray()
         // Config.lora = field 6.
         val config = ByteArrayOutputStream().apply {
-            appendTag(this, field = 6, wire = 2)
-            appendVarint(this, loraConfig.size.toULong())
+            MeshWire.appendTag(this, field = 6, wire = 2)
+            MeshWire.appendVarint(this, loraConfig.size.toULong())
             write(loraConfig)
         }.toByteArray()
         // AdminMessage.set_config = field 34.
         val admin = ByteArrayOutputStream().apply {
-            appendTag(this, field = 34, wire = 2)
-            appendVarint(this, config.size.toULong())
+            MeshWire.appendTag(this, field = 34, wire = 2)
+            MeshWire.appendVarint(this, config.size.toULong())
             write(config)
         }.toByteArray()
         return wrapToRadio(admin)
@@ -248,78 +245,25 @@ object AdminMessageSerializer {
      * admin channel. `wantAck` defaults to true so the operator gets
      * a delivery signal we can surface in the UI later.
      */
-    private fun wrapToRadio(adminBytes: ByteArray): ByteArray {
-        val packetId = Random.nextInt().toUInt().let { if (it == 0u) 1u else it }
-
-        // Data submessage — portnum + payload.
-        val decoded = ByteArrayOutputStream().apply {
-            appendVarintField(this, field = 1, value = PORTNUM_ADMIN_APP)
-            appendTag(this, field = 2, wire = 2)
-            appendVarint(this, adminBytes.size.toULong())
-            write(adminBytes)
-            // 5: want_response = true so the radio sends an ack.
-            appendVarintField(this, field = 5, value = 1UL)
-        }.toByteArray()
-
-        // MeshPacket.
-        val meshPacket = ByteArrayOutputStream().apply {
-            // 2: to (fixed32). Broadcast addr — firmware unwraps locally.
-            appendTag(this, field = 2, wire = 5)
-            appendFixed32(this, 0xFFFFFFFFu)
-            // 4: decoded
-            appendTag(this, field = 4, wire = 2)
-            appendVarint(this, decoded.size.toULong())
-            write(decoded)
-            // 6: id (fixed32)
-            appendTag(this, field = 6, wire = 5)
-            appendFixed32(this, packetId)
-            // 10: want_ack
-            appendVarintField(this, field = 10, value = 1UL)
-        }.toByteArray()
-
-        // ToRadio.packet = field 1.
-        val toRadio = ByteArrayOutputStream().apply {
-            appendTag(this, field = 1, wire = 2)
-            appendVarint(this, meshPacket.size.toULong())
-            write(meshPacket)
-        }.toByteArray()
-        return toRadio
-    }
+    private fun wrapToRadio(adminBytes: ByteArray): ByteArray = MeshWire.buildToRadio(
+        portnum = PORTNUM_ADMIN_APP,
+        payload = adminBytes,
+        // Broadcast addr — firmware unwraps admin payloads locally.
+        to = MeshWire.BROADCAST_ADDR,
+        // want_response + want_ack so the radio sends a delivery signal
+        // we can surface in the UI later.
+        wantAck = true,
+        wantResponse = true,
+    )
 
     // endregion
 
-    // region Wire helpers — duplicated from AtakPluginSerializer ---------
+    // region Wire helpers — see [MeshWire] ------------------------------
 
-    private fun appendTag(out: ByteArrayOutputStream, field: Int, wire: Int) {
-        appendVarint(out, ((field shl 3) or (wire and 0x7)).toULong())
-    }
-
-    private fun appendVarint(out: ByteArrayOutputStream, value: ULong) {
-        var v = value
-        while (v >= 0x80uL) {
-            out.write(((v and 0x7FuL).toInt()) or 0x80)
-            v = v shr 7
-        }
-        out.write(v.toInt() and 0x7F)
-    }
-
-    private fun appendVarintField(out: ByteArrayOutputStream, field: Int, value: ULong) {
-        appendTag(out, field = field, wire = 0)
-        appendVarint(out, value)
-    }
-
-    private fun appendFixed32(out: ByteArrayOutputStream, value: UInt) {
-        for (i in 0 until 4) {
-            out.write(((value shr (i * 8)) and 0xFFu).toInt())
-        }
-    }
-
+    /** proto3 skip-default semantics: omit empty strings entirely. */
     private fun appendString(out: ByteArrayOutputStream, field: Int, value: String) {
         if (value.isEmpty()) return
-        val bytes = value.toByteArray(Charsets.UTF_8)
-        appendTag(out, field = field, wire = 2)
-        appendVarint(out, bytes.size.toULong())
-        out.write(bytes)
+        MeshWire.appendString(out, field = field, value = value)
     }
 
     // endregion

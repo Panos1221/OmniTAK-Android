@@ -166,12 +166,7 @@ class ContactSymbolLayer {
             features.put(featureJson(c, sidc))
         }
 
-        val fc = JSONObject().apply {
-            put("type", "FeatureCollection")
-            put("features", features)
-        }
-        val source = style.getSourceAs<GeoJsonSource>(SOURCE_ID)
-        source?.setGeoJson(fc.toString())
+        GeoJsonLayerFeeder.push(style, SOURCE_ID, features)
         return newlyRegistered
     }
 
@@ -241,4 +236,5 @@ private val PRE_WARM_COT_TYPES: List<String> = listOf(
     "a-u-A",
     "a-u-A-M-H-Q",
     "a-u-A-M-F-Q",
+    "a-u-G", // RID operator / pilot marker
 )

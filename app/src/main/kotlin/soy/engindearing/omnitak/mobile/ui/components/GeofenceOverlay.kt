@@ -42,22 +42,18 @@ fun GeofenceOverlay(
     // metre at the current zoom, which we multiply by radius for the
     // visual ring. Recomputed at 10 Hz so the ring stays sized correctly
     // through zoom changes.
-    var centerPx by remember { mutableStateOf<PointF?>(null) }
-    var radiusPx by remember { mutableStateOf(0f) }
-    LaunchedEffect(centerLatDeg, centerLonDeg, radiusMeters, map) {
-        while (isActive) {
-            val cp = map.projection.toScreenLocation(LatLng(centerLatDeg, centerLonDeg))
-            val metersPerDegLon = 111_320.0 * kotlin.math.cos(Math.toRadians(centerLatDeg))
-            val edgeLon = centerLonDeg + 1.0 / metersPerDegLon
-            val ep = map.projection.toScreenLocation(LatLng(centerLatDeg, edgeLon))
-            val pixPerMeter = kotlin.math.hypot(ep.x - cp.x, ep.y - cp.y)
-            centerPx = cp
-            radiusPx = (pixPerMeter * radiusMeters).toFloat()
-            delay(100)
-        }
+    val projectedRing = rememberScreenProjection(
+        map, centerLatDeg, centerLonDeg, radiusMeters, periodMs = 100,
+    ) { proj ->
+        val cp = proj.toScreenLocation(LatLng(centerLatDeg, centerLonDeg))
+        val metersPerDegLon = 111_320.0 * kotlin.math.cos(Math.toRadians(centerLatDeg))
+        val edgeLon = centerLonDeg + 1.0 / metersPerDegLon
+        val ep = proj.toScreenLocation(LatLng(centerLatDeg, edgeLon))
+        val pixPerMeter = kotlin.math.hypot(ep.x - cp.x, ep.y - cp.y)
+        cp to (pixPerMeter * radiusMeters).toFloat()
     }
 
-    val cp = centerPx ?: return
+    val (cp, radiusPx) = projectedRing ?: return
     if (radiusPx < 4f) return // skip when ring would be invisible
 
     Box(modifier = Modifier.fillMaxSize()) {

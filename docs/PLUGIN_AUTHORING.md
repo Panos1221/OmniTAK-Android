@@ -1,194 +1,185 @@
-# OmniTAK Android — Plugin SDK Authoring (RFC)
+# OmniTAK Android — Plugin SDK Authoring
 
-Status: **Draft / RFC**. Pairs with the iOS plugin SDK shipped in
-`OmniTAK-iOS` (`OmniTAKPlugin` protocol + `PluginRegistry`). This document
-proposes the Android-side equivalent. **No runtime SDK code lands in this
-PR** — only the design.
+Status: **Shipped (v0.35)**. The `OmniTAKPlugin` SDK and the ADS-B reference
+plugin are real, compile-time Gradle modules in this repo. A matching SDK ships
+on `OmniTAK-iOS` in the same release — keep `pluginId` identical across
+platforms and a plugin ports in roughly a day.
 
-## Goals
+## What shipped
 
-1. Mirror the iOS plugin shape closely enough that an author can port a
-   plugin between platforms in a day.
-2. Stay Play-Store-compliant. No DEX class loading, no remote code download.
-3. Keep the registry in-process and dependency-light.
-4. Make ADS-B (already a self-contained feature on Android) the canonical
-   reference plugin once the SDK is implemented.
+| Module | Purpose |
+|--------|---------|
+| `:plugins:plugin-sdk` | Public contract: `OmniTAKPlugin`, `PluginHost`, `PluginRegistry`, the SDK value types, and `LocalMapEngineHandle`. Depends only on Compose + Material3 — **not** on `:app` or MapLibre. |
+| `:plugins:example-adsb` | The ADS-B reference plugin. Owns its `AdsbService` (OpenSky poller), its map overlay (`AircraftLayer` GL feeder), and its settings. Depends on `:plugins:plugin-sdk` + MapLibre only. |
 
-## Non-goals (for now)
+`:app` declares `implementation(project(":plugins:plugin-sdk"))` and
+`implementation(project(":plugins:example-adsb"))`. The dependency direction is
+strictly **`:app → {plugin-sdk, example-adsb} → maplibre`**, never backwards —
+there is no circular dependency.
 
-- Runtime/downloadable plugins (Play policy gets dicey on dynamic code
-  loading; revisit if there's user demand).
-- Cross-process plugins (no AIDL boundary).
-- Sandboxing — every plugin runs in the host process, with the host's
-  permissions. Authoring guide will say so.
+## Security model — read this
 
-## Bundling model
+Plugins run **in the host process with the host's permissions**. There is no
+sandbox and no AIDL boundary. A plugin can do anything the app can do (network,
+location, files). Only bundle plugins you trust. The Plugins UI says so too.
 
-Pick **option 3 — compile-time Kotlin modules with a registry pattern**
-(matches the iOS architecture closest):
+## Store compliance
 
-```
-:app                       <- main application module
-:plugins:plugin-sdk        <- public interfaces + PluginHost API
-:plugins:example-adsb      <- reference plugin
-:plugins:meshtastic        <- if/when we extract Meshtastic as a plugin
-```
+Plugins are **compile-time Kotlin/Gradle modules** linked into the app at build
+time. There is **no** DEX class loading, no dylib/`.so` loading, and **no remote
+code download**. The registry is populated at app start from statically-linked
+classes (`OmniTAKApp.loadBundledPlugins()`). This is what keeps OmniTAK
+Play-Store compliant — and it is non-negotiable.
 
-Plugins are Gradle modules under `:plugins:*`. The app module declares
-`implementation(project(":plugins:example-adsb"))` for each plugin to
-include. This gives:
+## The contract
 
-- Clear module boundary (lint, compile-time enforcement of the SDK
-  surface)
-- Plugins can declare their own deps (e.g. ADS-B's OpenSky HTTP client)
-  without polluting the main app's classpath
-- Authors can fork the repo, drop a plugin module under `plugins/` and
-  add one line to settings.gradle.kts and one line to app/build.gradle.kts
-
-Future option (deferred): publish the SDK as a Maven artifact so authors
-can build out-of-tree plugins and have us include them at app build time.
-
-## Public SDK surface (proposed)
-
-In `plugins/plugin-sdk/src/main/kotlin/soy/engindearing/omnitak/plugin/`:
+`plugins/plugin-sdk/src/main/kotlin/soy/engindearing/omnitak/plugin/`:
 
 ```kotlin
-/**
- * Implement this interface to ship a plugin. Mirrors iOS
- * OmniTAKPlugin protocol.
- */
 interface OmniTAKPlugin {
-    val pluginId: String              // reverse-DNS, e.g. "soy.engindearing.adsb"
-    val displayName: String           // shown in PluginsListScreen
-    val pluginVersion: String         // semver
+    val pluginId: String          // reverse-DNS, e.g. "soy.engindearing.adsb"
+    val displayName: String
+    val pluginVersion: String     // semver
     val pluginAuthor: String
     val pluginDescription: String
 
-    /** Called once at process start, after the host is fully initialised.
-     *  Plugins should register all their hooks via [host] here. */
-    fun activate(host: PluginHost)
-
-    /** Called when the user disables the plugin in PluginsListScreen.
-     *  Plugins should unregister hooks and stop background work. */
-    fun deactivate()
-
-    /** Optional Compose-based settings UI shown in the plugin detail
-     *  page. Returning null means "no settings to configure". */
+    fun activate(host: PluginHost)   // register hooks here, once
+    fun deactivate()                 // stop background work
     fun settingsContent(): (@Composable () -> Unit)? = null
 }
 
-/**
- * Plugins receive this in [activate] and use it to register hooks.
- * Mirrors iOS PluginHost.
- */
 interface PluginHost {
-    /** Compose layer that renders below the main TacticalMap chrome.
-     *  Plugins typically draw their own GeoJsonSource + Layer here. */
     fun registerMapOverlay(overlay: @Composable () -> Unit)
-
-    /** Adds an entry to the long-press radial menu. */
-    fun registerRadialAction(action: RadialAction, onSelect: (LatLng) -> Unit)
-
-    /** Called for every inbound CoT event after the core ContactStore
-     *  ingests it. Return true to mark "consumed". */
-    fun registerCoTHandler(handler: (CoTEvent) -> Boolean)
-
-    /** Adds a row to the Settings screen, navigating to the plugin's
-     *  [OmniTAKPlugin.settingsContent] when tapped. */
+    fun registerRadialAction(action: PluginRadialAction, onSelect: (PluginLatLng) -> Unit)
+    fun registerCoTHandler(handler: (PluginCoTEvent) -> Boolean)
     fun registerSettingsRow(label: String, icon: ImageVector)
 }
 ```
 
-## Registry
+### SDK value types (no `:app` / MapLibre leakage)
 
-`plugins/plugin-sdk/src/main/kotlin/.../PluginRegistry.kt`:
+The SDK owns its own value types so it never depends on the app's internal CoT
+model or on MapLibre's `LatLng`:
 
 ```kotlin
-/**
- * Singleton populated at app start. App reads the
- * "plugin_<id>_enabled" SharedPreferences flag to decide whether to
- * activate(); user toggles it from PluginsListScreen.
- */
-object PluginRegistry {
-    private val plugins = mutableListOf<OmniTAKPlugin>()
-    private val activated = mutableSetOf<String>()
+data class PluginRadialAction(val id: String, val icon: ImageVector, val label: String)
+data class PluginLatLng(val latitude: Double, val longitude: Double)
+data class PluginCoTEvent(
+    val uid: String, val lat: Double, val lon: Double,
+    val callsign: String?, val type: String?, val rawXml: String?,
+)
+```
 
-    fun register(plugin: OmniTAKPlugin) { plugins += plugin }
-    fun all(): List<OmniTAKPlugin> = plugins.toList()
+The host adapts core types ⇄ SDK types at the seam (`AppPluginHost.dispatchCoT`
+maps the app's `CoTEvent` → `PluginCoTEvent`).
 
-    fun activateEnabled(host: PluginHost, prefs: SharedPreferences) {
-        for (p in plugins) {
-            val key = "plugin_${p.pluginId}_enabled"
-            // Default true on first run so first-time users see plugin
-            // features without hunting in Settings.
-            if (prefs.getBoolean(key, true) && p.pluginId !in activated) {
-                p.activate(host)
-                activated += p.pluginId
-            }
-        }
-    }
+### The map-handle pattern (`LocalMapEngineHandle`)
 
-    fun deactivate(pluginId: String) {
-        plugins.firstOrNull { it.pluginId == pluginId }?.deactivate()
-        activated -= pluginId
-    }
+`registerMapOverlay` takes a plain `@Composable () -> Unit`. The overlay reads
+the live map engine handle from the SDK's `CompositionLocal`:
+
+```kotlin
+val LocalMapEngineHandle = compositionLocalOf<Any?> { null }
+```
+
+It is `Any?` so the SDK stays MapLibre-free. The host provides the live
+`MapLibreMap` on the 2D engine and `null` on the Cesium 3D globe. A plugin that
+can only draw on MapLibre casts and no-ops on the globe:
+
+```kotlin
+@Composable
+fun MyOverlay(...) {
+    val map = LocalMapEngineHandle.current as? MapLibreMap ?: return  // null on Cesium
+    // … feed your GeoJSON source / layer via `map`
 }
 ```
 
-App entry (in `OmniTAKApp.onCreate()`) calls `loadBundledPlugins()`:
+The host invokes the overlay loop in **both** engine branches (a future
+Cesium-capable plugin isn't silently dropped on the globe — the documented
+VC77 "dead on the globe" bug class).
+
+## Registry & app wiring
+
+`PluginRegistry` is populated at app start. The enable flag is a per-plugin
+`plugin_<id>_enabled` boolean in SharedPreferences (`"omnitak_plugins"`),
+**default true on first run** so first-time users see plugin features without
+hunting in Settings — and existing testers see no change after the refactor.
 
 ```kotlin
+// OmniTAKApp.onCreate()
 private fun loadBundledPlugins() {
-    PluginRegistry.register(soy.engindearing.adsb.AdsbPlugin())
-    // future: more bundled plugins
-    PluginRegistry.activateEnabled(host = AppPluginHost(this), prefs = pluginPrefs)
+    PluginRegistry.register(adsbPlugin)
+    PluginRegistry.activateEnabled(
+        host = pluginHost.asPluginHost(),
+        prefs = pluginPrefs(),                       // getSharedPreferences("omnitak_plugins", MODE_PRIVATE)
+        onActivating = { id, activate -> pluginHost.withActivating(id) { activate() } },
+    )
 }
 ```
 
-## Reference plugin: extracting ADS-B
+`AppPluginHost` (in `:app`) implements `PluginHost`, holds the four registration
+lists as `SnapshotStateList`s (so Compose recomposes when a plugin
+activates/deactivates), tags each registration with the activating plugin's id,
+and provides `clearForPlugin(id)` to remove a plugin's hooks on disable.
 
-ADS-B today lives in `data/AdsbService.kt` + `ui/components/AircraftLayer.kt`.
-To make it a plugin:
+### The four seams
 
-1. New module `plugins/example-adsb/`.
-2. Move `AdsbService` + `AircraftLayer` + the OpenSky client into it.
-3. Add an `AdsbPlugin: OmniTAKPlugin` that:
-   - registers `AircraftLayer` as a map overlay via `host.registerMapOverlay`
-   - exposes a Settings row "ADS-B" via `host.registerSettingsRow`
-4. Remove the ADS-B-specific code from `:app` (just the imports and the
-   tools-drawer action — the plugin re-adds those via the SDK).
+| Hook | Where it's consumed |
+|------|---------------------|
+| `registerMapOverlay` | `MapScreen` renders `pluginHost.mapOverlays` inside `CompositionLocalProvider(LocalMapEngineHandle provides mapboxMap)` in **both** the MapLibre and Cesium branches. |
+| `registerRadialAction` | `MapScreen`'s long-press radial menu appends `pluginHost.radialActions`; the `onSelect` fallback dispatches with the long-press coordinate. |
+| `registerCoTHandler` | `ServerManager` calls `pluginCoTDispatch(event)` **after** `contactStore.ingest(event)` — handlers run after the core store ingests (consumed is advisory in v1). |
+| `registerSettingsRow` | `SettingsScreen`'s Plugins section renders `pluginHost.settingsRows`; tapping opens `PluginDetailScreen` (the plugin's `settingsContent`). |
 
-This is the canonical example because:
-- Self-contained (one HTTP client, one map layer, no cross-cutting deps)
-- Already gated behind a user toggle (the tools-drawer "ADSB" button)
-- Has its own Settings surface
-- Mirrors what the iOS team did exactly
+## Reference plugin: ADS-B
 
-## What lands in this issue
+ADS-B is `:plugins:example-adsb` (`soy.engindearing.adsb`). It is the canonical
+example: one HTTP client (`AdsbService` → OpenSky), one map layer
+(`AircraftLayer` GeoJSON feeder), its own settings, already toggle-gated.
 
-This RFC. **No SDK code yet** — the next PR (and a separate issue) does:
+- `AdsbPlugin.activate(host)` calls exactly the two hooks ADS-B needs:
+  `registerMapOverlay { AdsbMapOverlay(service) }` and
+  `registerSettingsRow("ADS-B", Icons.Filled.Flight)`.
+- `AdsbMapOverlay` reads `LocalMapEngineHandle`, casts to `MapLibreMap`, and on
+  every aircraft/active change calls `AircraftLayer.update(map, …)` — the exact
+  GL render path the pre-plugin code used (chosen for Adreno 610 / SwiftShader).
+- The `aircraft-src` source + `aircraft-circle`/`aircraft-label` layers stay in
+  `:app`'s embedded tactical style JSON — they are MapLibre **style
+  infrastructure**, not ADS-B logic (see the contract comment in
+  `TacticalMap.kt` and `AircraftLayer.kt`).
+- On Cesium the handle is `null`, so the overlay no-ops — identical to the
+  pre-plugin behavior (aircraft were never on the globe).
+- The on/off toggle that used to live in the Tools drawer now lives in the
+  plugin's `settingsContent`, reached via Settings → Plugins → ADS-B. Same
+  OpenSky polling, same "center on the camera target else self" box seeding
+  (via the host's camera-center provider), same camera-follow recenter.
 
-- [ ] Add `:plugins:plugin-sdk` module with the interfaces above.
-- [ ] Add `:plugins:example-adsb` and move ADS-B into it.
-- [ ] Wire `loadBundledPlugins()` from `OmniTAKApp.onCreate()`.
-- [ ] PluginsListScreen reading from `PluginRegistry`, toggling
-      `plugin_<id>_enabled`.
-- [ ] README pointer to this doc.
+The `:app` layer-visibility pref `aircraftVisible` ("Aircraft (ADSB)" in the map
+Layers dialog) is orthogonal and stays in `:app` — it gates the layer's
+visibility independently of the plugin's enabled state.
 
-## Open questions
+## Authoring a new plugin
 
-1. Should the plugin SDK module be published as a Maven artifact?
-   (Probably yes once it's stable, but not in v0.4.)
-2. How do plugins persist their own state? Suggest: each plugin owns
-   its own DataStore, namespaced by `pluginId`. SDK doesn't need to
-   provide one.
-3. Do we need a plugin lifecycle on connection state? (The ADS-B
-   plugin doesn't care, but a "auto-route to TAK" plugin might.) Defer
-   until we hit a real plugin that needs it.
+1. Create `plugins/<your-plugin>/` with a `build.gradle.kts` applying
+   `com.android.library` + `org.jetbrains.kotlin.android` +
+   `org.jetbrains.kotlin.plugin.compose`, `namespace` of your choice,
+   `implementation(project(":plugins:plugin-sdk"))`, and whatever else you need.
+   **Do not** add a `repositories {}` block — `settings.gradle.kts` sets
+   `FAIL_ON_PROJECT_REPOS`; you inherit the central `google()`/`mavenCentral()`.
+2. Add one line to `settings.gradle.kts`: `include(":plugins:<your-plugin>")`.
+3. Add one line to `app/build.gradle.kts` deps:
+   `implementation(project(":plugins:<your-plugin>"))`.
+4. Implement `OmniTAKPlugin` and register it in `OmniTAKApp.loadBundledPlugins()`
+   (`PluginRegistry.register(YourPlugin())`).
+5. Keep `pluginId` identical to the iOS plugin so settings sync across platforms.
 
-## Compatibility note
+That's it — compile-time, store-compliant, no dynamic loading.
 
-Authors writing both iOS and Android plugins should keep `pluginId`
-identical across platforms. Settings tied to `pluginId` (e.g. "ADS-B
-update interval") can then sync via TAK data packages or QR codes
-without per-platform key remapping.
+## Open questions (deferred)
+
+1. Publish `:plugins:plugin-sdk` as a Maven artifact for out-of-tree plugins?
+   Probably once it's stable; not in v0.35.
+2. Plugin-owned persistence: each plugin owns its own DataStore namespaced by
+   `pluginId`. The SDK doesn't provide one.
+3. A connection-state lifecycle hook (ADS-B doesn't need it). Defer until a real
+   plugin does.

@@ -12,9 +12,8 @@ import org.junit.Test
  *    set, and falls back to MIL-STD affiliation color when it is absent.
  *  - [CoTEvent.displayColor] is case-insensitive (teams arrive as "Red" / "red").
  *
- * Note: [CoTParser.parse] exercises [android.util.Xml] which is not available
- * on the JVM host test runner. Parser XML-level testing belongs in an
- * instrumented test (androidTest). The data-model and color-resolution logic
+ * Note: [CoTParser.parse] is XmlPullParserFactory-backed and runs on the
+ * JVM host test runner too. The data-model and color-resolution logic
  * tested here is purely JVM-safe.
  */
 class CoTParserGroupTest {

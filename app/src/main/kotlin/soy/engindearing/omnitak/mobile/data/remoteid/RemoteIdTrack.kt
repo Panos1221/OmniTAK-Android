@@ -18,8 +18,13 @@ data class RemoteIdTrack(
     val lastLocation: OpenDroneIdMessage.Location?,
     /** Monotonic clock (System.nanoTime / 1_000_000) of the last update. */
     val lastUpdateMs: Long,
+    /** Operator (pilot) location, when broadcast. Often present before the
+     *  drone has a GPS fix, so it can be the only plottable point we have. */
+    val lastOperatorLocation: OpenDroneIdMessage.OperatorLocation? = null,
 ) {
-    /** True when we have both an identifier and a valid lat/lon — enough to render. */
+    /** True when we have an identifier and at least one plottable point —
+     *  the drone's own GPS, or the operator/pilot location. */
     val isRenderable: Boolean
-        get() = uasId.isNotEmpty() && lastLocation?.hasValidPosition == true
+        get() = uasId.isNotEmpty() &&
+            (lastLocation?.hasValidPosition == true || lastOperatorLocation?.hasValidPosition == true)
 }

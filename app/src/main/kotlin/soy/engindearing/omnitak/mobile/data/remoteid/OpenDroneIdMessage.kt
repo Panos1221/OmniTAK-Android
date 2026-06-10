@@ -71,6 +71,24 @@ sealed class OpenDroneIdMessage {
     }
 
     /**
+     * Operator (pilot) location, from the RID System message. Often
+     * available before the drone itself reports a GPS fix, and is the
+     * tactically valuable point in a C-UAS picture (where the pilot is).
+     */
+    data class OperatorLocation(
+        override val protocolVersion: Int,
+        val latitude: Double,
+        val longitude: Double,
+        val altitudeM: Double?,
+    ) : OpenDroneIdMessage() {
+        override val messageType: Int get() = 4 // ODID System message
+
+        val hasValidPosition: Boolean
+            get() = !latitude.isNaN() && !longitude.isNaN() &&
+                    (latitude != 0.0 || longitude != 0.0)
+    }
+
+    /**
      * Unparsed/unknown message — kept so the scanner can count
      * non-fatal frames it skipped, useful for diagnostics in the
      * field.

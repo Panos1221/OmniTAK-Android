@@ -52,6 +52,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import soy.engindearing.omnitak.mobile.OmniTAKApp
 import soy.engindearing.omnitak.mobile.data.ChatConversation
@@ -60,6 +61,7 @@ import soy.engindearing.omnitak.mobile.data.ChatParticipant
 import soy.engindearing.omnitak.mobile.data.ChatRoom
 import soy.engindearing.omnitak.mobile.data.ChatStatus
 import soy.engindearing.omnitak.mobile.data.ChatXml
+import soy.engindearing.omnitak.mobile.data.CoTEvent
 import soy.engindearing.omnitak.mobile.data.UserPrefs
 import soy.engindearing.omnitak.mobile.domain.ChatStore
 import soy.engindearing.omnitak.mobile.domain.ServerManager
@@ -533,7 +535,7 @@ private fun sendChat(
     // ensureSelfUid lazily generates + persists one so the wire never
     // carries an ad-hoc identifier. Fixes #9 (two-contact ghost on
     // receiving ATAK clients).
-    val now = DateTimeFormatter.ISO_INSTANT.format(Instant.now())
+    val now = soy.engindearing.omnitak.mobile.data.CotXml.isoMillis()
     scope.launch {
         sendChatInner(app, convo, prefs, text, now)
     }
@@ -611,9 +613,44 @@ private suspend fun sendChatInner(
     // Route to the conversation's origin server for per-server DMs;
     // group/broadcast rooms (serverId == null) fan out to all servers.
     val sent = app.serverManager.sendCoT(generated.xml, serverId = convo.serverId)
+
+    // Off-grid mesh GeoChat — portnum-72 b-t-f TAKMessage so operators
+    // with radios and NO server can exchange chat. Step 2 of off-grid plan.
+    // Keep the existing MESH-CH*/MESH-DM-* portnum-1 path unchanged (above).
+    val meshState = app.meshtastic.activeConnectionState.value
+    val latestPrefs = app.userPrefsStore.prefs.first()
+    var meshSent = false
+    if (meshState is soy.engindearing.omnitak.mobile.domain.ConnectionState.Connected &&
+        latestPrefs.broadcastOverMesh
+    ) {
+        val meshCotEvent = CoTEvent(
+            uid = "GeoChat.${senderUid}.${ChatRoom.ALL_USERS}.${generated.messageId}",
+            type = "b-t-f",
+            lat = 0.0,
+            lon = 0.0,
+            callsign = prefs.callsign,
+            remarks = text,
+            teamName = prefs.team,
+        )
+        // Capture the mesh result instead of discarding it: in the
+        // flagship off-grid case (radio, no server) a successful mesh
+        // delivery used to render FAILED because only the server result
+        // was consulted. Real mesh errors get logged, not swallowed.
+        meshSent = runCatching { app.meshtastic.sendCoTOverMesh(meshCotEvent) }
+            .onFailure { t ->
+                android.util.Log.w(
+                    "ChatScreen",
+                    "mesh GeoChat send failed: ${t.javaClass.simpleName}: ${t.message}",
+                )
+            }
+            .getOrDefault(false)
+    }
+
+    // Delivered if EITHER transport accepted it — server CoT or
+    // portnum-72 mesh broadcast. FAILED now means both paths failed.
     app.chatStore.updateMessageStatus(
         conversationId = convo.id,
         messageId = generated.messageId,
-        status = if (sent) ChatStatus.SENT else ChatStatus.FAILED,
+        status = if (sent || meshSent) ChatStatus.SENT else ChatStatus.FAILED,
     )
 }

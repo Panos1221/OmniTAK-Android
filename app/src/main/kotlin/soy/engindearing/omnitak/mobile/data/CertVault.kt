@@ -20,6 +20,14 @@ import java.io.File
  * name, sanitized to remove path traversal characters. If the same name is
  * imported twice, the new bytes overwrite the old — callers that care about
  * versioning should namespace the name themselves.
+ *
+ * Security posture: the `.p12` blobs are NOT app-layer encrypted — they
+ * rely on Android file-based encryption plus `allowBackup=false` /
+ * dataExtractionRules (set in the manifest). Their passphrases, however,
+ * live in the Keystore-backed [SecureCredentialStore] rather than in
+ * plaintext JSON, so a leaked vault file alone is not enough to unlock the
+ * client key. Next hardening step if ever needed: EncryptedFile, or import
+ * the keys into AndroidKeyStore as non-exportable entries.
  */
 class CertVault(context: Context) {
 

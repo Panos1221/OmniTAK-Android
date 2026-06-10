@@ -14,10 +14,10 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
-import androidx.compose.material.icons.filled.Apps
 import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.FlightTakeoff
 import androidx.compose.material.icons.filled.Layers
+import androidx.compose.material.icons.filled.MyLocation
 import androidx.compose.material.icons.filled.Public
 import androidx.compose.material.icons.filled.Terrain
 import androidx.compose.material.icons.filled.Tune
@@ -36,29 +36,26 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import soy.engindearing.omnitak.mobile.i18n.Loc
 
 /**
  * Tools tab popup — mirrors the iOS ToolsLauncherSheet. A short
  * Material 3 ModalBottomSheet anchored at the bottom edge so the
  * underlying map (or whichever tab the user was on) stays visible
- * behind it. Two rows:
+ * behind it. Every row navigates somewhere real — placeholder rows
+ * advertising unported iOS features (the old "Full Tools…" snackbar
+ * dead-end) are not allowed; add the row when the tool exists.
  *
- *   1. **Lasso Select** — marquee entry per K9Blue SAR feedback.
- *      Tap routes to the map and starts freehand multi-select mode.
- *   2. **Full Tools…** — placeholder for the full tools grid that
- *      will mirror the iOS ATAKToolsView once we wire the Android
- *      equivalent. Tapping it surfaces a snackbar via the parent.
- *
- * The sheet's container color matches the LiquidGlassNavBar tactical
+ * The sheet's container color matches the bottom toolbar's tactical
  * dark surface so the popup reads as part of the same chrome family.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ToolsLauncherSheet(
     onLasso: () -> Unit,
-    onFullTools: () -> Unit,
     onUAS: () -> Unit = {},
     onOnvifCamera: () -> Unit = {},
+    onGoToCoordinate: () -> Unit = {},
     onCustomize: () -> Unit = {},
     onMapOverlays: () -> Unit = {},
     map3dEnabled: Boolean = false,
@@ -163,10 +160,10 @@ fun ToolsLauncherSheet(
             )
 
             ToolsRow(
-                icon = { Icon(Icons.Filled.Apps, contentDescription = null, tint = Color.White.copy(alpha = 0.55f)) },
-                title = "Full Tools…",
-                subtitle = "Drawing, Measure, CASEVAC, Routes, and more",
-                onClick = onFullTools,
+                icon = { Icon(Icons.Filled.MyLocation, contentDescription = null, tint = Color(0xFF66D9A0)) },
+                title = Loc.t("tools.gotoCoordinate"),
+                subtitle = Loc.t("tools.gotoCoordinate.desc"),
+                onClick = onGoToCoordinate,
             )
         }
     }
