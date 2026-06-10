@@ -303,6 +303,36 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
         soy.engindearing.omnitak.mobile.ui.components.KmlOverlayEvents.consumed()
     }
 
+    // Shared engine inputs — Cesium and MapLibre consume the SAME filtered
+    // contact list and gesture handlers, hoisted once so a fix lands on
+    // both engines together. Per-engine copies are the documented OmniTAK
+    // bug class "wired into one engine but missing from the other" (VC 77's
+    // dead 3D zoom buttons came from exactly this split).
+    val visibleContacts: List<soy.engindearing.omnitak.mobile.data.CoTEvent> =
+        if (contactsVisible) {
+            if (meshNodesVisible) contacts.values.toList()
+            // Hide mesh-origin contacts — they all share the `MESHTASTIC-`
+            // UID prefix produced by `MeshtasticCoTConverter.takUid`.
+            else contacts.values.filterNot { it.uid.startsWith("MESHTASTIC-") }
+        } else {
+            emptyList()
+        }
+    val handleMapLongPress: (LatLng, Offset) -> Unit = { latLng, offset ->
+        if (!measurementActive) {
+            radialLatLng = latLng
+            radialAnchor = offset
+        }
+    }
+    val handleContactTap: (soy.engindearing.omnitak.mobile.data.CoTEvent) -> Unit = { event ->
+        if (!measurementActive) {
+            editingMarker = event
+            markerSheetLatLng = LatLng(event.lat, event.lon)
+        }
+    }
+    val handleCameraChanged: (LatLng, Double) -> Unit = { target, zoom ->
+        app.mapCameraStore.update(target.latitude, target.longitude, zoom)
+    }
+
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -314,30 +344,13 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
         // menu the 2D/terrain engines use, tapping a contact opens its sheet.
         soy.engindearing.omnitak.mobile.ui.components.CesiumMapView(
             modifier = Modifier.fillMaxSize(),
-            contacts = if (contactsVisible) {
-                if (meshNodesVisible) contacts.values.toList()
-                else contacts.values.filterNot { it.uid.startsWith("MESHTASTIC-") }
-            } else {
-                emptyList()
-            },
+            contacts = visibleContacts,
             selfLat = selfFix?.lat,
             selfLon = selfFix?.lon,
             selfCallsign = userPrefs.callsign,
-            onLongPress = { latLng, offset ->
-                if (!measurementActive) {
-                    radialLatLng = latLng
-                    radialAnchor = offset
-                }
-            },
-            onContactTap = { event ->
-                if (!measurementActive) {
-                    editingMarker = event
-                    markerSheetLatLng = LatLng(event.lat, event.lon)
-                }
-            },
-            onCameraChanged = { target, zoom ->
-                app.mapCameraStore.update(target.latitude, target.longitude, zoom)
-            },
+            onLongPress = handleMapLongPress,
+            onContactTap = handleContactTap,
+            onCameraChanged = handleCameraChanged,
             // Same control ticks the 2D map uses — make +/- and "center on
             // me" drive the globe (VC 77: buttons did nothing on 3D).
             zoomInTrigger = zoomInTick,
@@ -363,24 +376,14 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
             },
             initialZoom = app.mapCameraStore.lastZoom
                 ?: if (selfFix != null) 12.0 else FALLBACK_GLOBAL_ZOOM,
-            onCameraIdle = { target, zoom ->
-                app.mapCameraStore.update(target.latitude, target.longitude, zoom)
-            },
+            onCameraIdle = handleCameraChanged,
             onMapReady = { map -> mapboxMap = map },
             // GAP-101 / GAP-107 — react to the basemap selection from Settings.
             // WMTS_CUSTOM uses the operator-pasted XYZ tile URL.
             styleJson = styleJsonForProvider(userPrefs.mapProvider, userPrefs.customTileUrl, terrain3d = map3dEnabled),
             terrain3d = map3dEnabled,
-            onMapLongPress = { latLng, offset ->
-                if (measurementActive) return@TacticalMap
-                radialLatLng = latLng
-                radialAnchor = offset
-            },
-            onContactTap = { event ->
-                if (measurementActive) return@TacticalMap
-                editingMarker = event
-                markerSheetLatLng = LatLng(event.lat, event.lon)
-            },
+            onMapLongPress = handleMapLongPress,
+            onContactTap = handleContactTap,
             onMapSingleTap = onMapSingleTap@ { latLng ->
                 // Hit-test existing mission waypoints first so a tap on
                 // a pin opens its edit sheet instead of adding a new
@@ -420,15 +423,7 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
             recenterTrigger = recenterTick,
             zoomInTrigger = zoomInTick,
             zoomOutTrigger = zoomOutTick,
-            contacts = if (contactsVisible) {
-                if (meshNodesVisible) contacts.values
-                // Hide mesh-origin contacts — they all share the
-                // `MESHTASTIC-` UID prefix produced by
-                // `MeshtasticCoTConverter.takUid`.
-                else contacts.values.filterNot { it.uid.startsWith("MESHTASTIC-") }
-            } else {
-                emptyList()
-            },
+            contacts = visibleContacts,
             measurementPoints = measurementPoints,
             drawings = if (drawingsVisible) {
                 drawings + buildInProgressDrawing(drawingKind, drawingPoints)
