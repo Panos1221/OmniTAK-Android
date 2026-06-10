@@ -51,6 +51,15 @@ class SelfPositionBroadcaster internal constructor(
     private val meshConnected: () -> Boolean = { false },
     private val meshBroadcastEnabled: () -> Boolean = { true },
     private val meshThrottleMs: Long = 30_000L,
+    // Single source of wire identity (#9): production routes through
+    // UserPrefsStore.ensureSelfUid via the secondary constructor so
+    // exactly one code path mints the ANDROID-<uuid>. The default here
+    // only exists for lambda-constructed unit tests.
+    private val mintSelfUid: suspend () -> String = {
+        val generated = "ANDROID-${UUID.randomUUID()}"
+        updatePrefs { it.copy(selfUid = generated) }
+        generated
+    },
 ) {
     @Volatile private var lastMeshSendMs: Long = 0L
     constructor(
@@ -78,6 +87,7 @@ class SelfPositionBroadcaster internal constructor(
         meshConnected = meshConnected,
         meshBroadcastEnabled = meshBroadcastEnabled,
         meshThrottleMs = meshThrottleMs,
+        mintSelfUid = { prefsStore.ensureSelfUid() },
     )
 
     private var job: Job? = null
@@ -107,9 +117,7 @@ class SelfPositionBroadcaster internal constructor(
     private suspend fun ensureSelfUid(): UserPrefs {
         val current = currentPrefs()
         if (current.selfUid.isNotBlank()) return current
-        val generated = "ANDROID-${UUID.randomUUID()}"
-        updatePrefs { it.copy(selfUid = generated) }
-        return current.copy(selfUid = generated)
+        return current.copy(selfUid = mintSelfUid())
     }
 
     private suspend fun currentPrefs(): UserPrefs = prefsFlow.first()

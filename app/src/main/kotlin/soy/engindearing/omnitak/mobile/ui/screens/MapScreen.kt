@@ -937,13 +937,15 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
                 },
                 onBulkDelete = {
                     val n = lassoSelection.totalCount
-                    val mySelfUid = userPrefs.callsign.takeIf { it.isNotBlank() }
-                    val selfFixUid = selfFix?.let { "OMNI-${userPrefs.callsign}" }
+                    // Wire identity is the persisted EUD UID (#9) — the
+                    // callsign is a display label and never matches real
+                    // ContactStore uids, so guarding on it was a no-op.
+                    val mySelfUid = userPrefs.selfUid.takeIf { it.isNotBlank() }
                     val targetEvents = selectedEvents
                     // Self-marker guard: never accidentally delete our
                     // own CoT — that would propagate "delete me" to
                     // every peer.
-                    val protected = setOfNotNull(mySelfUid, selfFixUid)
+                    val protected = setOfNotNull(mySelfUid)
                     val toRemove = targetEvents.filterNot { it.uid in protected }
 
                     // 1) Local removal — ContactStore is the source of
@@ -962,7 +964,9 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
                     //    if the connection is down the local removal
                     //    still stands.
                     scope.launch {
-                        val senderUid = mySelfUid ?: "OMNI-${java.util.UUID.randomUUID()}"
+                        // Tombstones go out under the same persisted EUD
+                        // UID as PPLI/chat/markers — not the callsign.
+                        val senderUid = app.userPrefsStore.ensureSelfUid()
                         toRemove.forEach { e ->
                             val xml = soy.engindearing.omnitak.mobile.domain.CotBuilders
                                 .buildDeleteEvent(targetUid = e.uid, senderUid = senderUid)
