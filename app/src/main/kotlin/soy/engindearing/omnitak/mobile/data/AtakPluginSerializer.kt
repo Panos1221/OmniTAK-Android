@@ -219,11 +219,7 @@ object AtakPluginSerializer {
 
     private fun millis(ms: Long): ULong = if (ms < 0) 0uL else ms.toULong()
 
-    private fun escape(s: String): String = s
-        .replace("&", "&amp;")
-        .replace("<", "&lt;")
-        .replace(">", "&gt;")
-        .replace("\"", "&quot;")
+    private fun escape(s: String): String = CotXml.escape(s)
 
     // endregion
 }

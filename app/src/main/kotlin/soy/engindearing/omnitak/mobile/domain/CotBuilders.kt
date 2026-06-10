@@ -1,31 +1,23 @@
 package soy.engindearing.omnitak.mobile.domain
 
 import soy.engindearing.omnitak.mobile.data.CoTEvent
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
-import java.util.TimeZone
+import soy.engindearing.omnitak.mobile.data.CotXml
 import java.util.UUID
 
 /**
  * Plain-XML builders for the CoT subset OmniTAK ships. Kept separate
- * from CoTEvent (parse-side) so the send-side string assembly is one
- * obvious place to look. No DOM construction; the schema is stable and
- * string concat is the most readable shape.
+ * from CoTEvent (parse-side) so the send-side message shapes are one
+ * obvious place to look. Envelope assembly + escaping live in
+ * [CotXml]; this object owns the per-message-type detail blocks.
  */
 object CotBuilders {
 
-    private val iso: SimpleDateFormat
-        get() = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", Locale.US).apply {
-            timeZone = TimeZone.getTimeZone("UTC")
-        }
-
     /** ISO-8601 UTC timestamp for "now". */
-    private fun nowIso(): String = iso.format(Date())
+    private fun nowIso(): String = CotXml.isoSeconds()
 
     /** ISO-8601 UTC timestamp for a given offset from now. */
     private fun isoOffset(seconds: Long): String =
-        iso.format(Date(System.currentTimeMillis() + seconds * 1000L))
+        CotXml.isoSeconds(System.currentTimeMillis() + seconds * 1000L)
 
     /**
      * `t-x-d-d` "Tasking Delete Data" — the canonical TAK delete
@@ -36,20 +28,21 @@ object CotBuilders {
      */
     fun buildDeleteEvent(targetUid: String, senderUid: String): String {
         val now = nowIso()
-        val stale = isoOffset(60)
-        val safeTarget = xmlEscape(targetUid)
-        val safeSender = xmlEscape(senderUid)
-        return """
-            <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-            <event version="2.0" uid="$safeSender" type="t-x-d-d" how="h-g-i-g-o"
-                   time="$now" start="$now" stale="$stale">
-              <point lat="0.0" lon="0.0" hae="0.0" ce="9999999.0" le="9999999.0"/>
-              <detail>
-                <link uid="$safeTarget" relation="p-p"/>
-                <__forcedelete/>
-              </detail>
-            </event>
-        """.trimIndent()
+        val detail = buildString {
+            append("<detail>")
+            append("<link uid=\"").append(CotXml.escape(targetUid)).append("\" relation=\"p-p\"/>")
+            append("<__forcedelete/>")
+            append("</detail>")
+        }
+        return CotXml.buildEvent(
+            uid = senderUid,
+            type = "t-x-d-d",
+            how = "h-g-i-g-o",
+            lat = 0.0, lon = 0.0, hae = 0.0,
+            timeIso = now,
+            staleIso = isoOffset(60),
+            detailXml = detail,
+        )
     }
 
     /**
@@ -64,30 +57,33 @@ object CotBuilders {
         // injected <dest> elements. Otherwise synthesize a minimal CoT.
         val now = event.timeIso ?: nowIso()
         val stale = event.staleIso ?: isoOffset(120)
-        val dests = destUids.joinToString("") { """<dest uid="${xmlEscape(it)}"/>""" }
-        val callsignAttr = event.callsign?.let { """ callsign="${xmlEscape(it)}"""" } ?: ""
-        val remarks = if (event.remarks.isNotBlank())
-            "<remarks>${xmlEscape(event.remarks)}</remarks>" else ""
-        // ATAK / iTAK render FEMA markers (and any custom-glyph marker)
-        // off the `iconsetpath` detail — emit it when present so peers
-        // with the catalog show the right symbol (#29).
-        val userIcon = event.iconsetPath?.takeIf { it.isNotBlank() }?.let {
-            """<usericon iconsetpath="${xmlEscape(it)}"/>"""
-        } ?: ""
-
-        return """
-            <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-            <event version="2.0" uid="${xmlEscape(event.uid)}" type="${xmlEscape(event.type)}" how="h-g-i-g-o"
-                   time="$now" start="$now" stale="$stale">
-              <point lat="${event.lat}" lon="${event.lon}" hae="${event.hae}" ce="${event.ce}" le="${event.le}"/>
-              <detail>
-                <contact$callsignAttr/>
-                $userIcon
-                $remarks
-                $dests
-              </detail>
-            </event>
-        """.trimIndent()
+        val detail = buildString {
+            append("<detail>")
+            append("<contact")
+            event.callsign?.let { append(" callsign=\"").append(CotXml.escape(it)).append('"') }
+            append("/>")
+            // ATAK / iTAK render FEMA markers (and any custom-glyph marker)
+            // off the `iconsetpath` detail — emit it when present so peers
+            // with the catalog show the right symbol (#29).
+            event.iconsetPath?.takeIf { it.isNotBlank() }?.let {
+                append("<usericon iconsetpath=\"").append(CotXml.escape(it)).append("\"/>")
+            }
+            if (event.remarks.isNotBlank()) {
+                append("<remarks>").append(CotXml.escape(event.remarks)).append("</remarks>")
+            }
+            destUids.forEach { append("<dest uid=\"").append(CotXml.escape(it)).append("\"/>") }
+            append("</detail>")
+        }
+        return CotXml.buildEvent(
+            uid = event.uid,
+            type = event.type,
+            how = "h-g-i-g-o",
+            lat = event.lat, lon = event.lon,
+            hae = event.hae, ce = event.ce, le = event.le,
+            timeIso = now,
+            staleIso = stale,
+            detailXml = detail,
+        )
     }
 
     /**
@@ -122,45 +118,47 @@ object CotBuilders {
         vehicleClass: soy.engindearing.omnitak.mobile.data.uas.VehicleClass =
             soy.engindearing.omnitak.mobile.data.uas.VehicleClass.AIR,
     ): String {
-        val now = nowIso()
-        val stale = isoOffset(staleSeconds)
         val type = when (vehicleClass) {
             soy.engindearing.omnitak.mobile.data.uas.VehicleClass.GROUND -> "a-f-G-E-V-U"
             soy.engindearing.omnitak.mobile.data.uas.VehicleClass.SURFACE,
             soy.engindearing.omnitak.mobile.data.uas.VehicleClass.SUB -> "a-f-S-X"
             else -> if (isFixedWing) "a-f-A-M-F-Q" else "a-f-A-M-H-Q"
         }
-        val trackXml = if (headingDeg != null || groundSpeedMps != null)
-            """<track course="${headingDeg ?: 0.0}" speed="${groundSpeedMps ?: 0.0}"/>""" else ""
-        val videoXml = if (!videoUri.isNullOrBlank())
-            """<video><ConnectionEntry uid="${xmlEscape(uid)}-VID" protocol="rtsp" address="${xmlEscape(videoUri)}"/></video>"""
-            else ""
-        val linkXml = if (!operatorUid.isNullOrBlank())
-            """<link uid="${xmlEscape(operatorUid)}" relation="p-p" type="a-f-G-U-C"/>""" else ""
-        return """
-            <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-            <event version="2.0" uid="${xmlEscape(uid)}" type="$type" how="m-g"
-                   time="$now" start="$now" stale="$stale">
-              <point lat="$latDeg" lon="$lonDeg" hae="$haeMeters" ce="9999999.0" le="9999999.0"/>
-              <detail>
-                <contact callsign="${xmlEscape(callsign)}"/>
-                <__group name="Cyan" role="UAV"/>
-                $trackXml
-                $videoXml
-                $linkXml
-              </detail>
-            </event>
-        """.trimIndent()
+        val detail = buildString {
+            append("<detail>")
+            append("<contact callsign=\"").append(CotXml.escape(callsign)).append("\"/>")
+            append("<__group name=\"Cyan\" role=\"UAV\"/>")
+            if (headingDeg != null || groundSpeedMps != null) {
+                append("<track course=\"").append(headingDeg ?: 0.0)
+                append("\" speed=\"").append(groundSpeedMps ?: 0.0).append("\"/>")
+            }
+            if (!videoUri.isNullOrBlank()) {
+                append("<video><ConnectionEntry uid=\"").append(CotXml.escape(uid))
+                append("-VID\" protocol=\"rtsp\" address=\"").append(CotXml.escape(videoUri))
+                append("\"/></video>")
+            }
+            if (!operatorUid.isNullOrBlank()) {
+                append("<link uid=\"").append(CotXml.escape(operatorUid))
+                append("\" relation=\"p-p\" type=\"a-f-G-U-C\"/>")
+            }
+            append("</detail>")
+        }
+        return CotXml.buildEvent(
+            uid = uid,
+            type = type,
+            how = "m-g",
+            lat = latDeg, lon = lonDeg, hae = haeMeters,
+            timeIso = nowIso(),
+            staleIso = isoOffset(staleSeconds),
+            detailXml = detail,
+        )
     }
 
     /** Fresh random TAK-style UID. */
     fun newUid(): String = UUID.randomUUID().toString()
 
-    /** Minimal XML attribute escape — handles the five XML predefined entities. */
-    fun xmlEscape(s: String): String = s
-        .replace("&", "&amp;")
-        .replace("<", "&lt;")
-        .replace(">", "&gt;")
-        .replace("\"", "&quot;")
-        .replace("'", "&apos;")
+    /** XML escape — delegates to the shared [CotXml.escape]. Kept as a
+     *  public alias because non-CoT XML emitters (KML/data-package
+     *  exporters) call it too. */
+    fun xmlEscape(s: String): String = CotXml.escape(s)
 }

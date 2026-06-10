@@ -10,10 +10,7 @@ import java.net.HttpURLConnection
 import java.net.URL
 import java.security.MessageDigest
 import java.security.SecureRandom
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
-import java.util.TimeZone
+import soy.engindearing.omnitak.mobile.data.CotXml
 
 /**
  * Minimal ONVIF PTZ + streaming client — enough to control a PTZ
@@ -236,14 +233,9 @@ class OnvifClient(
         """.trimIndent()
     }
 
-    private fun isoNow(): String =
-        SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", Locale.US)
-            .apply { timeZone = TimeZone.getTimeZone("UTC") }
-            .format(Date())
+    private fun isoNow(): String = CotXml.isoSeconds()
 
-    private fun esc(s: String) = s
-        .replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-        .replace("\"", "&quot;")
+    private fun esc(s: String) = CotXml.escape(s)
 
     companion object {
         private const val TAG = "OnvifClient"

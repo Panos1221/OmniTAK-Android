@@ -487,20 +487,12 @@ object AtakPluginParser {
         how: String,
         lat: Double, lon: Double, hae: Double, ce: Double, le: Double,
         detailXml: String,
-    ): String {
-        val t = timeIso ?: ""
-        val s = staleIso ?: t
-        return buildString {
-            append("<?xml version=\"1.0\" encoding=\"UTF-8\"?>")
-            append("<event version=\"2.0\" uid=\"${escape(uid)}\" type=\"${escape(type)}\"")
-            if (t.isNotEmpty()) append(" time=\"$t\" start=\"$t\"")
-            if (s.isNotEmpty()) append(" stale=\"$s\"")
-            append(" how=\"${escape(how)}\">")
-            append("<point lat=\"$lat\" lon=\"$lon\" hae=\"$hae\" ce=\"$ce\" le=\"$le\"/>")
-            append(detailXml)
-            append("</event>")
-        }
-    }
+    ): String = CotXml.buildEvent(
+        uid = uid, type = type, how = how,
+        lat = lat, lon = lon, hae = hae, ce = ce, le = le,
+        timeIso = timeIso, staleIso = staleIso ?: timeIso,
+        detailXml = detailXml,
+    )
 
     /** Bare-bones XML fallback that does not depend on `android.util.Xml`
      *  so unit tests can exercise it. Pulls the same fields the real
@@ -577,11 +569,7 @@ object AtakPluginParser {
 
     // region Misc helpers -------------------------------------------------
 
-    private fun escape(s: String): String = s
-        .replace("&", "&amp;")
-        .replace("<", "&lt;")
-        .replace(">", "&gt;")
-        .replace("\"", "&quot;")
+    private fun escape(s: String): String = CotXml.escape(s)
 
     private fun extractAttr(xml: String, tag: String, attr: String): String? {
         val openIdx = xml.indexOf("<$tag")
@@ -608,20 +596,10 @@ object AtakPluginParser {
         return unescape(xml.substring(o + open.length, c))
     }
 
-    private fun unescape(s: String): String = s
-        .replace("&lt;", "<")
-        .replace("&gt;", ">")
-        .replace("&quot;", "\"")
-        .replace("&apos;", "'")
-        .replace("&amp;", "&")
+    private fun unescape(s: String): String = CotXml.unescape(s)
 
-    private fun isoFromMillis(ms: ULong): String {
-        if (ms == 0uL) return ""
-        val date = java.util.Date(ms.toLong())
-        val fmt = java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSSXXX", java.util.Locale.US)
-        fmt.timeZone = java.util.TimeZone.getTimeZone("UTC")
-        return fmt.format(date)
-    }
+    private fun isoFromMillis(ms: ULong): String =
+        if (ms == 0uL) "" else CotXml.isoMillis(ms.toLong())
 
     // endregion
 }

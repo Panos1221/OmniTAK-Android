@@ -254,8 +254,7 @@ class OmniTAKApp : Application() {
                                     senderCallsign = senderCallsign,
                                     text = event.remarks.ifBlank { "[mesh chat]" },
                                     timeIso = event.timeIso
-                                        ?: java.time.format.DateTimeFormatter.ISO_INSTANT
-                                            .format(java.time.Instant.now()),
+                                        ?: soy.engindearing.omnitak.mobile.data.CotXml.isoMillis(),
                                     status = soy.engindearing.omnitak.mobile.data.ChatStatus.RECEIVED,
                                     isFromSelf = false,
                                 )

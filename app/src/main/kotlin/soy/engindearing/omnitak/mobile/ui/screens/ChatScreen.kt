@@ -535,7 +535,7 @@ private fun sendChat(
     // ensureSelfUid lazily generates + persists one so the wire never
     // carries an ad-hoc identifier. Fixes #9 (two-contact ghost on
     // receiving ATAK clients).
-    val now = DateTimeFormatter.ISO_INSTANT.format(Instant.now())
+    val now = soy.engindearing.omnitak.mobile.data.CotXml.isoMillis()
     scope.launch {
         sendChatInner(app, convo, prefs, text, now)
     }

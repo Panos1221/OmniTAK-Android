@@ -25,10 +25,6 @@ import soy.engindearing.omnitak.mobile.data.AtakPluginParser
 import soy.engindearing.omnitak.mobile.data.ChatMessage
 import soy.engindearing.omnitak.mobile.data.ChatStatus
 import soy.engindearing.omnitak.mobile.data.MeshDeviceConfig
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
-import java.util.TimeZone
 import soy.engindearing.omnitak.mobile.data.AtakPluginSerializer
 import soy.engindearing.omnitak.mobile.data.CoTEvent
 import soy.engindearing.omnitak.mobile.data.TakPacketParser
@@ -359,7 +355,7 @@ class MeshtasticManager(private val context: Context? = null) {
                     ?: node?.shortName?.takeIf { it.isNotBlank() }
                     ?: "Node ${"%08x".format(nodeId.toInt())}"
                 val now = System.currentTimeMillis()
-                val nowIso = chatTimeFormatter.format(Date(now))
+                val nowIso = soy.engindearing.omnitak.mobile.data.CotXml.isoSeconds(now)
                 val isDm = myNum != null && packet.to != BROADCAST_ADDR && packet.to == myNum
                 val conversationId = if (isDm) {
                     meshDmConversationId(nodeId)
@@ -603,10 +599,6 @@ class MeshtasticManager(private val context: Context? = null) {
         private const val GET_CONFIG_POSITION = 1
         private const val GET_CONFIG_LORA = 5
 
-        private val chatTimeFormatter = SimpleDateFormat(
-            "yyyy-MM-dd'T'HH:mm:ss'Z'",
-            Locale.US,
-        ).apply { timeZone = TimeZone.getTimeZone("UTC") }
         private const val PORTNUM_ATAK_PLUGIN = 72
         // Some ATAK plugin builds send via portnum 257 (ATAK_FORWARDER)
         // — accept both so OmniTAK can interop with both clients.
