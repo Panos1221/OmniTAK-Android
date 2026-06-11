@@ -21,3 +21,4 @@ include(":app")
 // one include() line here + one implementation(project(...)) in app/build.gradle.kts.
 include(":plugins:plugin-sdk")
 include(":plugins:example-adsb")
+include(":plugins:example-diagnostics")
