@@ -242,6 +242,7 @@ fun AppNav() {
                 SettingsScreen(
                     onOpenAbout = { nav.navigate("about") },
                     onOpenPlugins = { pluginId -> nav.navigate("settings/plugin/$pluginId") },
+                    onOpenPluginsList = { nav.navigate("plugins") },
                 )
             }
             composable("about") { AboutScreen() }

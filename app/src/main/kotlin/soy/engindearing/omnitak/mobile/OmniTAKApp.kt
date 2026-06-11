@@ -212,6 +212,14 @@ class OmniTAKApp : Application() {
      *  its camera-center provider + camera-follow at the MapScreen seam. */
     val adsbPlugin: soy.engindearing.adsb.AdsbPlugin by lazy { soy.engindearing.adsb.AdsbPlugin() }
 
+    /** The bundled Diagnostics reference plugin — the second example plugin,
+     *  exercising the radial-action + CoT-handler hooks ADS-B doesn't use.
+     *  DISABLED by default (parity with iOS's DiagnosticsPlugin); see
+     *  [loadBundledPlugins] for the first-run enable-flag seeding. */
+    val diagnosticsPlugin: soy.engindearing.diagnostics.DiagnosticsPlugin by lazy {
+        soy.engindearing.diagnostics.DiagnosticsPlugin()
+    }
+
     val contactStore: ContactStore by lazy { ContactStore() }
     /** External gyb_detect sensor over BLE GATT (Phase 3 of the gy6 plan).
      *  Parsed drones merge into ContactStore via the shared RID- UID;
@@ -480,15 +488,33 @@ class OmniTAKApp : Application() {
      * are statically linked into the app, which keeps OmniTAK Play-Store
      * compliant.
      *
+     * Bundled plugins default ON (so first-time users see ADS-B) EXCEPT those in
+     * [DISABLED_BY_DEFAULT], whose `plugin_<id>_enabled` flag is seeded to false
+     * on first run. This mirrors iOS's `registeredDisabledByDefault` and keeps
+     * the registry/UI's `getBoolean(key, true)` reads honest: once the flag is
+     * stored, the registry won't activate it and the Plugins list shows it OFF.
+     *
      * Each plugin's hooks are tagged with its id (via the registry's
      * `onActivating` bracket → [pluginHost.withActivating]) so disabling a
      * plugin later removes exactly its hooks.
      */
     private fun loadBundledPlugins() {
         soy.engindearing.omnitak.plugin.PluginRegistry.register(adsbPlugin)
+        soy.engindearing.omnitak.plugin.PluginRegistry.register(diagnosticsPlugin)
+
+        // First-run: seed the default-OFF plugins' enable flags to false so the
+        // default-true reads everywhere else (registry + Plugins UI) yield OFF.
+        val prefs = pluginPrefs()
+        for (id in DISABLED_BY_DEFAULT) {
+            val key = soy.engindearing.omnitak.plugin.PluginRegistry.enabledKey(id)
+            if (!prefs.contains(key)) {
+                prefs.edit().putBoolean(key, false).apply()
+            }
+        }
+
         soy.engindearing.omnitak.plugin.PluginRegistry.activateEnabled(
             host = pluginHost.asPluginHost(),
-            prefs = pluginPrefs(),
+            prefs = prefs,
             onActivating = { id, activate -> pluginHost.withActivating(id) { activate() } },
         )
     }
@@ -505,6 +531,11 @@ class OmniTAKApp : Application() {
      *  immediately stops/resumes pushes to `cotSink`. */
     private companion object {
         const val FGS_DEBOUNCE_MS = 750L
+
+        /** Bundled plugins that ship OFF on first run (parity with iOS's
+         *  `registeredDisabledByDefault`). The Diagnostics probe is an SDK
+         *  reference plugin, never on for shipping users. */
+        val DISABLED_BY_DEFAULT = setOf("soy.engindearing.diagnostics")
     }
 
     val meshtasticCoTBridge: MeshtasticCoTBridge by lazy {

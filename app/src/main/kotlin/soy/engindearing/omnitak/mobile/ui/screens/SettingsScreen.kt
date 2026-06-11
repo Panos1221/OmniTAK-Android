@@ -25,6 +25,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material.icons.filled.Extension
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -72,6 +73,7 @@ import soy.engindearing.omnitak.mobile.ui.components.ToolbarEditBus
 fun SettingsScreen(
     onOpenAbout: () -> Unit = {},
     onOpenPlugins: (pluginId: String) -> Unit = {},
+    onOpenPluginsList: () -> Unit = {},
 ) {
     val app = LocalContext.current.applicationContext as OmniTAKApp
     val prefs by app.userPrefsStore.prefs.collectAsState(initial = UserPrefs())
@@ -400,12 +402,45 @@ fun SettingsScreen(
                 onSelect = { lang -> Loc.setLanguage(lang) },
             )
 
-            // Plugins — each plugin registers a Settings row here via
-            // host.registerSettingsRow; tapping it opens the plugin's detail
-            // page (its settingsContent). Reads from the live host registration
-            // list so a plugin that activates/deactivates shows/hides its row.
+            // Plugins. The first row always browses the full Plugins list
+            // (every registered plugin + its enable toggle), so plugins that are
+            // OFF by default (e.g. Diagnostics) — and therefore register no
+            // settings row — are still discoverable. Below it, each ENABLED
+            // plugin's own settings row (registered via host.registerSettingsRow)
+            // deep-links to that plugin's detail page. Reads from the live host
+            // registration list so a plugin that activates/deactivates
+            // shows/hides its row.
+            SectionHeader("Plugins")
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(8.dp))
+                    .clickable { onOpenPluginsList() }
+                    .padding(vertical = 10.dp, horizontal = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                androidx.compose.material3.Icon(
+                    Icons.Filled.Extension,
+                    contentDescription = null,
+                    tint = TacticalAccent,
+                    modifier = Modifier.size(22.dp),
+                )
+                Spacer(Modifier.width(12.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("Manage plugins", color = MaterialTheme.colorScheme.onBackground)
+                    Text(
+                        "Bundled plugins and their on/off toggles",
+                        color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+                androidx.compose.material3.Icon(
+                    Icons.Filled.ChevronRight,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.4f),
+                )
+            }
             if (app.pluginHost.settingsRows.isNotEmpty()) {
-                SectionHeader("Plugins")
                 app.pluginHost.settingsRows.forEach { row ->
                     Row(
                         modifier = Modifier
