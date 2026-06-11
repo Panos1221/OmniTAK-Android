@@ -71,3 +71,9 @@
 # Suppress notes about packages R8 sees but doesn't act on; clean output.
 -dontwarn org.jetbrains.annotations.**
 -dontwarn javax.annotation.**
+
+# --- Tink crypto: its optional remote KeysDownloader references the Google
+# HTTP client and Joda-Time, which we don't bundle (no network key fetch).
+# R8 full mode errors on the missing classes; suppress (not used at runtime).
+-dontwarn com.google.api.client.**
+-dontwarn org.joda.time.**
