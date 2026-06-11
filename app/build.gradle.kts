@@ -129,10 +129,13 @@ android {
 dependencies {
     // Plugin SDK + bundled plugins. The SDK carries the OmniTAKPlugin contract
     // and the registry; example-adsb is the ADS-B reference plugin extracted
-    // out of :app. Compile-time modules only — no dynamic/remote code, so the
-    // app stays Play-Store compliant.
+    // out of :app; example-diagnostics is a second reference plugin (radial +
+    // CoT hooks, OFF by default) for parity with iOS's DiagnosticsPlugin.
+    // Compile-time modules only — no dynamic/remote code, so the app stays
+    // Play-Store compliant.
     implementation(project(":plugins:plugin-sdk"))
     implementation(project(":plugins:example-adsb"))
+    implementation(project(":plugins:example-diagnostics"))
 
     val composeBom = platform("androidx.compose:compose-bom:2024.12.01")
     implementation(composeBom)
