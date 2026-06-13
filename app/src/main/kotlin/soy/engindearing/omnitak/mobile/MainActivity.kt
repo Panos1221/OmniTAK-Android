@@ -84,6 +84,25 @@ class MainActivity : ComponentActivity() {
     private fun handleImportIntent(intent: Intent?) {
         if (intent?.action != Intent.ACTION_VIEW) return
         val uri = intent.data ?: return
+
+        // Profile import takes priority — check BEFORE server-config because
+        // both share the `omnitak://` scheme (profile = omnitak://profile?d=…).
+        // Route through the same ImportPreviewDialog used by the in-app scanner
+        // so the user can review and confirm before the profile is applied.
+        if (DeepLinkImport.isProfileConfig(uri)) {
+            val profile = DeepLinkImport.parseProfileConfig(uri)
+            if (profile == null) {
+                Toast.makeText(this, "Invalid profile QR code", Toast.LENGTH_LONG).show()
+                return
+            }
+            val app = applicationContext as OmniTAKApp
+            // Publish to the pending-import flow; AppNav observes it and
+            // shows ImportPreviewDialog — same flow as the in-app QR scanner.
+            app.pendingProfileImport.value = profile
+            Log.i("OmniTAK", "Queued deep-link profile import '${profile.name}' for user review")
+            return
+        }
+
         if (!DeepLinkImport.isServerConfig(uri)) return
 
         val cfg = DeepLinkImport.parseServerConfig(uri)
