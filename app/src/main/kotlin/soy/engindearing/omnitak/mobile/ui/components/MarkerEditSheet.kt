@@ -1,6 +1,7 @@
 package soy.engindearing.omnitak.mobile.ui.components
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -15,6 +16,9 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Category
+import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -34,6 +38,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -49,6 +54,23 @@ data class MarkerEditResult(
     val affiliation: CoTAffiliation,
     val altitudeMeters: Double?,
     val remarks: String,
+    /**
+     * Issue #98 — the full CoT type the operator chose from the icon
+     * picker (e.g. `a-h-G-U-C-A`, or `b-m-p-s-m` for a Spot Map point). Null
+     * means "no specific symbol was picked" — the caller falls back to a
+     * generic per-affiliation point (`a-<aff>-G-U-C`), preserving the
+     * pre-icon-suite behavior.
+     */
+    val cotType: String?,
+    /**
+     * Issue #98 — `<usericon iconsetpath>` for the chosen icon when it belongs
+     * to a standard TAK icon set (Spot Map today). Null for MIL-STD-2525 picks.
+     * Emitted on the wire so peers render the identical glyph.
+     */
+    val iconsetPath: String? = null,
+    /** 8-hex opaque ARGB for the CoT `<color argb>` element (Spot Map swatch).
+     *  Null for MIL-STD picks, which carry their look in the symbol itself. */
+    val argbHex: String? = null,
 )
 
 /**
@@ -68,6 +90,13 @@ fun MarkerEditSheet(
     initialAffiliation: CoTAffiliation = CoTAffiliation.FRIEND,
     initialAltitude: Double? = null,
     initialRemarks: String = "",
+    /** Issue #98 — the marker's current CoT type, so an existing marker
+     *  re-opens with the symbol it already carries. Null = no specific
+     *  symbol picked yet (generic per-affiliation point). */
+    initialCotType: String? = null,
+    /** Issue #98 — the marker's current `usericon` iconset path (Spot Map),
+     *  so an existing spot marker re-opens with its swatch highlighted. */
+    initialIconsetPath: String? = null,
     editing: Boolean = false,
     onSave: (MarkerEditResult) -> Unit,
     onDelete: (() -> Unit)? = null,
@@ -88,6 +117,24 @@ fun MarkerEditSheet(
         mutableStateOf(initialAltitude?.let { "%.0f".format(it) } ?: "")
     }
     var remarks by remember(initialRemarks) { mutableStateOf(initialRemarks) }
+    // Issue #98 — selected CoT type from the icon picker. Null until the
+    // operator picks a specific symbol; the affiliation chips below keep it
+    // re-affiliated so picking "armor" then flipping to hostile yields the
+    // hostile-armor symbol without re-opening the picker.
+    var cotType by remember(initialCotType) { mutableStateOf(initialCotType) }
+    // Issue #98 — Spot Map `usericon` path + swatch colour, when the operator
+    // picked a TAK-suite icon rather than a MIL-STD symbol. Cleared whenever a
+    // MIL-STD symbol or an affiliation chip is chosen so the two stay coherent.
+    var iconsetPath by remember(initialIconsetPath) { mutableStateOf(initialIconsetPath) }
+    var argbHex by remember(initialIconsetPath) {
+        mutableStateOf(
+            initialIconsetPath?.let {
+                soy.engindearing.omnitak.mobile.data.symbology.TakIconRegistry.SpotIcon
+                    .fromIconsetPath(it)?.argbHex
+            },
+        )
+    }
+    var iconPickerOpen by remember { mutableStateOf(false) }
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -155,10 +202,39 @@ fun MarkerEditSheet(
                     AffiliationChip(
                         affiliation = a,
                         selected = affiliation == a,
-                        onClick = { affiliation = a },
+                        onClick = {
+                            affiliation = a
+                            // Keep a picked MIL-STD symbol on the new side (#98).
+                            // Spot Map points are affiliation-agnostic (always
+                            // b-m-p-s-m) — leave their type + iconset path intact.
+                            if (iconsetPath == null) {
+                                cotType = cotType?.let {
+                                    soy.engindearing.omnitak.mobile.data.symbology
+                                        .MilStdIconService.withAffiliation(it, a.code)
+                                }
+                            }
+                        },
                     )
                 }
             }
+
+            // Issue #98 — symbol / icon row. Tapping opens the MIL-STD-2525
+            // picker; the chosen CoT type rides into the result so the placed
+            // marker resolves to that exact symbol (same path received markers
+            // use). When nothing is picked the marker stays a generic
+            // per-affiliation point — the pre-icon-suite behavior.
+            Spacer(Modifier.height(16.dp))
+            Text(
+                "Symbol",
+                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f),
+                style = MaterialTheme.typography.labelLarge,
+            )
+            Spacer(Modifier.height(8.dp))
+            MarkerSymbolRow(
+                cotType = cotType,
+                iconsetPath = iconsetPath,
+                onClick = { iconPickerOpen = true },
+            )
 
             Spacer(Modifier.height(16.dp))
             OutlinedTextField(
@@ -213,6 +289,9 @@ fun MarkerEditSheet(
                                 affiliation = affiliation,
                                 altitudeMeters = altitudeText.toDoubleOrNull(),
                                 remarks = remarks.trim(),
+                                cotType = cotType,
+                                iconsetPath = iconsetPath,
+                                argbHex = argbHex,
                             )
                         )
                     },
@@ -224,6 +303,124 @@ fun MarkerEditSheet(
             }
             Spacer(Modifier.height(16.dp))
         }
+    }
+
+    // Issue #98 — TAK icon-suite picker (Spot Map + MIL-STD-2525). A MIL-STD
+    // pick sets the CoT type and snaps the affiliation chips to match the
+    // symbol's own affiliation; a Spot Map pick sets the iconset path + swatch
+    // and leaves affiliation alone (spot points are affiliation-agnostic).
+    MarkerIconPickerSheet(
+        visible = iconPickerOpen,
+        selectedCotType = cotType,
+        selectedIconsetPath = iconsetPath,
+        onPick = { choice ->
+            cotType = choice.cotType
+            iconsetPath = choice.iconsetPath
+            argbHex = choice.argbHex
+            // Only re-affiliate for MIL-STD symbols; Spot Map paths carry no
+            // affiliation in the CoT type (always b-m-p-s-m).
+            if (choice.iconsetPath == null) {
+                affiliation = CoTAffiliation.fromCode(choice.cotType.getOrNull(2))
+            }
+            iconPickerOpen = false
+        },
+        onDismiss = { iconPickerOpen = false },
+    )
+}
+
+/**
+ * Issue #98 — current-symbol row inside [MarkerEditSheet]. Shows the
+ * rendered MIL-STD glyph + label for the picked CoT type (or a "Choose
+ * symbol" prompt when none is picked) and opens the picker on tap.
+ */
+@Composable
+private fun MarkerSymbolRow(
+    cotType: String?,
+    iconsetPath: String?,
+    onClick: () -> Unit,
+) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    // Issue #98 — a Spot Map pick is shown as its coloured dot + name, not a
+    // MIL-STD glyph (its type is the affiliation-agnostic b-m-p-s-m).
+    val spot = remember(iconsetPath) {
+        iconsetPath?.let {
+            soy.engindearing.omnitak.mobile.data.symbology.TakIconRegistry.SpotIcon.fromIconsetPath(it)
+        }
+    }
+    val def = remember(cotType, spot) {
+        if (spot != null) null
+        else cotType?.let {
+            soy.engindearing.omnitak.mobile.data.symbology.MilStdIconService.getDefinition(it)
+        }
+    }
+    val bitmap by androidx.compose.runtime.produceState<androidx.compose.ui.graphics.ImageBitmap?>(
+        initialValue = null, cotType, spot,
+    ) {
+        value = if (cotType == null || spot != null) null
+        else kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
+            soy.engindearing.omnitak.mobile.data.symbology.MilStdIconCache
+                .bitmapFor(context, cotType, sizePx = 72)
+                ?.asImageBitmap()
+        }
+    }
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(TacticalBackground)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        androidx.compose.foundation.layout.Box(
+            Modifier.size(36.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            val bmp = bitmap
+            when {
+                spot != null -> androidx.compose.foundation.layout.Box(
+                    Modifier
+                        .size(28.dp)
+                        .clip(CircleShape)
+                        .background(spot.color)
+                        .border(1.dp, Color.Black.copy(alpha = 0.4f), CircleShape),
+                )
+                bmp != null -> androidx.compose.foundation.Image(
+                    bitmap = bmp,
+                    contentDescription = def?.label,
+                    modifier = Modifier.size(32.dp),
+                )
+                else -> androidx.compose.material3.Icon(
+                    imageVector = Icons.Filled.Category,
+                    contentDescription = null,
+                    tint = TacticalAccent.copy(alpha = 0.8f),
+                    modifier = Modifier.size(24.dp),
+                )
+            }
+        }
+        Spacer(Modifier.width(12.dp))
+        Column(Modifier.weight(1f)) {
+            // Prefer the catalogue label; fall back to the raw type for a
+            // marker carrying a type the picker doesn't enumerate (e.g. a
+            // received RID track being re-typed), then to the prompt.
+            Text(
+                spot?.let { "Spot ${it.displayName}" } ?: def?.label ?: cotType ?: "Choose symbol",
+                color = MaterialTheme.colorScheme.onBackground,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Text(
+                iconsetPath ?: cotType ?: "Generic point (by affiliation)",
+                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
+                fontFamily = FontFamily.Monospace,
+                style = MaterialTheme.typography.bodySmall,
+            )
+        }
+        androidx.compose.material3.Icon(
+            imageVector = Icons.Filled.ChevronRight,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.5f),
+        )
     }
 }
 

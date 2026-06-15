@@ -14,6 +14,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.viewinterop.AndroidView
 import org.json.JSONObject
@@ -64,8 +65,18 @@ fun CesiumMapView(
     // silently ignoring it (the "panel never appears on Cesium" class).
     panTarget: LatLng? = null,
     panTargetTick: Int = 0,
+    /** Issue #95 — when true, globe rotates back to heading 0 (north-up)
+     *  and the scene's rotation gestures are suppressed via the JS bridge.
+     *  The Cesium HTML side must implement OmniBridge.setNorthUpLocked(bool). */
+    northUpLocked: Boolean = false,
+    /** Issue #95/#96 — tap the compass → snap globe heading to north. */
+    snapNorthTrigger: Int = 0,
 ) {
     val density = LocalDensity.current.density
+    // #98 — app context to rasterise the Markers / Google badge glyphs into the
+    // `icon` data-URLs the globe billboards (held across recompositions so the
+    // pushEntities closure can read it).
+    val appContext = LocalContext.current.applicationContext
     val mainHandler = remember { Handler(Looper.getMainLooper()) }
     val ready = remember { mutableStateOf(false) }
     val webViewRef = remember { mutableStateOf<WebView?>(null) }
@@ -77,12 +88,18 @@ fun CesiumMapView(
     val onLongPressState = rememberUpdatedState(onLongPress)
     val onContactTapState = rememberUpdatedState(onContactTap)
     val onCameraState = rememberUpdatedState(onCameraChanged)
+    // #95 — read the latest lock state inside the JS bridge callbacks so a
+    // globe that opens while north-up is already on gets the lock applied on
+    // bridge-ready (the change-driven DisposableEffect below only fires on a
+    // toggle, never on first composition).
+    val northUpLockedState = rememberUpdatedState(northUpLocked)
 
     fun pushEntities() {
         val wv = webViewRef.value ?: return
         if (!ready.value) return
         val json = buildCesiumEntitiesJson(
             contactsState.value, selfLatState.value, selfLonState.value, selfCallsignState.value,
+            context = appContext,
         )
         wv.evaluateJavascript("window.OmniBridge.setEntities($json);", null)
     }
@@ -125,6 +142,16 @@ fun CesiumMapView(
                                 // operator was looking (#78).
                                 seedInheritedCamera()
                                 pushEntities()
+                                // #95 — apply the persisted north-up lock on
+                                // first ready so the globe respects it without
+                                // waiting for a toggle.
+                                if (northUpLockedState.value) {
+                                    webViewRef.value?.evaluateJavascript(
+                                        "if(window.OmniBridge&&window.OmniBridge.setNorthUpLocked)" +
+                                            "window.OmniBridge.setNorthUpLocked(true);",
+                                        null,
+                                    )
+                                }
                             }
                         }
 
@@ -208,6 +235,31 @@ fun CesiumMapView(
         if (panTargetTick > 0 && t != null && ready.value) {
             webViewRef.value?.evaluateJavascript(
                 "window.OmniBridge.flyTo({lat:${t.latitude},lon:${t.longitude},range:3000});",
+                null,
+            )
+        }
+        onDispose { }
+    }
+
+    // Issue #95 — north-up lock on the Cesium globe. When ready, push the
+    // lock state to the JS bridge.  setNorthUpLocked(true) should disable
+    // rotation gestures in the scene and fly to heading 0; false restores.
+    DisposableEffect(northUpLocked) {
+        if (ready.value) {
+            webViewRef.value?.evaluateJavascript(
+                "if(window.OmniBridge&&window.OmniBridge.setNorthUpLocked)" +
+                    "window.OmniBridge.setNorthUpLocked(${northUpLocked});",
+                null,
+            )
+        }
+        onDispose { }
+    }
+    // Issue #95/#96 — manual snap to north (compass tap when lock is off).
+    DisposableEffect(snapNorthTrigger) {
+        if (snapNorthTrigger > 0 && ready.value) {
+            webViewRef.value?.evaluateJavascript(
+                "if(window.OmniBridge&&window.OmniBridge.snapToNorth)" +
+                    "window.OmniBridge.snapToNorth();",
                 null,
             )
         }

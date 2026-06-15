@@ -65,6 +65,7 @@ import soy.engindearing.omnitak.mobile.data.GeoMath
 import soy.engindearing.omnitak.mobile.domain.ConnectionState
 import soy.engindearing.omnitak.mobile.i18n.Loc
 import soy.engindearing.omnitak.mobile.ui.components.ATAKStatusBar
+import soy.engindearing.omnitak.mobile.ui.components.CompassOverlay
 import soy.engindearing.omnitak.mobile.ui.components.ContactsPanel
 import soy.engindearing.omnitak.mobile.ui.components.LayersDialog
 import soy.engindearing.omnitak.mobile.ui.components.MarkerEditSheet
@@ -150,6 +151,10 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
     var recenterTick by remember { mutableStateOf(0) }
     var zoomInTick by remember { mutableStateOf(0) }
     var zoomOutTick by remember { mutableStateOf(0) }
+    // Issue #95/#96 — snap-to-north trigger (compass tap when lock is off)
+    // and live bearing for the compass overlay.
+    var snapNorthTick by remember { mutableStateOf(0) }
+    var currentBearing by remember { mutableStateOf(0.0) }
     var measurementActive by remember { mutableStateOf(false) }
     // UAS waypoint-add mode — when true, taps on the map drop mission
     // waypoints instead of any other action. Toggled from the mission
@@ -372,6 +377,7 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
     }
     val handleCameraChanged: (LatLng, Double, Double) -> Unit = { target, zoom, bearing ->
         cameraTarget = target
+        currentBearing = bearing
         app.mapCameraStore.update(target.latitude, target.longitude, zoom, bearing)
     }
     // Keep the ADSB query box following the viewport — significant pans
@@ -392,6 +398,12 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
             c?.let { soy.engindearing.omnitak.plugin.PluginLatLng(it.latitude, it.longitude) }
         }
     }
+
+    // Issue #97 — keep-screen-on now lives at the AppNav / single-Activity
+    // scope (see AppNav.kt) so the screen stays awake on every destination
+    // while OmniTAK is foreground, not just while the map tab is composed.
+    // Scoping it here previously tore the flag down the moment the operator
+    // opened another tab — the exact reported failure mode.
 
     Box(
         modifier = Modifier
@@ -449,6 +461,9 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
             // Center) fly the globe instead of being silently eaten.
             panTarget = panTarget,
             panTargetTick = panTargetTick,
+            // Issue #95 — north-up lock + compass snap for the globe.
+            northUpLocked = userPrefs.northUpLocked,
+            snapNorthTrigger = snapNorthTick,
         )
         // Plugin map overlays on the GLOBE engine. The handle is null here
         // (no MapLibreMap on Cesium), so an overlay that can only draw on
@@ -569,6 +584,9 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
                 soy.engindearing.omnitak.mobile.ui.components.KmlOverlayRenderer
                     .applyRaster(style, rasterImagery, app.rasterOverlayStore)
             },
+            // Issue #95 — north-up lock + tap-to-reset support.
+            northUpLocked = userPrefs.northUpLocked,
+            snapNorthTrigger = snapNorthTick,
         )
         // Plugin map overlays on the MAPLIBRE engine. The handle is the live
         // MapLibreMap (captured via onMapReady above; null briefly until the
@@ -1257,6 +1275,25 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
             modifier = Modifier.align(Alignment.BottomEnd),
         )
 
+        // Issue #96 — compass overlay. Floats at top-start corner, just below
+        // the status bar. Shows live bearing; tapping snaps map to north.
+        // The MapLibre built-in compass is already on top-start (issue #81),
+        // but it disappears when north-up — this one is always visible and
+        // provides the manual snap action.
+        CompassOverlay(
+            bearingDeg = currentBearing,
+            onTapToNorth = {
+                if (userPrefs.northUpLocked) {
+                    // Already locked — snap is automatic; just a no-op tap.
+                } else {
+                    snapNorthTick++
+                }
+            },
+            modifier = Modifier
+                .align(Alignment.TopStart)
+                .padding(start = 12.dp, top = 72.dp),
+        )
+
         // Map control stack — zoom in / zoom out / center-on-me — at the
         // BottomStart corner so it stays reachable one-handed without
         // opening the tools drawer. Mirrors the iOS map controls layout.
@@ -1490,6 +1527,9 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
             initialAffiliation = editingMarker?.affiliation ?: CoTAffiliation.FRIEND,
             initialAltitude = editingMarker?.hae?.takeIf { it != 0.0 },
             initialRemarks = editingMarker?.remarks ?: "",
+            // Issue #98 — re-open an existing marker on the symbol it carries.
+            initialCotType = editingMarker?.type,
+            initialIconsetPath = editingMarker?.iconsetPath,
             editing = editingMarker != null,
             onSave = { result ->
                 val ll = markerSheetLatLng
@@ -1497,12 +1537,21 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
                     val uid = editingMarker?.uid ?: "local-${System.currentTimeMillis()}"
                     val event = CoTEvent(
                         uid = uid,
-                        type = "a-${result.affiliation.code}-G-U-C",
+                        // Issue #98 — use the picked MIL-STD symbol when the
+                        // operator chose one; otherwise keep the generic
+                        // per-affiliation point so the pre-icon-suite default
+                        // is preserved.
+                        type = result.cotType ?: "a-${result.affiliation.code}-G-U-C",
                         lat = ll.latitude,
                         lon = ll.longitude,
                         hae = result.altitudeMeters ?: 0.0,
                         callsign = result.callsign,
                         remarks = result.remarks,
+                        // Issue #98 — Spot Map (or other TAK-suite) glyph. The
+                        // iconset path + colour ride the wire so peers render
+                        // the identical dot; null for MIL-STD picks.
+                        iconsetPath = result.iconsetPath,
+                        colorArgb = result.argbHex?.toLong(16)?.toInt(),
                     )
                     app.contactStore.ingest(event)
                     val verb = if (editingMarker != null) Loc.t("marker.verb.updated")
