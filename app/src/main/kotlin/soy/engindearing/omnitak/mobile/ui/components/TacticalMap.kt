@@ -83,6 +83,8 @@ fun TacticalMap(
      *  frame. When false, falls back to the legacy `ic_self_marker`
      *  tinted disc. Sourced from [soy.engindearing.omnitak.mobile.data.UserPrefs.useMilStdSelfSymbol]. */
     useMilStdSelfSymbol: Boolean = true,
+    /** #83 — render the self-marker as a triangle pointing in heading direction. */
+    selfMarkerTriangle: Boolean = false,
     /** TAK team name used to tint the self-marker — e.g. "Cyan", "Red",
      *  "Orange". Resolved via [TakTeamColor.forName]; unrecognised names
      *  fall back to cyan (0xFF00FFFF) to match CivTAK's default for
@@ -115,6 +117,8 @@ fun TacticalMap(
      *  caller can re-apply style-level content (e.g. KML vector overlays)
      *  that a setStyle wipes. */
     onStyleReady: ((org.maplibre.android.maps.MapLibreMap, Style) -> Unit)? = null,
+    /** #82 — called when the operator taps the self-marker. Opens reposition sheet. */
+    onSelfMarkerTap: (() -> Unit)? = null,
     /** Issue #89 — system status-bar inset height in dp. Under
      *  enableEdgeToEdge the map draws under the status bar, so the built-in
      *  MapLibre compass margin adds this on top of [COMPASS_TOP_MARGIN_DP]
@@ -141,6 +145,8 @@ fun TacticalMap(
     val currentFollowMe by rememberUpdatedState(followMeActive)
     val currentUseMilStd by rememberUpdatedState(useMilStdSelfSymbol)
     val currentTeamColor by rememberUpdatedState(selfTeamColor)
+    val currentOnSelfMarkerTap by rememberUpdatedState(onSelfMarkerTap)
+    val currentSelfMarkerTriangle by rememberUpdatedState(selfMarkerTriangle)
     // Issue #75 — whether the puck is currently rendered dimmed (stale
     // restored fix). Plain holder, not MutableState: nothing recomposes
     // off it; the effects below read/write it imperatively.
@@ -185,6 +191,7 @@ fun TacticalMap(
                         activateLocation(
                             map, style, context, currentUseMilStd, currentTeamColor,
                             seedFix = currentSelfFix, puck = puckAppearance,
+                            selfMarkerTriangle = currentSelfMarkerTriangle,
                         )
                     }
                     // Cold-start 3D: if the persisted pref has terrain on,
@@ -244,6 +251,22 @@ fun TacticalMap(
                     }
                     val cb = currentContactTap ?: return@addOnMapClickListener false
                     val tapPx = map.projection.toScreenLocation(latLng)
+                    // #82 — tap on self-marker opens reposition sheet
+                    val selfTapCb = currentOnSelfMarkerTap
+                    if (selfTapCb != null) {
+                        val fix = currentSelfFix
+                        if (fix != null) {
+                            val selfPx = map.projection.toScreenLocation(LatLng(fix.lat, fix.lon))
+                            val selfDist = kotlin.math.hypot(
+                                (selfPx.x - tapPx.x).toDouble(),
+                                (selfPx.y - tapPx.y).toDouble(),
+                            )
+                            if (selfDist < TAP_HIT_RADIUS_PX) {
+                                selfTapCb()
+                                return@addOnMapClickListener true
+                            }
+                        }
+                    }
                     var best: CoTEvent? = null
                     var bestDist = Float.MAX_VALUE
                     currentContacts.forEach { c ->
@@ -313,6 +336,7 @@ fun TacticalMap(
                     activateLocation(
                         map, style, context, currentUseMilStd, currentTeamColor,
                         seedFix = currentSelfFix, puck = puckAppearance,
+                        selfMarkerTriangle = currentSelfMarkerTriangle,
                     )
                 }
                 if (map.locationComponent.isLocationComponentActivated) {
@@ -344,6 +368,7 @@ fun TacticalMap(
                             buildPuckOptions(
                                 context, style, currentUseMilStd, currentTeamColor,
                                 dimmed = staleNow,
+                                selfMarkerTriangle = currentSelfMarkerTriangle,
                             ),
                         )
                         puckAppearance.dimmed = staleNow
@@ -476,6 +501,7 @@ fun TacticalMap(
                             buildPuckOptions(
                                 context, style, currentUseMilStd, currentTeamColor,
                                 dimmed = puckAppearance.dimmed,
+                                selfMarkerTriangle = currentSelfMarkerTriangle,
                             ),
                         )
                     }
@@ -691,6 +717,7 @@ private fun activateLocation(
     selfTeamColor: String = "Cyan",
     seedFix: SelfFix? = null,
     puck: PuckAppearance = PuckAppearance(),
+    selfMarkerTriangle: Boolean = false,
 ) {
     // Issue #75 — when the best position available at activation is a
     // restored (persisted) fix that is already old, start the puck dimmed
@@ -702,7 +729,7 @@ private fun activateLocation(
     val options = LocationComponentActivationOptions.builder(context, style)
         .useDefaultLocationEngine(true)
         .locationComponentOptions(
-            buildPuckOptions(context, style, useMilStdSelfSymbol, selfTeamColor, dimmed),
+            buildPuckOptions(context, style, useMilStdSelfSymbol, selfTeamColor, dimmed, selfMarkerTriangle),
         )
         .build()
     map.locationComponent.activateLocationComponent(options)
@@ -732,11 +759,33 @@ private fun buildPuckOptions(
     useMilStdSelfSymbol: Boolean,
     selfTeamColor: String,
     dimmed: Boolean,
+    selfMarkerTriangle: Boolean = false,
 ): LocationComponentOptions {
     // Resolve the ARGB tint from the operator's configured TAK team name
     // ("Cyan", "Red", "Orange", …). Falls back to cyan — CivTAK default
     // for unaffiliated friendlies — when the name isn't in the palette.
     val teamArgb: Int = TakTeamColor.forName(selfTeamColor) ?: 0xFF00FFFF.toInt()
+
+    // #83 — triangle self-marker overrides both MIL-STD and disc modes
+    if (selfMarkerTriangle) {
+        val triangleBmp = createTriangleBitmap(64)
+        val triangleStale = fadeBitmap(triangleBmp, STALE_MARKER_ALPHA)
+        style.addImage("omnitak-self-triangle", triangleBmp)
+        style.addImage("omnitak-self-triangle-stale", triangleStale)
+        val imgName = if (dimmed) "omnitak-self-triangle-stale" else "omnitak-self-triangle"
+        return LocationComponentOptions.builder(context)
+            .pulseEnabled(!dimmed)
+            .pulseColor(teamArgb)
+            .pulseSingleDuration(2200f)
+            .accuracyColor(teamArgb)
+            .accuracyAlpha(0.18f)
+            .enableStaleState(true)
+            .staleStateTimeout(SelfFixPersistence.STALE_AFTER_MS)
+            .bearingName(imgName)
+            .foregroundName(imgName)
+            .foregroundStaleName("omnitak-self-triangle-stale")
+            .build()
+    }
 
     // Self-position marker. When [useMilStdSelfSymbol] is true (default),
     // render with a MIL-STD-2525 friendly combat ground symbol
@@ -830,6 +879,25 @@ private fun fadeBitmap(src: android.graphics.Bitmap, alpha: Int): android.graphi
 /** Issue #75 — [argb] with its alpha channel replaced by [alpha]. */
 private fun fadeArgb(argb: Int, alpha: Int): Int =
     (argb and 0x00FFFFFF) or (alpha shl 24)
+
+/** #83 — white triangle bitmap for the triangle self-marker mode. */
+private fun createTriangleBitmap(sizePx: Int = 64): android.graphics.Bitmap {
+    val bmp = android.graphics.Bitmap.createBitmap(sizePx, sizePx, android.graphics.Bitmap.Config.ARGB_8888)
+    val canvas = android.graphics.Canvas(bmp)
+    val paint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG)
+    paint.color = android.graphics.Color.WHITE
+    val path = android.graphics.Path()
+    path.moveTo(sizePx / 2f, 0f)
+    path.lineTo(sizePx.toFloat(), sizePx.toFloat())
+    path.lineTo(0f, sizePx.toFloat())
+    path.close()
+    canvas.drawPath(path, paint)
+    paint.color = android.graphics.Color.DKGRAY
+    paint.style = android.graphics.Paint.Style.STROKE
+    paint.strokeWidth = 3f
+    canvas.drawPath(path, paint)
+    return bmp
+}
 
 /** Issue #75 — adapt a [SelfFix] for LocationComponent.forceLocationUpdate.
  *  NaN accuracy (restored fixes) is simply omitted. */
