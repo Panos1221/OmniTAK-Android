@@ -145,6 +145,12 @@ data class UserPrefs(
      *  the point goes stale (fresh <1m full opacity, aging 1–5m, stale >5m). Off
      *  by default — opt-in so the default map look is unchanged. */
     val stalenessOverlayEnabled: Boolean = false,
+    /** #179 — relay/gateway mode. When on AND the device is connected to BOTH a
+     *  TAK server and a mesh, CoT is bridged both ways: mesh-only nodes appear
+     *  server-side and server contacts reach the mesh (ATAK Meshtastic-gateway
+     *  parity). DANGEROUS on a busy server (LoRa airtime), so OFF by default and
+     *  hard-throttled server→mesh. See [MeshServerRelay]. */
+    val relayGatewayEnabled: Boolean = false,
 )
 
 class UserPrefsStore(private val context: Context) {
@@ -189,6 +195,7 @@ class UserPrefsStore(private val context: Context) {
     private val KEY_KEEP_SCREEN_ON  = booleanPreferencesKey("keep_screen_on")
     private val KEY_SELF_MARKER_TRIANGLE = booleanPreferencesKey("selfMarkerTriangle")
     private val KEY_STALENESS_OVERLAY = booleanPreferencesKey("staleness_overlay_enabled")
+    private val KEY_RELAY_GATEWAY = booleanPreferencesKey("relay_gateway_enabled")
 
     val prefs: Flow<UserPrefs> = context.userPrefsDataStore.data.map { p -> readFrom(p) }
 
@@ -234,6 +241,7 @@ class UserPrefsStore(private val context: Context) {
             p[KEY_KEEP_SCREEN_ON]  = next.keepScreenOn
             p[KEY_SELF_MARKER_TRIANGLE] = next.selfMarkerTriangle
             p[KEY_STALENESS_OVERLAY] = next.stalenessOverlayEnabled
+            p[KEY_RELAY_GATEWAY] = next.relayGatewayEnabled
         }
     }
 
@@ -292,6 +300,11 @@ class UserPrefsStore(private val context: Context) {
     /** Persist the operator's chosen mesh framework (Meshtastic | MeshCore). */
     suspend fun setSelectedMeshFramework(value: MeshFramework) {
         update { it.copy(selectedMeshFramework = value) }
+    }
+
+    /** #179 — persist the mesh↔server relay/gateway toggle (default off). */
+    suspend fun setRelayGatewayEnabled(value: Boolean) {
+        update { it.copy(relayGatewayEnabled = value) }
     }
 
     /**
@@ -355,6 +368,7 @@ class UserPrefsStore(private val context: Context) {
         keepScreenOn   = p[KEY_KEEP_SCREEN_ON]  ?: false,
         selfMarkerTriangle = p[KEY_SELF_MARKER_TRIANGLE] ?: false,
         stalenessOverlayEnabled = p[KEY_STALENESS_OVERLAY] ?: false,
+        relayGatewayEnabled = p[KEY_RELAY_GATEWAY] ?: false,
     )
 
     // ATAK / OpenTakServer canonical team names are Title Case ("Cyan",

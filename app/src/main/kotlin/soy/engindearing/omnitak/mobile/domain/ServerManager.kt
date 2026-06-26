@@ -46,6 +46,13 @@ class ServerManager(
     // AppPluginHost.dispatchCoT. Nullable + a plain lambda keeps this class
     // headless for unit tests and inert when no plugin registers a CoT handler.
     private val pluginCoTDispatch: ((CoTEvent) -> Boolean)? = null,
+    // #179 — relay/gateway seam. Invoked for every inbound server CoT (already
+    // tagged with its TAK_SERVER source) AFTER core ingest, so the mesh↔server
+    // relay can decide whether to forward it down to the LoRa mesh. Nullable +
+    // plain lambda keeps this class headless for unit tests and inert when no
+    // gateway is wired (the default). The relay itself enforces enabled / both-
+    // transports-connected / throttle, so this fires unconditionally.
+    private val inboundRelay: ((CoTEvent) -> Unit)? = null,
     // Injected scope lets unit tests substitute a TestScope/StandardTestDispatcher
     // so coroutines run under test-scheduler control (advanceUntilIdle / runCurrent).
     // Production callers omit this and get the default app-wide scope.
@@ -224,6 +231,10 @@ class ServerManager(
                         // happened, so "consumed" does not un-ingest.
                         contactStore?.ingest(event)
                         pluginCoTDispatch?.invoke(event)
+                        // #179 — offer the server-origin CoT to the mesh↔server
+                        // relay. It no-ops unless the gateway is on and both
+                        // transports are up, and hard-throttles server→mesh.
+                        inboundRelay?.invoke(event)
                     }
                 }
             }

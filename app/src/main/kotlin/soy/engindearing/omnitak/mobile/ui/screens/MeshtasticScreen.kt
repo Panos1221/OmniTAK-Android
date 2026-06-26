@@ -199,6 +199,34 @@ fun MeshtasticScreen(
                                 menuOpen = false
                             },
                         )
+                        // #179 — gateway: relay CoT both ways between the mesh
+                        // and the TAK server. Off by default; only acts when
+                        // both transports are connected. Hard-throttled
+                        // server→mesh to protect LoRa airtime.
+                        DropdownMenuItem(
+                            text = {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Text(
+                                        "Relay mesh ↔ server (gateway)",
+                                        modifier = Modifier.weight(1f),
+                                    )
+                                    if (userPrefs.relayGatewayEnabled) {
+                                        Icon(
+                                            Icons.Filled.Check,
+                                            contentDescription = "Enabled",
+                                            tint = TacticalAccent,
+                                        )
+                                    }
+                                }
+                            },
+                            onClick = {
+                                val next = !userPrefs.relayGatewayEnabled
+                                coScope.launch {
+                                    app.userPrefsStore.setRelayGatewayEnabled(next)
+                                }
+                                menuOpen = false
+                            },
+                        )
                         DropdownMenuItem(
                             text = { Text("Disconnect") },
                             enabled = anyConnected,

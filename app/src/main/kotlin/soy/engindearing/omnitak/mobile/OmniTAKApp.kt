@@ -378,12 +378,16 @@ class OmniTAKApp : Application() {
                         }
                         // #180 — tag the mesh transport so the detail sheet
                         // shows "Mesh: Meshtastic".
-                        MeshCoTRouter.Destination.CONTACT -> contactStore.ingest(
-                            event.copy(
+                        MeshCoTRouter.Destination.CONTACT -> {
+                            val tagged = event.copy(
                                 source = soy.engindearing.omnitak.mobile.data.CoTSource
                                     .mesh("Meshtastic"),
-                            ),
-                        )
+                            )
+                            contactStore.ingest(tagged)
+                            // #179 — offer the mesh-origin point to the gateway
+                            // relay (no-op unless on + both transports up).
+                            relayInbound(tagged)
+                        }
                     }
                 }
             }
@@ -473,12 +477,16 @@ class OmniTAKApp : Application() {
                         }
                         // #180 — tag the mesh transport so the detail sheet
                         // shows "Mesh: MeshCore".
-                        MeshCoTRouter.Destination.CONTACT -> contactStore.ingest(
-                            event.copy(
+                        MeshCoTRouter.Destination.CONTACT -> {
+                            val tagged = event.copy(
                                 source = soy.engindearing.omnitak.mobile.data.CoTSource
                                     .mesh("MeshCore"),
-                            ),
-                        )
+                            )
+                            contactStore.ingest(tagged)
+                            // #179 — offer the mesh-origin point to the gateway
+                            // relay (no-op unless on + both transports up).
+                            relayInbound(tagged)
+                        }
                     }
                 }
             }
@@ -629,7 +637,42 @@ class OmniTAKApp : Application() {
             // Plugin SDK — fan inbound CoT (after core ingest) to any
             // plugin-registered handlers. Inert until a plugin registers one.
             pluginCoTDispatch = { event -> pluginHost.dispatchCoT(event) },
+            // #179 — offer server-origin CoT to the mesh↔server relay so the
+            // gateway can push the server picture down to the LoRa mesh. The
+            // event is already tagged TAK_SERVER by the inbound path above.
+            inboundRelay = { event -> relayInbound(event) },
         )
+    }
+
+    /** #179 — the mesh↔server CoT gateway. Bridges inbound CoT both ways when
+     *  the operator has enabled it AND the device is connected to both a TAK
+     *  server and a mesh. Loop-proof via the #180 [CoTSource] tag and hard
+     *  per-uid throttling server→mesh. See [MeshServerRelay]. */
+    val meshServerRelay: soy.engindearing.omnitak.mobile.domain.MeshServerRelay by lazy {
+        soy.engindearing.omnitak.mobile.domain.MeshServerRelay(
+            sendToServer = { xml -> serverManager.sendCoT(xml) },
+            sendToMesh = { event -> activeMeshManager.sendCoTOverMesh(event) },
+            // Prefer the original wire XML (preserves full detail / symbology);
+            // fall back to rebuilding the minimal envelope from the parsed fields.
+            eventToServerXml = { event ->
+                event.rawXml
+                    ?: soy.engindearing.omnitak.mobile.domain.CotBuilders.rebuildEvent(event, emptyList())
+            },
+            serverConnected = {
+                serverManager.connectionState.value is ConnectionState.Connected
+            },
+            meshConnected = {
+                activeMeshManager.activeConnectionState.value is ConnectionState.Connected
+            },
+            relayEnabled = { cachedPrefs.value.relayGatewayEnabled },
+        )
+    }
+
+    /** #179 — non-suspending entry the inbound sinks (server + mesh) call for
+     *  every CoT. Launches the relay decision on [appScope] so the sinks stay
+     *  non-blocking; the relay itself no-ops unless the gateway is on. */
+    private fun relayInbound(event: soy.engindearing.omnitak.mobile.data.CoTEvent) {
+        appScope.launch { meshServerRelay.onInbound(event, event.source) }
     }
 
     /** Multi-server mission / data-package sync over the Marti REST API.
