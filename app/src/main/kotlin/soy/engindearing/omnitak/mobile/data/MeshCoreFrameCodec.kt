@@ -36,7 +36,18 @@ object MeshCoreFrameCodec {
     const val CMD_GET_NEXT_MSG: Byte = 0x0A
     const val CMD_GET_BATTERY: Byte = 0x14
     const val CMD_DEVICE_QUERY: Byte = 0x16
+    /**
+     * SET_CHANNEL — create/update a channel slot (#172). Command byte is
+     * 0x20 per the companion protocol's "Set Channel" command (NOT 0x3E,
+     * which is "Send Channel Data Datagram"). 50-byte fixed layout:
+     * `[0x20][index][name 32B null-padded][secret 16B]`.
+     */
+    const val CMD_SET_CHANNEL: Byte = 0x20
     const val CMD_GET_STATS: Byte = 0x38
+
+    /** Fixed field sizes for [buildSetChannel] (companion_protocol "Set Channel"). */
+    private const val CHANNEL_NAME_LEN = 32
+    private const val CHANNEL_SECRET_LEN = 16
 
     private const val TXT_TYPE_PLAIN: Byte = 0x00
     private const val DEVICE_QUERY_ARG: Byte = 0x03
@@ -115,6 +126,34 @@ object MeshCoreFrameCodec {
             putInt(lonE6)
             putInt(alt)
         }
+        return out
+    }
+
+    /**
+     * SET_CHANNEL (#172) — create or update a channel slot from an imported
+     * MeshCore share. Fixed 50-byte layout per the companion protocol:
+     *   `[0x20][index][name 32B UTF-8 null-padded][secret 16B]`
+     *
+     * Index 0 is the public channel (no secret → 16 zero bytes). Indices 1-7
+     * carry a 16-byte secret. The name is truncated to 32 UTF-8 bytes and
+     * null-padded; the secret is truncated/zero-padded to exactly 16 bytes.
+     * The 32-byte-secret variant is unsupported by firmware (returns ERROR),
+     * so we only ever emit the 16-byte form.
+     */
+    fun buildSetChannel(index: Int, name: String, secret: ByteArray): ByteArray {
+        val out = ByteArray(2 + CHANNEL_NAME_LEN + CHANNEL_SECRET_LEN) // 50 bytes
+        out[0] = CMD_SET_CHANNEL
+        out[1] = index.coerceIn(0, 7).toByte()
+
+        // Name — UTF-8, truncated to 32 bytes, the remainder stays 0x00.
+        val nameBytes = name.toByteArray(StandardCharsets.UTF_8)
+        val nameLen = nameBytes.size.coerceAtMost(CHANNEL_NAME_LEN)
+        System.arraycopy(nameBytes, 0, out, 2, nameLen)
+
+        // Secret — exactly 16 bytes; truncate or zero-pad. Empty = public.
+        val secretLen = secret.size.coerceAtMost(CHANNEL_SECRET_LEN)
+        System.arraycopy(secret, 0, out, 2 + CHANNEL_NAME_LEN, secretLen)
+
         return out
     }
 

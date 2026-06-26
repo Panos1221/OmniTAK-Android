@@ -65,6 +65,7 @@ class MainActivity : ComponentActivity() {
         }
 
         handleImportIntent(intent)
+        handleChatNotificationIntent(intent)
 
         // Re-open the TLS socket on every foreground resume if Android
         // killed the read loop while we were backgrounded (Doze, app
@@ -91,6 +92,20 @@ class MainActivity : ComponentActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         handleImportIntent(intent)
+        handleChatNotificationIntent(intent)
+    }
+
+    /**
+     * #173 follow-up — a mesh-chat notification tap carries
+     * [MeshChatNotifier.EXTRA_CONVERSATION_ID]. Publish it to
+     * [OmniTAKApp.pendingChatConversation] so AppNav opens that thread.
+     */
+    private fun handleChatNotificationIntent(intent: Intent?) {
+        val convoId = intent?.getStringExtra(
+            soy.engindearing.omnitak.mobile.domain.MeshChatNotifier.EXTRA_CONVERSATION_ID,
+        ) ?: return
+        if (convoId.isBlank()) return
+        (applicationContext as OmniTAKApp).pendingChatConversation.value = convoId
     }
 
     /**

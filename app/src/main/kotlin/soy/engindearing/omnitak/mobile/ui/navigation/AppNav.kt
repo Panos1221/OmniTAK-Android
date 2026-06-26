@@ -124,6 +124,16 @@ fun AppNav() {
         editing = true
     }
 
+    // #173 follow-up — a mesh-chat notification tap publishes a conversation
+    // id to OmniTAKApp.pendingChatConversation; open that thread, then clear
+    // the flag so a recomposition doesn't re-navigate.
+    val pendingChat by app.pendingChatConversation.collectAsState()
+    LaunchedEffect(pendingChat) {
+        val convoId = pendingChat ?: return@LaunchedEffect
+        navigateTo("chat?convoId=$convoId")
+        app.pendingChatConversation.value = null
+    }
+
     // Settings / Tools popup can request edit mode from another screen.
     val editGen by ToolbarEditBus.editGeneration.collectAsState()
     LaunchedEffect(editGen) {
@@ -264,6 +274,7 @@ fun AppNav() {
                 MeshtasticScreen(
                     onOpenTopology = { nav.navigate("mesh_topology") },
                     onOpenDeviceSettings = { nav.navigate("mesh/device-settings") },
+                    onOpenChannels = { nav.navigate("mesh/channels") },
                     onOpenChat = { convoId ->
                         nav.navigate("chat?convoId=$convoId") {
                             popUpTo(nav.graph.startDestinationId) { saveState = true }
@@ -278,6 +289,11 @@ fun AppNav() {
             }
             composable("mesh/device-settings") {
                 MeshDeviceSettingsScreen(onDone = { nav.popBackStack() })
+            }
+            composable("mesh/channels") {
+                soy.engindearing.omnitak.mobile.ui.screens.MeshChannelShareScreen(
+                    onBack = { nav.popBackStack() },
+                )
             }
             composable("missionsync") {
                 soy.engindearing.omnitak.mobile.ui.screens.MissionSyncScreen(onBack = { nav.popBackStack() })

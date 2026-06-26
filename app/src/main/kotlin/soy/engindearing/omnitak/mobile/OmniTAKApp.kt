@@ -300,6 +300,19 @@ class OmniTAKApp : Application() {
     }
     val drawingStore: DrawingStore by lazy { DrawingStore() }
     val mapCameraStore: MapCameraStore by lazy { MapCameraStore(userPrefsStore) }
+
+    /** #173 — raises an Android notification for incoming mesh GeoChat. Wired
+     *  into both mesh managers' chat-ingest paths below. */
+    val meshChatNotifier: soy.engindearing.omnitak.mobile.domain.MeshChatNotifier by lazy {
+        soy.engindearing.omnitak.mobile.domain.MeshChatNotifier(this)
+    }
+
+    /** #173 follow-up — a conversation id a notification tap wants opened.
+     *  MainActivity publishes the tapped notification's EXTRA_CONVERSATION_ID
+     *  here; AppNav observes it, navigates to that chat thread, then clears it
+     *  (back to null) so a recomposition doesn't re-navigate. */
+    val pendingChatConversation = MutableStateFlow<String?>(null)
+
     val chatStore: ChatStore by lazy {
         ChatStore().also { store ->
             // GAP-122 — Mesh primary channel always visible so users can
@@ -354,6 +367,9 @@ class OmniTAKApp : Application() {
                                 )
                             }
                             chatStore.ingest(chatMsg)
+                            // #173 — surface a notification for the incoming
+                            // GeoChat (no-op for our own echoes / blank text).
+                            meshChatNotifier.notify(chatMsg)
                         }
                         MeshCoTRouter.Destination.CONTACT -> contactStore.ingest(event)
                     }
@@ -401,6 +417,8 @@ class OmniTAKApp : Application() {
                     isGroup = !msg.conversationId.startsWith("MESH-DM-"),
                 )
                 chatStore.ingest(msg)
+                // #173 — notify on incoming mesh text from a peer.
+                meshChatNotifier.notify(msg)
             }
         }
     }
@@ -438,6 +456,8 @@ class OmniTAKApp : Application() {
                                 isFromSelf = false,
                             )
                             chatStore.ingest(chatMsg)
+                            // #173 — notify on incoming MeshCore GeoChat.
+                            meshChatNotifier.notify(chatMsg)
                         }
                         MeshCoTRouter.Destination.CONTACT -> contactStore.ingest(event)
                     }
@@ -458,6 +478,8 @@ class OmniTAKApp : Application() {
                     isGroup = !msg.conversationId.startsWith("MESHCORE-DM-"),
                 )
                 chatStore.ingest(msg)
+                // #173 — notify on incoming MeshCore text from a peer.
+                meshChatNotifier.notify(msg)
             }
         }
     }

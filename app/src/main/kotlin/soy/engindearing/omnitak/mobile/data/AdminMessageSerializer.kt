@@ -32,6 +32,96 @@ object AdminMessageSerializer {
     /** Meshtastic portnum for AdminMessage payloads on the local radio. */
     private const val PORTNUM_ADMIN_APP: ULong = 6UL
 
+    // region Channel apply (#172) ---------------------------------------
+
+    /**
+     * Build a ToRadio with `AdminMessage { set_channel { Channel } }` from an
+     * imported [MeshChannel] — the channel-apply path for a scanned/pasted
+     * `meshtastic.org/e/#…` share.
+     *
+     * Channel.index = [index]; settings carries the name + PSK verbatim;
+     * Channel.role = PRIMARY (1) for index 0, SECONDARY (2) otherwise, so a
+     * shared channel slots in as a secondary without stealing the primary
+     * frequency.
+     *
+     * Field numbers (channel.proto / admin.proto):
+     *   AdminMessage.set_channel  = 33  (Channel submessage)
+     *   Channel.index             = 1   (int32)
+     *   Channel.settings          = 2   (ChannelSettings submessage)
+     *   Channel.role              = 3   (enum: DISABLED=0, PRIMARY=1, SECONDARY=2)
+     *   ChannelSettings.psk       = 2   (bytes)
+     *   ChannelSettings.name      = 3   (string)
+     *   ChannelSettings.uplink_enabled   = 5 (bool)
+     *   ChannelSettings.downlink_enabled = 6 (bool)
+     */
+    fun buildSetChannel(channel: MeshChannel, index: Int): ByteArray {
+        // ChannelSettings — PSK first (field 2) then name (field 3), matching
+        // the share-URL encoder field order.
+        val settings = ByteArrayOutputStream().apply {
+            if (channel.psk.isNotEmpty()) {
+                MeshWire.appendLenField(this, field = 2, bytes = channel.psk)
+            }
+            if (channel.name.isNotEmpty()) {
+                MeshWire.appendString(this, field = 3, value = channel.name)
+            }
+            if (channel.uplinkEnabled) MeshWire.appendVarintField(this, field = 5, value = 1UL)
+            if (channel.downlinkEnabled) MeshWire.appendVarintField(this, field = 6, value = 1UL)
+        }.toByteArray()
+
+        val safeIndex = index.coerceIn(0, 7)
+        val role = if (safeIndex == 0) CHANNEL_ROLE_PRIMARY else CHANNEL_ROLE_SECONDARY
+
+        val channelMsg = ByteArrayOutputStream().apply {
+            // index — omit when 0 (proto3 default) to match firmware encoding.
+            if (safeIndex != 0) {
+                MeshWire.appendVarintField(this, field = 1, value = safeIndex.toULong())
+            }
+            MeshWire.appendTag(this, field = 2, wire = 2)
+            MeshWire.appendVarint(this, settings.size.toULong())
+            write(settings)
+            MeshWire.appendVarintField(this, field = 3, value = role.toULong())
+        }.toByteArray()
+
+        val admin = ByteArrayOutputStream().apply {
+            MeshWire.appendTag(this, field = 33, wire = 2)
+            MeshWire.appendVarint(this, channelMsg.size.toULong())
+            write(channelMsg)
+        }.toByteArray()
+        return wrapToRadio(admin)
+    }
+
+    /**
+     * Build a ToRadio with `AdminMessage { set_config { device { rebroadcast_mode } } }`.
+     *
+     * PatoG1899's "rebroadcast only known channels" request maps to
+     * [RebroadcastMode.KNOWN_ONLY] (or [RebroadcastMode.LOCAL_ONLY]). Field
+     * numbers (config.proto):
+     *   AdminMessage.set_config       = 34
+     *   Config.device                 = 1
+     *   DeviceConfig.rebroadcast_mode = 6  (enum)
+     */
+    fun buildSetRebroadcastMode(mode: RebroadcastMode): ByteArray {
+        val deviceConfig = ByteArrayOutputStream().apply {
+            MeshWire.appendVarintField(this, field = 6, value = mode.wire.toULong())
+        }.toByteArray()
+        val config = ByteArrayOutputStream().apply {
+            MeshWire.appendTag(this, field = 1, wire = 2)
+            MeshWire.appendVarint(this, deviceConfig.size.toULong())
+            write(deviceConfig)
+        }.toByteArray()
+        val admin = ByteArrayOutputStream().apply {
+            MeshWire.appendTag(this, field = 34, wire = 2)
+            MeshWire.appendVarint(this, config.size.toULong())
+            write(config)
+        }.toByteArray()
+        return wrapToRadio(admin)
+    }
+
+    private const val CHANNEL_ROLE_PRIMARY = 1
+    private const val CHANNEL_ROLE_SECONDARY = 2
+
+    // endregion
+
     // region Public builders --------------------------------------------
 
     /**

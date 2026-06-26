@@ -76,6 +76,7 @@ import soy.engindearing.omnitak.mobile.ui.theme.TacticalSurface
 fun MeshtasticScreen(
     onOpenTopology: () -> Unit = {},
     onOpenDeviceSettings: () -> Unit = {},
+    onOpenChannels: () -> Unit = {},
     onOpenChat: (String) -> Unit = {},
 ) {
     val app = LocalContext.current.applicationContext as OmniTAKApp
@@ -134,6 +135,14 @@ fun MeshtasticScreen(
                             onClick = {
                                 menuOpen = false
                                 onOpenDeviceSettings()
+                            },
+                        )
+                        // #172 — channel share / scan-to-join entry point.
+                        DropdownMenuItem(
+                            text = { Text("Channels") },
+                            onClick = {
+                                menuOpen = false
+                                onOpenChannels()
                             },
                         )
                         DropdownMenuItem(

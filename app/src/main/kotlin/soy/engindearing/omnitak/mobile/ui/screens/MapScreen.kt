@@ -1822,6 +1822,9 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
                             .rebuildEvent(event, destUids = emptyList())
                         val sent = runCatching { app.serverManager.sendCoT(xml) }
                             .getOrDefault(false)
+                        // #171 — also fan the marker out over the active mesh
+                        // (TAKPacketV2 on port 78) so off-grid peers see it.
+                        runCatching { app.activeMeshManager.sendCoTOverMesh(event) }
                         toast(
                             if (sent) Loc.t("marker.toast.sent", verb, result.callsign)
                             else Loc.t("marker.toast.local", verb, result.callsign)
@@ -1941,6 +1944,8 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
                                 .rebuildEvent(event, destUids = emptyList())
                             val sent = runCatching { app.serverManager.sendCoT(xml) }
                                 .getOrDefault(false)
+                            // #171 — fan out over the active mesh too.
+                            runCatching { app.activeMeshManager.sendCoTOverMesh(event) }
                             toast(
                                 if (sent) Loc.t("marker.toast.droppedSent", coordText)
                                 else Loc.t("marker.toast.droppedLocal", coordText)
@@ -1977,21 +1982,22 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
                     // FEMA catalog see the right glyph; receivers without
                     // it fall back to the friendly-installation render
                     // ATAK/iTAK does for `a-f-G-I-*`.
+                    val femaEvent = soy.engindearing.omnitak.mobile.data.CoTEvent(
+                        uid = uid,
+                        type = picked.icon.cotType,
+                        lat = ll.latitude,
+                        lon = ll.longitude,
+                        callsign = picked.name,
+                        remarks = picked.remarks,
+                        iconsetPath = picked.icon.iconsetPath,
+                    )
                     scope.launch {
                         val xml = soy.engindearing.omnitak.mobile.domain.CotBuilders
-                            .rebuildEvent(
-                                soy.engindearing.omnitak.mobile.data.CoTEvent(
-                                    uid = uid,
-                                    type = picked.icon.cotType,
-                                    lat = ll.latitude,
-                                    lon = ll.longitude,
-                                    callsign = picked.name,
-                                    remarks = picked.remarks,
-                                    iconsetPath = picked.icon.iconsetPath,
-                                ),
-                                destUids = emptyList(),
-                            )
+                            .rebuildEvent(femaEvent, destUids = emptyList())
                         runCatching { app.serverManager.sendCoT(xml) }
+                        // #171 — fan the FEMA marker out over the active mesh
+                        // (TAKPacketV2 carries the iconset so peers render it).
+                        runCatching { app.activeMeshManager.sendCoTOverMesh(femaEvent) }
                     }
                     toast("Dropped ${picked.icon.label} “${picked.name}”")
                 }
@@ -2183,6 +2189,8 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
                                 reportText = result.reportText,
                             )
                         val sent = runCatching { app.serverManager.sendCoT(xml) }.getOrDefault(false)
+                        // #171 — fan the report marker out over the active mesh too.
+                        runCatching { app.activeMeshManager.sendCoTOverMesh(event) }
                         toast(
                             if (sent) "${result.type.name} sent to server"
                             else "${result.type.name} saved — local only (no server)",

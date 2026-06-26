@@ -24,6 +24,7 @@ import soy.engindearing.omnitak.mobile.data.ChatMessage
 import soy.engindearing.omnitak.mobile.data.ChatStatus
 import soy.engindearing.omnitak.mobile.data.CoTEvent
 import soy.engindearing.omnitak.mobile.data.CotXml
+import soy.engindearing.omnitak.mobile.data.MeshCoreChannel
 import soy.engindearing.omnitak.mobile.data.MeshCoreFrameCodec
 import soy.engindearing.omnitak.mobile.data.MeshCoreUartClient
 import soy.engindearing.omnitak.mobile.data.MeshNode
@@ -333,6 +334,22 @@ class MeshCoreManager(private val context: Context? = null) : MeshFrameworkManag
         val a = c.send(latLon)
         val b = c.send(MeshCoreFrameCodec.buildSendSelfAdvert())
         return a && b
+    }
+
+    /**
+     * #172 — push an imported [MeshCoreChannel] (from a scanned/pasted
+     * `meshcore://channel/add?…` share) onto the connected companion radio at
+     * [index] via CMD_SET_CHANNEL (0x20). Public channel (empty secret) lands
+     * at index 0; private channels at 1-7. Returns true on wire-layer dispatch.
+     */
+    suspend fun applyChannel(channel: MeshCoreChannel, index: Int = 0): Boolean {
+        if (!connected) return false
+        val cmd = MeshCoreFrameCodec.buildSetChannel(
+            index = index,
+            name = channel.name,
+            secret = channel.secret,
+        )
+        return client?.send(cmd) ?: false
     }
 
     // endregion

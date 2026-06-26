@@ -25,11 +25,15 @@ import soy.engindearing.omnitak.mobile.data.AdminResponse
 import soy.engindearing.omnitak.mobile.data.AtakPluginParser
 import soy.engindearing.omnitak.mobile.data.ChatMessage
 import soy.engindearing.omnitak.mobile.data.ChatStatus
+import soy.engindearing.omnitak.mobile.data.MeshChannel
 import soy.engindearing.omnitak.mobile.data.MeshDeviceConfig
+import soy.engindearing.omnitak.mobile.data.RebroadcastMode
 import soy.engindearing.omnitak.mobile.data.AtakPluginSerializer
 import soy.engindearing.omnitak.mobile.data.CoTEvent
 import soy.engindearing.omnitak.mobile.data.TakPacketParser
 import soy.engindearing.omnitak.mobile.data.TakPacketSerializer
+import soy.engindearing.omnitak.mobile.data.TakPacketV2Codec
+import soy.engindearing.omnitak.mobile.data.MeshWire
 import soy.engindearing.omnitak.mobile.data.FromRadioFrame
 import soy.engindearing.omnitak.mobile.data.MeshConnectionType
 import soy.engindearing.omnitak.mobile.data.MeshNode
@@ -80,6 +84,11 @@ class MeshtasticManager(private val context: Context? = null) : MeshFrameworkMan
     private var bytesRx: Long = 0L
     @Volatile private var _myNodeNum: UInt? = null
     val myNodeNum: UInt? get() = _myNodeNum
+
+    /** #171 — last wall-clock ms a given marker uid was sent over mesh, for
+     *  the per-uid send debounce. Guarded by its own monitor; the map can
+     *  fire repeated saves of the same marker faster than LoRa can carry. */
+    private val markerLastSentMs = java.util.concurrent.ConcurrentHashMap<String, Long>()
 
     /**
      * Default link state — the TCP client. Existing screens (and the
@@ -309,6 +318,27 @@ class MeshtasticManager(private val context: Context? = null) : MeshFrameworkMan
                     )
                 }
             }
+            PORTNUM_ATAK_PLUGIN_V2 -> {
+                // #171 — TAKPacketV2 (port 78) marker. Decode the 0xFF
+                // uncompressed envelope into a CoTEvent and push to cotSink so
+                // it lands on the MAP as a marker (not chat), deduped by uid.
+                // 0x00/0x01 dict-compressed bodies decode to null and are
+                // dropped (we don't ship the GPL zstd dictionary).
+                val event = TakPacketV2Codec.decode(packet.payload)
+                if (event != null) {
+                    runCatching { cotSink?.invoke(event) }
+                        .onFailure { Log.w(TAG, "cotSink failed for TAKPacketV2 marker: ${it.message}") }
+                    Log.i(
+                        TAG,
+                        "RX TAKPacketV2 marker from ${packet.from.toString(16)} -> CoT ${event.uid} (${packet.payload.size}B)",
+                    )
+                } else {
+                    Log.w(
+                        TAG,
+                        "RX TAKPacketV2 from ${packet.from.toString(16)} undecodable (non-0xFF envelope?), ${packet.payload.size}B",
+                    )
+                }
+            }
             PORTNUM_ATAK_PLUGIN, PORTNUM_ATAK_FORWARDER -> {
                 // Phase 2: try TAKPacket (atak.proto) first for interop with stock
                 // Meshtastic ATAK Plugin / gateway. Fall back to Phase-1 TAKMessage
@@ -494,6 +524,14 @@ class MeshtasticManager(private val context: Context? = null) : MeshFrameworkMan
      * [MeshtasticBleClient.sendToRadio] (chunked at the negotiated MTU).
      */
     override suspend fun sendCoTOverMesh(event: CoTEvent, channelIndex: UInt): Boolean {
+        // #171 — tactical MARKER CoT types ride TAKPacketV2 on port 78 so the
+        // raw CoT type, color and iconset survive the hop (the v1 port-72 path
+        // is PLI + GeoChat only and would degrade a marker to a text line).
+        // This branch runs BEFORE the b-t-f / PLI split below.
+        if (isTacticalMarker(event.type)) {
+            return sendMarkerOverMesh(event, channelIndex)
+        }
+
         // Phase 2: Emit standard TAKPacket (atak.proto) for interop with stock
         // Meshtastic ATAK Plugin, Meshtastic phone-app TAK role, and the
         // TAK_Meshtastic_Gateway. The MeshPacket wrapper still uses
@@ -511,6 +549,42 @@ class MeshtasticManager(private val context: Context? = null) : MeshFrameworkMan
             MeshConnectionType.BLUETOOTH -> bleClient?.sendToRadio(toRadio) ?: false
             null -> false
         }
+    }
+
+    /**
+     * #171 — send a tactical marker on port 78 (TAKPacketV2). Encodes the
+     * 0xFF-envelope body via [TakPacketV2Codec]; broadcast (want_ack=false),
+     * hop_limit 3. Debounced per-uid so a held save doesn't flood the channel.
+     * Returns false when no transport is active, the marker is throttled, or
+     * the encode exceeds the LoRa wire budget (caller may fall back to v1).
+     */
+    private suspend fun sendMarkerOverMesh(event: CoTEvent, channelIndex: UInt): Boolean {
+        val now = System.currentTimeMillis()
+        val last = markerLastSentMs[event.uid]
+        if (last != null && now - last < MARKER_SEND_THROTTLE_MS) {
+            Log.v(TAG, "marker ${event.uid} throttled (${now - last}ms since last send)")
+            return false
+        }
+
+        val payload = TakPacketV2Codec.encodeMarker(event)
+        if (payload == null) {
+            Log.w(TAG, "marker ${event.uid} too large for TAKPacketV2 wire budget; not sent")
+            return false
+        }
+        val toRadio = MeshWire.buildToRadio(
+            portnum = PORTNUM_ATAK_PLUGIN_V2.toULong(),
+            payload = payload,
+            channelIndex = channelIndex,
+            hopLimit = 3u,
+            wantAck = false,
+        )
+        val sent = when (_activeTransport.value) {
+            MeshConnectionType.TCP -> tcpClient.sendBytes(toRadio)
+            MeshConnectionType.BLUETOOTH -> bleClient?.sendToRadio(toRadio) ?: false
+            null -> false
+        }
+        if (sent) markerLastSentMs[event.uid] = now
+        return sent
     }
 
     /**
@@ -549,6 +623,29 @@ class MeshtasticManager(private val context: Context? = null) : MeshFrameworkMan
         return sent
     }
 
+    /**
+     * #172 — push an imported [MeshChannel] (from a scanned/pasted
+     * `meshtastic.org/e/#…` share) onto the connected radio at [index] via a
+     * `set_channel` AdminMessage. Returns true on wire-layer dispatch.
+     */
+    suspend fun applyChannel(channel: MeshChannel, index: Int = 0): Boolean =
+        dispatchAdmin(AdminMessageSerializer.buildSetChannel(channel, index))
+
+    /**
+     * #172 — set the radio's rebroadcast scope (PatoG1899's "known channels
+     * only"). Returns true on wire-layer dispatch.
+     */
+    suspend fun applyRebroadcastMode(mode: RebroadcastMode): Boolean =
+        dispatchAdmin(AdminMessageSerializer.buildSetRebroadcastMode(mode))
+
+    /** Dispatch one already-framed ToRadio admin blob over the active transport. */
+    private suspend fun dispatchAdmin(toRadio: ByteArray): Boolean =
+        when (_activeTransport.value) {
+            MeshConnectionType.TCP -> tcpClient.sendBytes(toRadio)
+            MeshConnectionType.BLUETOOTH -> bleClient?.sendToRadio(toRadio) ?: false
+            null -> false
+        }
+
     companion object {
         private const val TAG = "MeshtasticManager"
         private const val PORTNUM_TEXT_MESSAGE_APP = 1
@@ -565,5 +662,36 @@ class MeshtasticManager(private val context: Context? = null) : MeshFrameworkMan
         // Some ATAK plugin builds send via portnum 257 (ATAK_FORWARDER)
         // — accept both so OmniTAK can interop with both clients.
         private const val PORTNUM_ATAK_FORWARDER = 257
+        // #171 — TAKPacketV2 markers ride port 78 (ATAK_PLUGIN_V2).
+        private const val PORTNUM_ATAK_PLUGIN_V2 = 78
+        // #171 — debounce repeat sends of the same marker uid so a held
+        // map-drop doesn't flood the LoRa channel.
+        private const val MARKER_SEND_THROTTLE_MS = 30_000L
+
+        /** The bare friendly-ground-unit PLI type self/contacts broadcast.
+         *  Shares its `a-f-G-U-` prefix with friendly markers, so it must be
+         *  excluded explicitly or self-PLI would misroute to port 78. */
+        private const val PLI_CONTACT_TYPE = "a-f-G-U-C"
+
+        /**
+         * #171 — true when [type] is a tactical marker that should ride
+         * TAKPacketV2 (port 78) rather than the v1 PLI/GeoChat path:
+         *  - `a-u-*`     unknown-affiliation map markers
+         *  - `a-h-*`     hostile map markers
+         *  - `a-f-G-U-*` friendly ground-unit markers (operator-dropped),
+         *                EXCEPT the bare `a-f-G-U-C` PLI type, which is the
+         *                self/contact position report and keeps v1 routing
+         *  - `b-m-p-*`   bookmark map points (waypoint / spot / checkpoint)
+         *
+         * GeoChat (`b-t-f`) and plain PLI are intentionally excluded so they
+         * keep their existing v1 routing.
+         */
+        fun isTacticalMarker(type: String): Boolean {
+            if (type == PLI_CONTACT_TYPE) return false
+            return type.startsWith("a-u-") ||
+                type.startsWith("a-h-") ||
+                type.startsWith("a-f-G-U-") ||
+                type.startsWith("b-m-p-")
+        }
     }
 }

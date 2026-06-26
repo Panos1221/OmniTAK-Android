@@ -53,6 +53,22 @@ enum class MeshChannelPreset(val label: String, val blurb: String) {
 }
 
 /**
+ * Rebroadcast scope — mirrors the Meshtastic firmware
+ * `Config_DeviceConfig_RebroadcastMode` enum (config.proto). [wire] is the
+ * proto-enum ordinal that travels in `DeviceConfig.rebroadcast_mode`.
+ *
+ * PatoG1899's "rebroadcast only known channels" request maps to
+ * [KNOWN_ONLY]; [LOCAL_ONLY] is the slightly looser variant that still
+ * suppresses foreign-mesh traffic.
+ */
+enum class RebroadcastMode(val wire: Int, val label: String, val blurb: String) {
+    ALL(0, "All", "Rebroadcast every packet the radio hears (default)."),
+    LOCAL_ONLY(2, "Local only", "Drop packets from foreign meshes; relay local ones."),
+    KNOWN_ONLY(3, "Known channels only", "Only relay packets on channels this radio has configured."),
+    NONE(4, "None", "Never rebroadcast — receive only."),
+}
+
+/**
  * Local-draft of a Meshtastic radio's user-configurable settings. We
  * persist what the operator *intends* the device config to be — this
  * is the edit buffer the Device Settings screen mutates.

@@ -94,13 +94,19 @@ object MeshWire {
      * Field numbers per canonical Meshtastic mesh.proto. Note want_ack is
      * MeshPacket field 10 — field 9 is hop_limit; using 9 would silently
      * confuse hop_limit and want_ack across the iOS↔Android wire.
+     *
+     * [hopLimit] is emitted on field 9. It was never written before, which
+     * left it at the proto default of 0 — a 0-hop packet the radio silently
+     * drops instead of forwarding past the first node. Default 3 matches the
+     * Meshtastic firmware default and iOS.
      */
     fun buildToRadio(
-        portnum: ULong,
+        portnum: ULong = 72UL,
         payload: ByteArray,
         to: UInt = BROADCAST_ADDR,
         channelIndex: UInt = 0u,
         packetId: UInt? = null,
+        hopLimit: UInt = 3u,
         wantAck: Boolean = false,
         wantResponse: Boolean = false,
     ): ByteArray {
@@ -132,6 +138,11 @@ object MeshWire {
             // 6: id (fixed32)
             appendTag(this, field = 6, wire = 5)
             appendFixed32(this, resolvedId)
+            // 9: hop_limit (varint) — emitted BEFORE want_ack. Skipping it
+            // left hop_limit at 0 and the radio dropped the packet at hop 1.
+            if (hopLimit > 0u) {
+                appendVarintField(this, field = 9, value = hopLimit.toULong())
+            }
             // 10: want_ack (bool varint) — see the field-9-vs-10 note above.
             if (wantAck) {
                 appendVarintField(this, field = 10, value = 1UL)
