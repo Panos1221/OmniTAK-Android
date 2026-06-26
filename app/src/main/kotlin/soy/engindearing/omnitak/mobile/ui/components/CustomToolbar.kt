@@ -1,5 +1,6 @@
 package soy.engindearing.omnitak.mobile.ui.components
 
+import android.content.res.Configuration
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
@@ -49,6 +50,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -83,6 +85,16 @@ fun CustomToolbar(
     onDismissCoachmark: () -> Unit,
 ) {
     val currentItems by rememberUpdatedState(items)
+    // #182 — landscape (the plate-carrier orientation on a Pixel 9/10 Pro) has
+    // little vertical room, and this full-width bottom bar used to eat a chunk
+    // of the short map with its icon-over-label cells. In landscape the bar
+    // collapses to a compact icon-only rail with tighter padding so the map
+    // keeps its height; every action stays present and tappable (the label
+    // rides on as the icon's content description). Edit mode forces the roomy
+    // layout so the remove/reorder affordances stay usable.
+    val isLandscape =
+        LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
+    val compact = isLandscape && !editing
     var rowWidthPx by remember { mutableIntStateOf(0) }
     var draggingId by remember { mutableStateOf<String?>(null) }
     var dragStartIndex by remember { mutableIntStateOf(0) }
@@ -103,7 +115,7 @@ fun CustomToolbar(
         modifier = Modifier
             .fillMaxWidth()
             .windowInsetsPadding(WindowInsets.navigationBars)
-            .padding(horizontal = 14.dp, vertical = 8.dp),
+            .padding(horizontal = 14.dp, vertical = if (compact) 4.dp else 8.dp),
         contentAlignment = Alignment.Center,
     ) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
@@ -127,7 +139,7 @@ fun CustomToolbar(
                         color = if (editing) Color(0xFFFFCC00).copy(alpha = 0.6f) else Color.White.copy(alpha = 0.08f),
                         shape = RoundedCornerShape(34.dp),
                     )
-                    .padding(horizontal = 6.dp, vertical = 6.dp),
+                    .padding(horizontal = 6.dp, vertical = if (compact) 3.dp else 6.dp),
                 horizontalArrangement = Arrangement.SpaceEvenly,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
@@ -166,6 +178,7 @@ fun CustomToolbar(
                         item = item,
                         selected = currentRoute == item.route(),
                         editing = editing,
+                        compact = compact,
                         canRemove = canRemove,
                         jiggleAngle = if (isDragging) 0f else jiggleAngle,
                         isDragging = isDragging,
@@ -247,6 +260,7 @@ private fun BarCell(
     item: BarItem,
     selected: Boolean,
     editing: Boolean,
+    compact: Boolean,
     canRemove: Boolean,
     jiggleAngle: Float,
     isDragging: Boolean,
@@ -295,14 +309,19 @@ private fun BarCell(
                     modifier = Modifier.size(22.dp),
                 )
             }
-            Text(
-                text = item.label,
-                color = if (selected) item.tint else Color.White.copy(alpha = 0.7f),
-                fontSize = 11.sp,
-                fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
-                maxLines = 1,
-                modifier = Modifier.padding(top = 2.dp),
-            )
+            // #182 — drop the per-cell label in the compact landscape rail;
+            // the icon's contentDescription keeps it accessible and the bar
+            // shrinks to a minimal icon row instead of icon-over-label tiles.
+            if (!compact) {
+                Text(
+                    text = item.label,
+                    color = if (selected) item.tint else Color.White.copy(alpha = 0.7f),
+                    fontSize = 11.sp,
+                    fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
+                    maxLines = 1,
+                    modifier = Modifier.padding(top = 2.dp),
+                )
+            }
         }
 
         if (editing && canRemove) {

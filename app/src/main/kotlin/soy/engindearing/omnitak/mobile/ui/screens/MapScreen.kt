@@ -30,6 +30,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBars
@@ -56,6 +57,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -111,6 +113,11 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
     val statusBarTopInsetDp = WindowInsets.statusBars
         .asPaddingValues()
         .calculateTopPadding()
+    // #182 — landscape is the plate-carrier orientation (Pixel 9/10 Pro) and
+    // has little vertical room. The map chrome (tools drawer, zoom/center
+    // control stack) lays out compactly there so it doesn't eat the short map.
+    val isLandscape = LocalConfiguration.current.orientation ==
+        android.content.res.Configuration.ORIENTATION_LANDSCAPE
     val active by app.serverManager.activeServer.collectAsState()
     val connState by app.serverManager.connectionState.collectAsState()
     val allServers by app.serverManager.servers.collectAsState()
@@ -1562,12 +1569,9 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
         // Map control stack — zoom in / zoom out / center-on-me — at the
         // BottomStart corner so it stays reachable one-handed without
         // opening the tools drawer. Mirrors the iOS map controls layout.
-        androidx.compose.foundation.layout.Column(
-            modifier = Modifier
-                .align(Alignment.BottomStart)
-                .padding(start = 16.dp, bottom = 110.dp),
-            verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(8.dp),
-        ) {
+        // #182 — in landscape the short height can't spare a tall column, so
+        // the same buttons lay out in a horizontal row hugging the bottom edge.
+        val mapControlButtons: @Composable () -> Unit = {
             MapControlFab(
                 icon = Icons.Filled.Add,
                 contentDescription = "Zoom in",
@@ -1612,6 +1616,30 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
                         }
                     },
                 )
+            }
+        }
+        if (isLandscape) {
+            androidx.compose.foundation.layout.Row(
+                modifier = Modifier
+                    .align(Alignment.BottomStart)
+                    // Lower bottom inset than portrait: the bottom toolbar is a
+                    // single compact row in landscape, so the controls sit just
+                    // above the navigation-bar inset instead of clearing a tall bar.
+                    .navigationBarsPadding()
+                    .padding(start = 16.dp, bottom = 12.dp),
+                horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                mapControlButtons()
+            }
+        } else {
+            androidx.compose.foundation.layout.Column(
+                modifier = Modifier
+                    .align(Alignment.BottomStart)
+                    .padding(start = 16.dp, bottom = 110.dp),
+                verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(8.dp),
+            ) {
+                mapControlButtons()
             }
         }
 
