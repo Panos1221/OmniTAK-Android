@@ -53,6 +53,54 @@ enum class MeshChannelPreset(val label: String, val blurb: String) {
 }
 
 /**
+ * LoRa region — mirrors the Meshtastic firmware
+ * `Config_LoRaConfig_RegionCode` enum (config.proto). [wire] is the
+ * proto-enum number that travels in `LoRaConfig.region` (field 7).
+ *
+ * Region sets the legal frequency band + duty cycle for the radio; it
+ * MUST be set before a fresh radio will transmit. This is the headline
+ * "make the stock app obsolete" knob — #181. Labels are operator-facing
+ * (the picker shows these, not the SCREAMING_SNAKE wire names).
+ *
+ * Numbers are pinned to the proto, not the Kotlin declaration order, so
+ * the list can be reordered for the UI without breaking the wire format.
+ */
+enum class MeshRegion(val wire: Int, val label: String) {
+    UNSET(0, "Unset"),
+    US(1, "United States"),
+    EU_433(2, "EU 433 MHz"),
+    EU_868(3, "EU 868 MHz"),
+    CN(4, "China"),
+    JP(5, "Japan"),
+    ANZ(6, "Australia / NZ"),
+    KR(7, "Korea"),
+    TW(8, "Taiwan"),
+    RU(9, "Russia"),
+    IN(10, "India"),
+    NZ_865(11, "New Zealand 865 MHz"),
+    TH(12, "Thailand"),
+    LORA_24(13, "2.4 GHz (WLAN band)"),
+    UA_433(14, "Ukraine 433 MHz"),
+    UA_868(15, "Ukraine 868 MHz"),
+    MY_433(16, "Malaysia 433 MHz"),
+    MY_919(17, "Malaysia 919 MHz"),
+    SG_923(18, "Singapore 923 MHz"),
+    PH_433(19, "Philippines 433 MHz"),
+    PH_868(20, "Philippines 868 MHz"),
+    PH_915(21, "Philippines 915 MHz"),
+    ANZ_433(22, "Australia / NZ 433 MHz"),
+    KZ_433(23, "Kazakhstan 433 MHz"),
+    KZ_863(24, "Kazakhstan 863 MHz"),
+    NP_865(25, "Nepal 865 MHz"),
+    BR_902(26, "Brazil 902 MHz"),
+    ;
+
+    companion object {
+        fun fromWire(wire: Int): MeshRegion? = entries.firstOrNull { it.wire == wire }
+    }
+}
+
+/**
  * Rebroadcast scope — mirrors the Meshtastic firmware
  * `Config_DeviceConfig_RebroadcastMode` enum (config.proto). [wire] is the
  * proto-enum ordinal that travels in `DeviceConfig.rebroadcast_mode`.

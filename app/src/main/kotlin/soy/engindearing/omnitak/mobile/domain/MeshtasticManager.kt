@@ -26,7 +26,9 @@ import soy.engindearing.omnitak.mobile.data.AtakPluginParser
 import soy.engindearing.omnitak.mobile.data.ChatMessage
 import soy.engindearing.omnitak.mobile.data.ChatStatus
 import soy.engindearing.omnitak.mobile.data.MeshChannel
+import soy.engindearing.omnitak.mobile.data.MeshChannelPreset
 import soy.engindearing.omnitak.mobile.data.MeshDeviceConfig
+import soy.engindearing.omnitak.mobile.data.MeshRegion
 import soy.engindearing.omnitak.mobile.data.RebroadcastMode
 import soy.engindearing.omnitak.mobile.data.AtakPluginSerializer
 import soy.engindearing.omnitak.mobile.data.CoTEvent
@@ -637,6 +639,31 @@ class MeshtasticManager(private val context: Context? = null) : MeshFrameworkMan
      */
     suspend fun applyRebroadcastMode(mode: RebroadcastMode): Boolean =
         dispatchAdmin(AdminMessageSerializer.buildSetRebroadcastMode(mode))
+
+    /**
+     * #181 — set the radio's LoRa region + modem preset in one admin write
+     * (`set_config { lora { use_preset, modem_preset, region } }`). Region is
+     * the band a fresh radio needs before it will transmit; preset is the
+     * range/throughput profile. Returns true on wire-layer dispatch.
+     */
+    suspend fun applyLoRaConfig(
+        region: MeshRegion,
+        preset: MeshChannelPreset,
+        usePreset: Boolean = true,
+    ): Boolean =
+        dispatchAdmin(AdminMessageSerializer.buildSetLoRaConfig(region, preset, usePreset))
+
+    /**
+     * #181 — set the radio's owner (display name) via `set_owner { User }`.
+     * Long name shows in the node list; short name is the 4-char tag. Returns
+     * true on wire-layer dispatch.
+     */
+    suspend fun applyOwner(
+        longName: String,
+        shortName: String,
+        isLicensed: Boolean = false,
+    ): Boolean =
+        dispatchAdmin(AdminMessageSerializer.buildSetOwner(longName, shortName, isLicensed = isLicensed))
 
     /** Dispatch one already-framed ToRadio admin blob over the active transport. */
     private suspend fun dispatchAdmin(toRadio: ByteArray): Boolean =

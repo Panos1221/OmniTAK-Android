@@ -80,6 +80,101 @@ class ChannelApplyEncoderTest {
         assertEquals(4, RebroadcastMode.NONE.wire)
     }
 
+    // region #181 set_config LoRaConfig (region + modem preset) ----------
+
+    @Test
+    fun `set_config LoRa US LONG_FAST encodes use_preset and region with default preset omitted`() {
+        val frame = AdminMessageSerializer.buildSetLoRaConfig(
+            region = MeshRegion.US,
+            modemPreset = MeshChannelPreset.LONG_FAST,
+        )
+
+        // set_config=34 (tag 92 02), Config.lora=6 (tag 32){ use_preset=1 = true
+        // (08 01), region=7 = US(1) (38 01) }. modem_preset LONG_FAST=0 omitted
+        // (proto3 skip-default).
+        val expected = "920206320408013801".chunked(2).map { it.toInt(16).toByte() }.toByteArray()
+        assertTrue("LoRa US/LONG_FAST admin bytes present; got ${frame.hex()}", frame.containsBytes(expected))
+    }
+
+    @Test
+    fun `set_config LoRa EU868 MEDIUM_FAST encodes preset 4 and region 3`() {
+        val frame = AdminMessageSerializer.buildSetLoRaConfig(
+            region = MeshRegion.EU_868,
+            modemPreset = MeshChannelPreset.MEDIUM_FAST,
+        )
+
+        // Config.lora{ use_preset=1 (08 01), modem_preset=2 = MEDIUM_FAST(4)
+        // (10 04), region=7 = EU_868(3) (38 03) }.
+        val expected = "9202083206080110043803".chunked(2).map { it.toInt(16).toByte() }.toByteArray()
+        assertTrue("LoRa EU868/MEDIUM_FAST admin bytes present; got ${frame.hex()}", frame.containsBytes(expected))
+    }
+
+    @Test
+    fun `set_config LoRa with UNSET region omits the region field`() {
+        val frame = AdminMessageSerializer.buildSetLoRaConfig(
+            region = MeshRegion.UNSET,
+            modemPreset = MeshChannelPreset.SHORT_FAST,
+        )
+
+        // region UNSET(0) omitted; LoRaConfig = use_preset(08 01) +
+        // modem_preset SHORT_FAST(6) (10 06). No 38 (region) tag present.
+        val lora = "08011006".chunked(2).map { it.toInt(16).toByte() }.toByteArray()
+        assertTrue("LoRa preset-only bytes present; got ${frame.hex()}", frame.containsBytes(lora))
+        // region tag 0x38 must not appear inside the LoRaConfig submessage.
+        assertTrue(
+            "region tag should be absent for UNSET",
+            !frame.containsBytes(byteArrayOf(0x38, 0x00)),
+        )
+    }
+
+    @Test
+    fun `MeshRegion wire numbers match config_proto RegionCode`() {
+        assertEquals(0, MeshRegion.UNSET.wire)
+        assertEquals(1, MeshRegion.US.wire)
+        assertEquals(2, MeshRegion.EU_433.wire)
+        assertEquals(3, MeshRegion.EU_868.wire)
+        assertEquals(6, MeshRegion.ANZ.wire)
+        assertEquals(26, MeshRegion.BR_902.wire)
+    }
+
+    // region #181 set_owner (device name) --------------------------------
+
+    @Test
+    fun `set_owner encodes long and short name with correct tags`() {
+        val frame = AdminMessageSerializer.buildSetOwner(longName = "OmniTAK", shortName = "OTK")
+
+        // set_owner=32 (tag 82 02), User{ long_name=2 (12 07 "OmniTAK"),
+        // short_name=3 (1a 03 "OTK") }. id blank + is_licensed false omitted.
+        val expected = "82020e12074f6d6e6954414b1a034f544b"
+            .chunked(2).map { it.toInt(16).toByte() }.toByteArray()
+        assertTrue("set_owner admin bytes present; got ${frame.hex()}", frame.containsBytes(expected))
+    }
+
+    @Test
+    fun `set_owner with is_licensed sets bool field 6`() {
+        val frame = AdminMessageSerializer.buildSetOwner(
+            longName = "W1AW",
+            shortName = "W1AW",
+            isLicensed = true,
+        )
+
+        // User{ long_name=2 (12 04 "W1AW"), short_name=3 (1a 04 "W1AW"),
+        // is_licensed=6 = true (30 01) }.
+        val expected = "82020e1204573141571a04573141573001"
+            .chunked(2).map { it.toInt(16).toByte() }.toByteArray()
+        assertTrue("set_owner licensed admin bytes present; got ${frame.hex()}", frame.containsBytes(expected))
+    }
+
+    @Test
+    fun `set_owner truncates short name to 4 chars`() {
+        val frame = AdminMessageSerializer.buildSetOwner(longName = "Node", shortName = "TOOLONG")
+
+        // short_name field 3 must carry exactly 4 bytes: tag 1a, len 04, "TOOL".
+        val shortField = ("1a04" + "TOOL".toByteArray().joinToString("") { "%02x".format(it) })
+            .chunked(2).map { it.toInt(16).toByte() }.toByteArray()
+        assertTrue("short name truncated to 4 chars; got ${frame.hex()}", frame.containsBytes(shortField))
+    }
+
     // region MeshCore CMD_SET_CHANNEL (0x20) -----------------------------
 
     @Test

@@ -128,9 +128,19 @@ object AdminMessageSerializer {
      * Build a `ToRadio { packet { decoded { portnum = ADMIN_APP, payload = AdminMessage{ set_owner } } } }`.
      * Sets the radio's display name (long + short) so the operator's
      * callsign matches everywhere they look.
+     *
+     * #181 — optional [id] (User.id, field 1) and [isLicensed] (field 6) let
+     * the device-name editor set a node id / amateur-radio licensed flag in
+     * the same admin write. Both default to "leave alone": a blank id and
+     * `isLicensed = false` are omitted so the firmware keeps whatever it has.
      */
-    fun buildSetOwner(longName: String, shortName: String): ByteArray {
-        val owner = encodeOwner(longName = longName, shortName = shortName)
+    fun buildSetOwner(
+        longName: String,
+        shortName: String,
+        id: String = "",
+        isLicensed: Boolean = false,
+    ): ByteArray {
+        val owner = encodeOwner(longName = longName, shortName = shortName, id = id, isLicensed = isLicensed)
         // AdminMessage.set_owner = field 32, wire type 2 (length-delimited submessage).
         val admin = ByteArrayOutputStream().apply {
             MeshWire.appendTag(this, field = 32, wire = 2)
@@ -280,18 +290,86 @@ object AdminMessageSerializer {
         return wrapToRadio(admin)
     }
 
+    /**
+     * #181 — build `set_config { lora { use_preset, modem_preset, region } }`.
+     *
+     * The one-stop "make the stock app obsolete" knob: region picks the legal
+     * frequency band (a fresh radio won't transmit until this is set) and the
+     * modem preset picks the range/throughput profile. Both ride a single
+     * LoRaConfig submessage so the firmware applies them atomically.
+     *
+     * Field numbers (config.proto LoRaConfig):
+     *   use_preset   = 1 (bool)   — true: honour modem_preset, ignore raw BW/SF/CR
+     *   modem_preset = 2 (enum ModemPreset)
+     *   region       = 7 (enum RegionCode)
+     * wrapped in Config.lora = 6, AdminMessage.set_config = 34.
+     *
+     * [usePreset] defaults true (the only mode OmniTAK exposes — raw
+     * bandwidth/spread-factor tuning is out of scope). When [region] is
+     * [MeshRegion.UNSET] (proto3 default 0) the field is omitted, leaving the
+     * radio's current region untouched.
+     */
+    fun buildSetLoRaConfig(
+        region: MeshRegion,
+        modemPreset: MeshChannelPreset,
+        usePreset: Boolean = true,
+    ): ByteArray {
+        val loraConfig = ByteArrayOutputStream().apply {
+            // use_preset = field 1 (bool). proto3 omits the default (false);
+            // we only emit it when true so the wire matches firmware encoding.
+            if (usePreset) MeshWire.appendVarintField(this, field = 1, value = 1UL)
+            // modem_preset = field 2 (enum). Omitted when LONG_FAST (0 = default)
+            // to match proto3 skip-default semantics.
+            val presetWire = presetProtoOrdinal(modemPreset)
+            if (presetWire != 0) {
+                MeshWire.appendVarintField(this, field = 2, value = presetWire.toULong())
+            }
+            // region = field 7 (enum). Omit UNSET (0) so we don't clobber a
+            // region the radio already has set.
+            if (region != MeshRegion.UNSET) {
+                MeshWire.appendVarintField(this, field = 7, value = region.wire.toULong())
+            }
+        }.toByteArray()
+        // Config.lora = field 6.
+        val config = ByteArrayOutputStream().apply {
+            MeshWire.appendTag(this, field = 6, wire = 2)
+            MeshWire.appendVarint(this, loraConfig.size.toULong())
+            write(loraConfig)
+        }.toByteArray()
+        // AdminMessage.set_config = field 34.
+        val admin = ByteArrayOutputStream().apply {
+            MeshWire.appendTag(this, field = 34, wire = 2)
+            MeshWire.appendVarint(this, config.size.toULong())
+            write(config)
+        }.toByteArray()
+        return wrapToRadio(admin)
+    }
+
     // endregion
 
     // region Private encoders -------------------------------------------
 
-    /** Owner / User submessage. id is left blank — the firmware keeps
-     *  whatever the radio already has. macaddr / hw_model also untouched. */
-    private fun encodeOwner(longName: String, shortName: String): ByteArray {
+    /** Owner / User submessage (mesh.proto). macaddr / hw_model / role /
+     *  public_key are left untouched — the firmware keeps whatever the radio
+     *  already has. When [id] is blank it is omitted (proto3 default), so the
+     *  radio keeps its existing node id; when [isLicensed] is false the flag
+     *  is omitted too. Field numbers: id=1, long_name=2, short_name=3,
+     *  is_licensed=6. */
+    private fun encodeOwner(
+        longName: String,
+        shortName: String,
+        id: String = "",
+        isLicensed: Boolean = false,
+    ): ByteArray {
         val out = ByteArrayOutputStream()
+        // 1: id (string) — only when the caller supplied one.
+        appendString(out, field = 1, value = id)
         // 2: long_name (string, max ~40 chars)
         appendString(out, field = 2, value = longName.take(39))
         // 3: short_name (string, max 4 chars per firmware constraint)
         appendString(out, field = 3, value = shortName.take(4))
+        // 6: is_licensed (bool) — omit the proto3 default (false).
+        if (isLicensed) MeshWire.appendVarintField(out, field = 6, value = 1UL)
         return out.toByteArray()
     }
 

@@ -16,7 +16,11 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ExposedDropdownMenuBox
+import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -45,9 +49,11 @@ import kotlinx.coroutines.launch
 import soy.engindearing.omnitak.mobile.OmniTAKApp
 import soy.engindearing.omnitak.mobile.data.MeshChannel
 import soy.engindearing.omnitak.mobile.data.MeshChannelImport
+import soy.engindearing.omnitak.mobile.data.MeshChannelPreset
 import soy.engindearing.omnitak.mobile.data.MeshChannelShare
 import soy.engindearing.omnitak.mobile.data.MeshCoreChannel
 import soy.engindearing.omnitak.mobile.data.MeshFramework
+import soy.engindearing.omnitak.mobile.data.MeshRegion
 import soy.engindearing.omnitak.mobile.data.MeshShareTransport
 import soy.engindearing.omnitak.mobile.data.ProfileQrGenerator
 import soy.engindearing.omnitak.mobile.data.RebroadcastMode
@@ -76,6 +82,13 @@ fun MeshChannelShareScreen(onBack: () -> Unit = {}) {
     var status by remember { mutableStateOf<String?>(null) }
     var joinText by remember { mutableStateOf("") }
     var shareUrl by remember { mutableStateOf<String?>(null) }
+
+    // #181 — LoRa region/preset + device-name edit buffers (screen-local; the
+    // operator picks, taps Apply, and the admin write goes straight to radio).
+    var region by remember { mutableStateOf(MeshRegion.US) }
+    var preset by remember { mutableStateOf(MeshChannelPreset.LONG_FAST) }
+    var longName by remember { mutableStateOf("") }
+    var shortName by remember { mutableStateOf("") }
 
     // Screen-local channel rosters, one per transport.
     val meshtasticChannels = remember { mutableListOf<MeshChannel>().toMutableStateList() }
@@ -126,6 +139,28 @@ fun MeshChannelShareScreen(onBack: () -> Unit = {}) {
         scope.launch {
             val ok = app.meshtastic.applyRebroadcastMode(mode)
             status = if (ok) "Rebroadcast set to ${mode.label}" else "Set rebroadcast failed — no radio"
+        }
+    }
+
+    fun applyLoRa() {
+        scope.launch {
+            val ok = app.meshtastic.applyLoRaConfig(region, preset)
+            status = if (ok) {
+                "Set ${region.label} / ${preset.label} on radio"
+            } else {
+                "Set LoRa config failed — no radio connected"
+            }
+        }
+    }
+
+    fun applyOwner() {
+        scope.launch {
+            val ok = app.meshtastic.applyOwner(longName.trim(), shortName.trim())
+            status = if (ok) {
+                "Set device name to \"${longName.trim()}\" (${shortName.trim()})"
+            } else {
+                "Set device name failed — no radio connected"
+            }
         }
     }
 
@@ -235,6 +270,66 @@ fun MeshChannelShareScreen(onBack: () -> Unit = {}) {
                 }
             }
 
+            // #181 — LoRa region + modem preset (Meshtastic only — admin
+            // set_config { lora }). Region must be set before a fresh radio
+            // transmits; preset is the range/throughput profile.
+            if (transport == MeshFramework.MESHTASTIC) {
+                HorizontalDivider()
+                Text("LoRa radio", style = MaterialTheme.typography.titleMedium)
+                Text(
+                    "Region sets the legal band (required before a new radio transmits). Preset trades range for speed.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.outline,
+                )
+                EnumDropdown(
+                    label = "Region",
+                    selectedLabel = region.label,
+                    options = MeshRegion.entries.filter { it != MeshRegion.UNSET },
+                    optionLabel = { it.label },
+                    onSelect = { region = it },
+                )
+                EnumDropdown(
+                    label = "Modem preset",
+                    selectedLabel = preset.label,
+                    options = MeshChannelPreset.entries.toList(),
+                    optionLabel = { it.label },
+                    onSelect = { preset = it },
+                )
+                Button(onClick = { applyLoRa() }, modifier = Modifier.fillMaxWidth()) {
+                    Text("Apply LoRa config")
+                }
+
+                // #181 — device name (admin set_owner { User }).
+                HorizontalDivider()
+                Text("Device name", style = MaterialTheme.typography.titleMedium)
+                Text(
+                    "Long name shows in the node list; short name is the 4-character tag.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.outline,
+                )
+                OutlinedTextField(
+                    value = longName,
+                    onValueChange = { longName = it },
+                    label = { Text("Long name") },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                )
+                OutlinedTextField(
+                    value = shortName,
+                    onValueChange = { if (it.length <= 4) shortName = it },
+                    label = { Text("Short name (max 4)") },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                )
+                Button(
+                    onClick = { applyOwner() },
+                    enabled = longName.isNotBlank() || shortName.isNotBlank(),
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text("Apply device name")
+                }
+            }
+
             status?.let {
                 HorizontalDivider()
                 Text(it, color = MaterialTheme.colorScheme.primary)
@@ -262,6 +357,53 @@ private fun ChannelRow(
             }
             OutlinedButton(onClick = onShare) { Text("Share") }
             Button(onClick = onApply) { Text("Apply") }
+        }
+    }
+}
+
+/**
+ * #181 — minimal Material3 dropdown picker over an enum list. The selected
+ * value's label sits in a read-only field; tapping opens the menu. Generic so
+ * the same widget drives the Region and Modem-preset pickers.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun <T> EnumDropdown(
+    label: String,
+    selectedLabel: String,
+    options: List<T>,
+    optionLabel: (T) -> String,
+    onSelect: (T) -> Unit,
+) {
+    var expanded by remember { mutableStateOf(false) }
+    ExposedDropdownMenuBox(
+        expanded = expanded,
+        onExpandedChange = { expanded = it },
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        OutlinedTextField(
+            value = selectedLabel,
+            onValueChange = {},
+            readOnly = true,
+            label = { Text(label) },
+            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
+            modifier = Modifier
+                .menuAnchor()
+                .fillMaxWidth(),
+        )
+        DropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { expanded = false },
+        ) {
+            options.forEach { option ->
+                DropdownMenuItem(
+                    text = { Text(optionLabel(option)) },
+                    onClick = {
+                        onSelect(option)
+                        expanded = false
+                    },
+                )
+            }
         }
     }
 }
