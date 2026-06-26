@@ -6,6 +6,7 @@ import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Test
+import soy.engindearing.omnitak.mobile.domain.ConnectionState
 
 /**
  * JVM unit tests for the pure helpers on [MeshtasticBleClient]. The
@@ -115,6 +116,46 @@ class MeshtasticBleClientTest {
             val rebuilt = chunks.fold(ByteArray(0)) { acc, c -> acc + c }
             assertArrayEquals("chunkSize=$size", payload, rebuilt)
         }
+    }
+
+    // endregion
+
+    // region connect timeout state transition (#175) ----------------------
+    // Regression for issue #175 — "Meshtastic connection hangs on Connecting
+    // indefinitely". When a reconnect to a previously-connected radio leaves a
+    // stale GATT session, Nordic's own .timeout()/.fail() callbacks can never
+    // fire, so the client used to sit in Connecting forever (app restart was the
+    // only fix). connectToAddress now wraps the connect in a watchdog; on timeout
+    // it resolves to a *retryable Disconnected* state via this pure helper so the
+    // UI stops spinning and the user can simply tap Connect again.
+
+    @Test fun watchdog_timeout_resolves_to_retryable_disconnected() {
+        // attemptResult == null models the watchdog firing because Nordic never
+        // called back (the stale-GATT hang).
+        val state = MeshtasticBleClient.resolveFailedConnectState("AA:BB:CC:DD:EE:FF", null)
+        assertTrue(
+            "a connect timeout must reset to Disconnected (retryable), not stay Connecting",
+            state is ConnectionState.Disconnected,
+        )
+    }
+
+    @Test fun hard_failure_resolves_to_failed_not_connecting() {
+        // attemptResult == false models a hard failure reported by the stack.
+        val state = MeshtasticBleClient.resolveFailedConnectState("AA:BB:CC:DD:EE:FF", false)
+        assertTrue(
+            "a hard failure must surface Failed (still recoverable), never remain Connecting",
+            state is ConnectionState.Failed,
+        )
+    }
+
+    @Test fun watchdog_timeout_is_above_nordic_connect_timeout() {
+        // The outer watchdog must sit above Nordic's own connect timeout so the
+        // library gets first chance to report a clean failure before we force a
+        // reset — otherwise we'd cut off legitimate slow connects.
+        assertTrue(
+            "watchdog must exceed Nordic's connect timeout",
+            MeshtasticBleClient.WATCHDOG_TIMEOUT_MS > 15_000L,
+        )
     }
 
     // endregion

@@ -69,6 +69,31 @@ class ServerManagerToggleTest {
         }
     }
 
+    /**
+     * Variant fake whose [saveServers] does NOT feed the observable flow, so a
+     * test can drive store emissions independently of in-memory persists. Models
+     * the real decoupling between DataStore writes and DataStore emissions, which
+     * a conflated StateFlow otherwise hides. Used to reproduce the #176 delete
+     * race where a stale pre-delete emission lands while the delete is in flight.
+     */
+    private class DecoupledServerStore : ServerStoreApi {
+        private val _servers = MutableStateFlow<List<TAKServer>>(emptyList())
+        private val _activeId = MutableStateFlow<String?>(null)
+
+        override val servers: Flow<List<TAKServer>> = _servers.asStateFlow()
+        override val activeServerId: Flow<String?> = _activeId.asStateFlow()
+
+        // Persist is a no-op on the observable flow — the test controls emissions.
+        override suspend fun saveServers(list: List<TAKServer>) = Unit
+        override suspend fun saveActiveServerId(id: String?) {
+            _activeId.value = id
+        }
+
+        fun emit(list: List<TAKServer>) {
+            _servers.value = list
+        }
+    }
+
     private fun testServer(enabled: Boolean = true) = TAKServer(
         id = "test-server-id",
         name = "TestServer",
@@ -79,7 +104,7 @@ class ServerManagerToggleTest {
         enabled = enabled,
     )
 
-    private fun makeManager(store: FakeServerStore, scope: TestScope): ServerManager {
+    private fun makeManager(store: ServerStoreApi, scope: TestScope): ServerManager {
         // Pull the StandardTestDispatcher from the test scope so that coroutines
         // launched inside ServerManager share the test scheduler and are advanced by
         // advanceUntilIdle(). A fresh SupervisorJob (not a child of TestScope's Job)
@@ -239,6 +264,57 @@ class ServerManagerToggleTest {
             state is ConnectionState.Connecting ||
                 state is ConnectionState.Connected ||
                 state is ConnectionState.Failed,
+        )
+    }
+
+    // ── Test 5 ───────────────────────────────────────────────────────────────
+
+    /**
+     * Regression test for issue #176 — "Removing a TAK server requires two taps".
+     *
+     * Root cause: deleteServer() drops the server from the in-memory _servers
+     * StateFlow synchronously and launches an async DataStore persist. Before
+     * that persist lands, the store.servers collector can receive a *stale*
+     * pre-delete snapshot. The deleted id is no longer in _servers, so the
+     * external-insert merge path ("pick up ids an external writer added") treated
+     * it as incoming and re-added it — the row reappeared and a second delete was
+     * needed to make it stick.
+     *
+     * Fix: tombstone deleted ids so the merge path skips a stale re-emission.
+     */
+    @Test
+    fun `delete is not undone by a stale pre-delete DataStore re-emission`() = runTest {
+        // DecoupledServerStore lets us emit a stale snapshot independently of the
+        // delete's own persist — the in-flight race a conflated StateFlow hides.
+        val store = DecoupledServerStore()
+        val server = testServer(enabled = true)
+        store.emit(listOf(server))
+
+        val manager = makeManager(store, this)
+        advanceUntilIdle()
+
+        assertTrue(
+            "server must be present after cold-start",
+            manager.servers.value.any { it.id == server.id },
+        )
+
+        // One tap: confirm delete. In-memory drop is synchronous.
+        manager.deleteServer(server.id)
+        advanceUntilIdle()
+        assertFalse(
+            "server must be gone immediately after a single delete",
+            manager.servers.value.any { it.id == server.id },
+        )
+
+        // The stale pre-delete snapshot now lands out of order (the exact race
+        // that resurrected the row and forced a second tap). The merge path must
+        // skip it because the id is tombstoned.
+        store.emit(listOf(server))
+        advanceUntilIdle()
+
+        assertFalse(
+            "a stale pre-delete re-emission must NOT resurrect the deleted server",
+            manager.servers.value.any { it.id == server.id },
         )
     }
 }

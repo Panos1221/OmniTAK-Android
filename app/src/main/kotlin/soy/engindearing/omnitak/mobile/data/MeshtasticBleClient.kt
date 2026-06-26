@@ -194,22 +194,54 @@ class MeshtasticBleClient(context: Context) : BleManager(context) {
     suspend fun connectToAddress(address: String): Boolean {
         val adapter = bluetoothAdapter ?: return false
         val device = runCatching { adapter.getRemoteDevice(address) }.getOrNull() ?: return false
+
+        // #175 — clear any stale GATT/manager session before reconnecting.
+        // Reconnecting to a previously-connected radio without closing the prior
+        // session leaves a half-open GATT in the OS stack; Nordic then sits in
+        // Connecting and its own .timeout()/.fail() never fire, so the UI hangs
+        // on "Connecting" until the app is restarted (a fresh process drops the
+        // stale session). BleManager.close() releases the prior GATT and resets
+        // the manager so the next connect() starts from a clean slate.
+        runCatching { close() }
+        stopBackgroundJobs()
+
         _state.value = ConnectionState.Connecting(address)
-        return suspendCancellableCoroutine { cont ->
-            connect(device)
-                .timeout(CONNECT_TIMEOUT_MS)
-                .retry(2, 200)
-                .useAutoConnect(false)
-                .done {
-                    if (cont.isActive) cont.resume(true)
-                }
-                .fail { _, status ->
-                    Log.w(TAG, "BLE connect failed: status=$status")
-                    _state.value = ConnectionState.Failed("status=$status")
-                    if (cont.isActive) cont.resume(false)
-                }
-                .enqueue()
+
+        // #175 — outer watchdog. Nordic's .timeout()/.retry() should fail back,
+        // but on a stuck stale GATT the failure callback can never fire, leaving
+        // us pinned in Connecting forever. withTimeoutOrNull guarantees we leave
+        // Connecting within a bounded window and reset to a *retryable*
+        // Disconnected state (not Failed — Failed is sticky and blocks
+        // onDeviceDisconnected from resetting), so the user can simply tap
+        // Connect again.
+        val ok = withTimeoutOrNull(WATCHDOG_TIMEOUT_MS) {
+            suspendCancellableCoroutine { cont ->
+                connect(device)
+                    .timeout(CONNECT_TIMEOUT_MS)
+                    .retry(2, 200)
+                    .useAutoConnect(false)
+                    .done {
+                        if (cont.isActive) cont.resume(true)
+                    }
+                    .fail { _, status ->
+                        Log.w(TAG, "BLE connect failed: status=$status")
+                        if (cont.isActive) cont.resume(false)
+                    }
+                    .enqueue()
+            }
         }
+
+        if (ok != true) {
+            // Whether timed out (null) or hard-failed (false), drop any half-open
+            // GATT so the next attempt starts from a clean slate, then settle on
+            // the resolved retryable state.
+            runCatching { close() }
+            stopBackgroundJobs()
+            _state.value = resolveFailedConnectState(address, ok)
+        }
+        // On success the ConnectionObserver (onDeviceReady) already flipped us to
+        // Connected; don't second-guess it here.
+        return ok == true
     }
 
     suspend fun disconnectClean() {
@@ -412,6 +444,29 @@ class MeshtasticBleClient(context: Context) : BleManager(context) {
     companion object {
         private const val TAG = "MeshBle"
 
+        /**
+         * #175 — pure decision for the post-connect state when a connect attempt
+         * did NOT succeed. Lives in the companion so the timeout →
+         * retryable-Disconnected transition is unit-testable without a live BLE
+         * stack (the manager itself can't be JVM-instantiated).
+         *
+         * @param attemptResult `null` = watchdog timeout (Nordic's own callbacks
+         *   never fired — the stale-GATT hang), `false` = Nordic reported a hard
+         *   failure. A timeout resets to [ConnectionState.Disconnected] so the UI
+         *   stops spinning and shows a tappable Connect; a hard failure surfaces
+         *   the reason but is still recoverable (the next connect closes the
+         *   session first). Crucially neither path is a sticky state that would
+         *   leave the user pinned in "Connecting" forever.
+         */
+        internal fun resolveFailedConnectState(
+            address: String,
+            attemptResult: Boolean?,
+        ): ConnectionState = when (attemptResult) {
+            null -> ConnectionState.Disconnected
+            false -> ConnectionState.Failed("connect failed for $address")
+            true -> ConnectionState.Disconnected // not used on the failure path
+        }
+
         // Meshtastic GATT service & characteristic UUIDs. Matches the
         // canonical service the Meshtastic firmware advertises.
         val SERVICE_UUID: UUID = UUID.fromString("6ba1b218-15a8-461f-9fa8-5dcae273eafd")
@@ -422,6 +477,14 @@ class MeshtasticBleClient(context: Context) : BleManager(context) {
         const val REQUESTED_MTU: Int = 512
         const val CHUNK_SIZE_BYTES: Int = 500
         private const val CONNECT_TIMEOUT_MS: Long = 15_000
+
+        // #175 — hard backstop above Nordic's own CONNECT_TIMEOUT_MS. If the
+        // stale-GATT hang swallows Nordic's timeout/fail callback, this guarantees
+        // connectToAddress leaves the Connecting state and resets to a retryable
+        // Disconnected within a bounded window. Sized a few seconds over Nordic's
+        // own timeout so the library gets first chance to report a clean failure.
+        internal const val WATCHDOG_TIMEOUT_MS: Long = 20_000
+
         private const val READ_TIMEOUT_MS: Long = 5_000
         private const val POLL_INTERVAL_MS: Long = 1_000
         private const val MAX_DRAIN_PER_BATCH: Int = 32

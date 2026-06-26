@@ -56,7 +56,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import android.widget.Toast
-import androidx.compose.runtime.rememberCoroutineScope
 import com.google.mlkit.vision.barcode.BarcodeScanning
 import com.google.mlkit.vision.barcode.common.Barcode
 import com.google.mlkit.vision.common.InputImage
@@ -284,7 +283,6 @@ fun ServerQrScanScreen(
 fun ServerEnrollScanRoute(onDone: () -> Unit) {
     val context = LocalContext.current
     val app = context.applicationContext as OmniTAKApp
-    val scope = rememberCoroutineScope()
 
     ServerQrScanScreen(
         accept = { uri ->
@@ -306,7 +304,7 @@ fun ServerEnrollScanRoute(onDone: () -> Unit) {
                 return@ServerQrScanScreen
             }
             if (enrollCfg.needsEnrollment) {
-                enrollAndAdd(context, app, scope, enrollCfg)
+                enrollAndAdd(context, app, enrollCfg)
             } else {
                 app.serverManager.addServer(DeepLinkImport.toServer(enrollCfg))
                 Toast.makeText(
@@ -331,11 +329,19 @@ fun ServerEnrollScanRoute(onDone: () -> Unit) {
 private fun enrollAndAdd(
     context: android.content.Context,
     app: OmniTAKApp,
-    scope: kotlinx.coroutines.CoroutineScope,
     cfg: ImportedServerConfig,
 ) {
     Toast.makeText(context, "Enrolling with ${cfg.host}…", Toast.LENGTH_SHORT).show()
-    scope.launch {
+    // #174 — run enrollment on the application scope, NOT a composition-scoped
+    // rememberCoroutineScope. The scanner route calls onDone() (popBackStack)
+    // immediately after kicking this off, which tears the scanner composable
+    // out of composition; a rememberCoroutineScope would be cancelled mid-flight
+    // ("Auto-enrollment failed. The coroutine left the composition."). appScope
+    // survives the teardown — same survival guarantee as MainActivity's
+    // lifecycleScope deep-link enroll path. appScope runs on Dispatchers.Default,
+    // so result toasts are marshalled back to the main thread.
+    val appCtx = app.applicationContext
+    app.appScope.launch {
         val result = runCatching {
             withContext(Dispatchers.IO) {
                 CSREnrollmentService(app.certVault).enroll(
@@ -365,18 +371,22 @@ private fun enrollAndAdd(
                     caCertificateName = enrolled.caCertificateName,
                 ),
             )
-            Toast.makeText(
-                context,
-                "Enrolled & connected: ${cfg.name}",
-                Toast.LENGTH_LONG,
-            ).show()
+            withContext(Dispatchers.Main) {
+                Toast.makeText(
+                    appCtx,
+                    "Enrolled & connected: ${cfg.name}",
+                    Toast.LENGTH_LONG,
+                ).show()
+            }
         }
         result.onFailure { e ->
-            Toast.makeText(
-                context,
-                "Enrollment failed: ${e.message ?: e.javaClass.simpleName}",
-                Toast.LENGTH_LONG,
-            ).show()
+            withContext(Dispatchers.Main) {
+                Toast.makeText(
+                    appCtx,
+                    "Enrollment failed: ${e.message ?: e.javaClass.simpleName}",
+                    Toast.LENGTH_LONG,
+                ).show()
+            }
         }
     }
 }

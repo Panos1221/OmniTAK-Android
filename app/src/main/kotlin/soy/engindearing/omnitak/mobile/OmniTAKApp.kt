@@ -248,7 +248,12 @@ class OmniTAKApp : Application() {
 
     // Application-scoped singletons. Screens reach these via
     // LocalContext.current.applicationContext as OmniTAKApp.
-    private val appScope = CoroutineScope(Dispatchers.Default + SupervisorJob())
+    //
+    // #174 — internal (not private) so the in-app QR enroll path can launch
+    // the CSR network call on a scope that survives the scanner sheet leaving
+    // composition (the bug: rememberCoroutineScope cancels mid-enrollment when
+    // the scanner pops, throwing "The coroutine left the composition").
+    internal val appScope = CoroutineScope(Dispatchers.Default + SupervisorJob())
 
     // Eagerly-cached prefs snapshot for non-suspending sinks (cotSink,
     // mesh broadcast lambdas). Initialized to defaults until DataStore emits.

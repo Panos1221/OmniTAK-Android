@@ -3,6 +3,7 @@ package soy.engindearing.omnitak.mobile.ui.components
 import android.annotation.SuppressLint
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
@@ -128,40 +129,65 @@ fun TacticalMap(
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
-    val currentLongPress by rememberUpdatedState(onMapLongPress)
-    val currentContactTap by rememberUpdatedState(onContactTap)
-    val currentMapSingleTap by rememberUpdatedState(onMapSingleTap)
+    // #177 — the one-time map listeners (tap, long-press, camera-idle, marker,
+    // map-ready/style-ready) now read live callbacks from RetainedMapView.bindings
+    // (refreshed in the SideEffect below) instead of these composition-scoped
+    // holders, so the retained MapView always fires the current composition's
+    // callbacks. The current* holders that remain are the ones still consumed by
+    // keyed DisposableEffects / AndroidView.update further down.
     val currentLocationEnabled by rememberUpdatedState(locationEnabled)
     val currentContacts by rememberUpdatedState(contacts)
     val currentMeasurementPoints by rememberUpdatedState(measurementPoints)
     val currentDrawings by rememberUpdatedState(drawings)
     val currentGridCenter by rememberUpdatedState(gridCenter)
-    val currentCameraIdle by rememberUpdatedState(onCameraIdle)
-    val currentMapReady by rememberUpdatedState(onMapReady)
     val currentStyleReady by rememberUpdatedState(onStyleReady)
-    val currentNorthUpLocked by rememberUpdatedState(northUpLocked)
     val currentTerrain3d by rememberUpdatedState(terrain3d)
     val currentSelfFix by rememberUpdatedState(selfFix)
     val currentFollowMe by rememberUpdatedState(followMeActive)
     val currentUseMilStd by rememberUpdatedState(useMilStdSelfSymbol)
     val currentTeamColor by rememberUpdatedState(selfTeamColor)
-    val currentOnSelfMarkerTap by rememberUpdatedState(onSelfMarkerTap)
     val currentSelfMarkerTriangle by rememberUpdatedState(selfMarkerTriangle)
     // Issue #75 — whether the puck is currently rendered dimmed (stale
     // restored fix). Plain holder, not MutableState: nothing recomposes
     // off it; the effects below read/write it imperatively.
     val puckAppearance = remember { PuckAppearance() }
 
+    // #177 — keep the live callbacks/state the retained MapView's one-time
+    // listeners read in sync with the current composition. SideEffect runs on
+    // every successful recomposition, so a MapView reused after a Settings detour
+    // always fires THIS composition's callbacks, never the dead one that first
+    // created it. Must be in sync before AndroidView re-delivers map/style below.
+    val bindings = RetainedMapView.bindings
+    SideEffect {
+        bindings.onMapReady = onMapReady
+        bindings.onStyleReady = onStyleReady
+        bindings.onCameraIdle = onCameraIdle
+        bindings.onLongPress = onMapLongPress
+        bindings.onMapSingleTap = onMapSingleTap
+        bindings.onContactTap = onContactTap
+        bindings.onSelfMarkerTap = onSelfMarkerTap
+        bindings.northUpLocked = northUpLocked
+        bindings.selfFix = selfFix
+        bindings.contacts = contacts
+    }
+
+    // #177 — retain the native MapView across navigation so returning to the map
+    // (e.g. from Settings) doesn't tear down and re-initialise the MapLibre
+    // engine. acquire() reuses the existing instance (detaching it from any prior
+    // parent first) or builds it once. Use the application context so the
+    // long-lived view never leaks an Activity.
+    val appContext = context.applicationContext
     val mapView = remember {
-        MapLibre.getInstance(context)
-        MapView(context).apply {
-            onCreate(null)
-            getMapAsync { map ->
-                // Issue #16 — hand the map reference up to the caller
-                // so things like the lasso overlay can call
-                // map.projection.fromScreenLocation during drags.
-                currentMapReady?.invoke(map)
-                map.cameraPosition = CameraPosition.Builder()
+        RetainedMapView.acquire(appContext) { ctx ->
+            MapLibre.getInstance(ctx)
+            MapView(ctx).apply {
+                onCreate(null)
+                getMapAsync { map ->
+                    // Issue #16 — hand the map reference up to the caller
+                    // so things like the lasso overlay can call
+                    // map.projection.fromScreenLocation during drags.
+                    bindings.onMapReady?.invoke(map)
+                    map.cameraPosition = CameraPosition.Builder()
                     .target(initialCenter)
                     .zoom(initialZoom)
                     .bearing(initialBearing)
@@ -171,7 +197,7 @@ fun TacticalMap(
                     // not the contacts-src GeoJsonSource circle/symbol layers, which the
                     // GL driver silently fails to paint on Adreno/Mali/emulator (they show
                     // on Cesium but never on 2D). The Annotation path paints everywhere.
-                    ContactMarkerRenderer.update(map, context, currentContacts)
+                    ContactMarkerRenderer.update(map, context, bindings.contacts)
                     MeasurementLayer.update(map, currentMeasurementPoints)
                     DrawingShapeRenderer.apply(map, currentDrawings)
                     currentGridCenter?.let { GridLayer.update(map, it) }
@@ -181,7 +207,7 @@ fun TacticalMap(
                     if (currentLocationEnabled) {
                         activateLocation(
                             map, style, context, currentUseMilStd, currentTeamColor,
-                            seedFix = currentSelfFix, puck = puckAppearance,
+                            seedFix = bindings.selfFix, puck = puckAppearance,
                             selfMarkerTriangle = currentSelfMarkerTriangle,
                         )
                     }
@@ -192,7 +218,7 @@ fun TacticalMap(
                         map.cameraPosition = CameraPosition.Builder(map.cameraPosition)
                             .tilt(55.0).build()
                     }
-                    currentStyleReady?.invoke(map, style)
+                    bindings.onStyleReady?.invoke(map, style)
                 }
                 map.uiSettings.apply {
                     isCompassEnabled = true
@@ -218,7 +244,7 @@ fun TacticalMap(
                     val target = pos.target ?: return@addOnCameraIdleListener
                     // Issue #95 — if north-up lock is active and the bearing
                     // somehow drifted (edge case: programmatic pan), snap back.
-                    if (currentNorthUpLocked && kotlin.math.abs(pos.bearing) > 0.5) {
+                    if (bindings.northUpLocked && kotlin.math.abs(pos.bearing) > 0.5) {
                         map.animateCamera(
                             CameraUpdateFactory.newCameraPosition(
                                 CameraPosition.Builder(pos).bearing(0.0).build()
@@ -227,25 +253,25 @@ fun TacticalMap(
                         )
                         return@addOnCameraIdleListener
                     }
-                    currentCameraIdle?.invoke(target, pos.zoom, pos.bearing)
+                    bindings.onCameraIdle?.invoke(target, pos.zoom, pos.bearing)
                 }
                 map.addOnMapLongClickListener { latLng ->
                     val screen = map.projection.toScreenLocation(latLng)
-                    currentLongPress?.invoke(latLng, Offset(screen.x, screen.y))
+                    bindings.onLongPress?.invoke(latLng, Offset(screen.x, screen.y))
                     true
                 }
                 map.addOnMapClickListener { latLng ->
                     // Mode-specific tap handler wins when provided
                     // (e.g. measurement mode eats taps to add points).
-                    currentMapSingleTap?.let { handler ->
+                    bindings.onMapSingleTap?.let { handler ->
                         if (handler(latLng)) return@addOnMapClickListener true
                     }
-                    val cb = currentContactTap ?: return@addOnMapClickListener false
+                    val cb = bindings.onContactTap ?: return@addOnMapClickListener false
                     val tapPx = map.projection.toScreenLocation(latLng)
                     // #82 — tap on self-marker opens reposition sheet
-                    val selfTapCb = currentOnSelfMarkerTap
+                    val selfTapCb = bindings.onSelfMarkerTap
                     if (selfTapCb != null) {
-                        val fix = currentSelfFix
+                        val fix = bindings.selfFix
                         if (fix != null) {
                             val selfPx = map.projection.toScreenLocation(LatLng(fix.lat, fix.lon))
                             val selfDist = kotlin.math.hypot(
@@ -260,7 +286,7 @@ fun TacticalMap(
                     }
                     var best: CoTEvent? = null
                     var bestDist = Float.MAX_VALUE
-                    currentContacts.forEach { c ->
+                    bindings.contacts.forEach { c ->
                         val px = map.projection.toScreenLocation(LatLng(c.lat, c.lon))
                         val d = kotlin.math.hypot(
                             (px.x - tapPx.x).toDouble(),
@@ -294,10 +320,10 @@ fun TacticalMap(
                     // Mirror the map-click precedence: an active mode handler
                     // (measurement/drawing/mission) eats the tap before editing.
                     val modeHandled = contact != null &&
-                        (currentMapSingleTap?.invoke(marker.position) ?: false)
+                        (bindings.onMapSingleTap?.invoke(marker.position) ?: false)
                     when (decideMarkerTap(contact, modeHandled)) {
                         MarkerTapAction.OPEN_CONTACT_EDIT -> {
-                            currentContactTap?.invoke(contact!!)
+                            bindings.onContactTap?.invoke(contact!!)
                             true
                         }
                         MarkerTapAction.CONSUMED_BY_MODE -> true
@@ -328,18 +354,19 @@ fun TacticalMap(
             // iOS is immune to this class of bug because Mapbox v11
             // AnnotationManagers survive style swaps natively — Android's hand-
             // inserted style layers do not.
-            addOnDidFinishLoadingStyleListener {
-                getMapAsync { map ->
-                    map.getStyle { style ->
-                        ContactMarkerRenderer.update(map, context, currentContacts)
-                        MeasurementLayer.update(map, currentMeasurementPoints)
-                        DrawingShapeRenderer.apply(map, currentDrawings)
-                        currentGridCenter?.let { GridLayer.update(map, it) }
+                addOnDidFinishLoadingStyleListener {
+                    getMapAsync { map ->
+                        map.getStyle { style ->
+                            ContactMarkerRenderer.update(map, context, bindings.contacts)
+                            MeasurementLayer.update(map, currentMeasurementPoints)
+                            DrawingShapeRenderer.apply(map, currentDrawings)
+                            currentGridCenter?.let { GridLayer.update(map, it) }
+                        }
                     }
                 }
-            }
-        }
-    }
+            } // MapView(ctx).apply
+        } // RetainedMapView.acquire factory
+    } // remember
 
     // Flip the location layer on when permission is granted after the
     // map is already alive.
@@ -646,10 +673,18 @@ fun TacticalMap(
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose {
             lifecycleOwner.lifecycle.removeObserver(observer)
-            // Nav-away via bottom tabs doesn't fire ON_PAUSE (the hosting
-            // Activity stays RESUMED), so we have to silence the
-            // LocationComponent here too to kill the compass animator
-            // before tearing the MapView down.
+            // #177 — the MapView is now retained (RetainedMapView) so it can be
+            // re-attached instantly on return without a cold MapLibre rebuild.
+            // Therefore DO NOT onDestroy() here — that would defeat the retention
+            // and leave a destroyed view to re-attach. We only:
+            //   1. silence the LocationComponent (its compass animator keeps
+            //      firing across nav transitions and crashes when it touches a
+            //      detached style — the original reason for the teardown), and
+            //   2. detach the view from its Compose parent so the next
+            //      AndroidView can re-attach it (a View may have only one parent).
+            // onPause/onStop are still driven by the lifecycle observer above for
+            // real Activity lifecycle events; here we just keep the GL surface
+            // warm. The view is destroyed only when the process ends.
             runCatching {
                 mapView.getMapAsync { map ->
                     if (map.locationComponent.isLocationComponentActivated) {
@@ -657,9 +692,7 @@ fun TacticalMap(
                     }
                 }
             }
-            runCatching { mapView.onPause() }
-            runCatching { mapView.onStop() }
-            runCatching { mapView.onDestroy() }
+            RetainedMapView.detach(mapView)
         }
     }
 

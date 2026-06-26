@@ -57,6 +57,16 @@ class ServerManager(
     private val _servers = MutableStateFlow<List<TAKServer>>(emptyList())
     val servers: StateFlow<List<TAKServer>> = _servers.asStateFlow()
 
+    // #176 — tombstones for just-deleted server IDs. deleteServer() removes the
+    // server from _servers synchronously and launches an async DataStore persist.
+    // Until that persist lands, the store.servers collector can receive a stale
+    // pre-delete snapshot whose now-unknown id would be treated as an external
+    // "incoming" insert (the QR/profile-import merge path below) and re-added —
+    // resurrecting the row so a second tap was needed to make it stick. Recording
+    // the id here lets the merge path skip it until the persist round-trips back
+    // a list that no longer contains it.
+    private val deletedIds = ConcurrentHashMap.newKeySet<String>()
+
     private val _activeServer = MutableStateFlow<TAKServer?>(null)
     val activeServer: StateFlow<TAKServer?> = _activeServer.asStateFlow()
 
@@ -366,8 +376,17 @@ class ServerManager(
                 // Only action here: pick up server IDs that an external writer
                 // (e.g. ConfigProfileStore QR/profile import) added to the DataStore
                 // without going through ServerManager's public API.
+                // #176 — once a persisted list no longer carries a tombstoned id,
+                // the delete has round-tripped through DataStore; retire the
+                // tombstone so a future re-add of the same id isn't suppressed.
+                if (deletedIds.isNotEmpty()) {
+                    val loadedIds = loaded.mapTo(HashSet()) { it.id }
+                    deletedIds.removeAll { it !in loadedIds }
+                }
                 val knownIds = _servers.value.map { it.id }.toSet()
-                val incoming = loaded.filter { it.id !in knownIds }
+                // Skip ids we just deleted in-memory: a stale snapshot that still
+                // lists them must not be treated as an external insert (#176).
+                val incoming = loaded.filter { it.id !in knownIds && it.id !in deletedIds }
                 if (incoming.isNotEmpty()) {
                     val merged = _servers.value + incoming
                     _servers.value = merged
@@ -411,6 +430,10 @@ class ServerManager(
     }
 
     fun deleteServer(id: String) {
+        // #176 — tombstone first so a stale DataStore re-emission (the pre-delete
+        // snapshot still in flight) can't resurrect this row before the persist
+        // below round-trips. Cleared once a persisted list confirms it's gone.
+        deletedIds.add(id)
         val updated = _servers.value.filterNot { it.id == id }
         _servers.value = updated
         if (_activeServer.value?.id == id) {
