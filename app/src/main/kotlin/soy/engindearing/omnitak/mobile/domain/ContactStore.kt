@@ -32,9 +32,28 @@ class ContactStore {
     val chatCandidates: Flow<Map<String, CoTEvent>> =
         _contacts.map { m -> m.filterValues { isEndpoint(it) } }
 
-    /** Insert or update a contact. Stale logic arrives with Slice 15. */
-    fun ingest(event: CoTEvent) {
-        _contacts.update { it + (event.uid to event) }
+    /**
+     * Insert or update a contact.
+     *
+     * #178 — every ingest stamps [CoTEvent.receivedAtMs] with the current
+     * wall-clock so the UI can show how old a point is (the CoT `time` attribute
+     * is the producer's clock and lags the link, so it isn't a reliable "when did
+     * I last hear this" signal). Callers may pre-stamp [event.receivedAtMs] (e.g.
+     * tests with a fixed clock); a non-zero value is respected, otherwise `now`.
+     *
+     * #180 — callers tag [event.source] at the ingest point (server sink vs mesh
+     * sink). If a caller didn't set one but the existing contact already carries
+     * a source, the existing source is preserved so a same-UID re-ingest from an
+     * untagged path doesn't blank it.
+     */
+    fun ingest(event: CoTEvent, nowMs: Long = System.currentTimeMillis()) {
+        _contacts.update { current ->
+            val stamped = event.copy(
+                receivedAtMs = if (event.receivedAtMs != 0L) event.receivedAtMs else nowMs,
+                source = event.source ?: current[event.uid]?.source,
+            )
+            current + (event.uid to stamped)
+        }
     }
 
     /** Remove a contact by UID. */

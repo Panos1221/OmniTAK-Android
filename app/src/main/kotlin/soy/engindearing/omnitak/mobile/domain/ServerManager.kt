@@ -209,7 +209,14 @@ class ServerManager(
                 if (chat != null) {
                     chatStore?.ingest(chat)
                 } else {
-                    CoTParser.parse(xml)?.let { event ->
+                    CoTParser.parse(xml)?.let { parsed ->
+                        // #180 — tag the transport at the ingest point so the
+                        // marker detail sheet can show "TAK: <server>". Source
+                        // is for display/debug only; it never rides the wire.
+                        val event = parsed.copy(
+                            source = soy.engindearing.omnitak.mobile.data.CoTSource
+                                .takServer(server.name),
+                        )
                         // Core store first (per the plugin RFC: handlers run
                         // AFTER the core ContactStore ingests), then fan the
                         // event out to any plugin-registered CoT handlers. The

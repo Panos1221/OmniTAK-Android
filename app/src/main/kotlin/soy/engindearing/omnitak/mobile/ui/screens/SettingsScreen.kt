@@ -670,6 +670,29 @@ fun SettingsScreen(
                     onCheckedChange = { v -> mutate { it.copy(keepScreenOn = v) } },
                 )
             }
+            // #178 — staleness overlay: age label + fade on contact pins
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        "Show point age on map",
+                        color = MaterialTheme.colorScheme.onBackground,
+                        style = MaterialTheme.typography.bodyLarge,
+                    )
+                    Text(
+                        "Label contact pins with their age and fade them as they go stale " +
+                            "(fresh under 1 min, aging 1–5 min, stale over 5 min)",
+                        color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+                Switch(
+                    checked = prefs.stalenessOverlayEnabled,
+                    onCheckedChange = { v -> mutate { it.copy(stalenessOverlayEnabled = v) } },
+                )
+            }
 
             // About — the route was registered in AppNav since 0.1 but
             // nothing navigated to it after the bottom-bar rework dropped

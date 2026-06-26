@@ -439,10 +439,21 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
     // created/edited/deleted (or a drawing changed) wouldn't show until you
     // panned or toggled 2D/3D. Drive a data-keyed refresh (mirrors the KML
     // renderers) so create/update/delete reflects immediately.
-    LaunchedEffect(visibleContacts, mapboxMap) {
+    // #178 — drive a slow tick so the on-map staleness overlay re-renders the
+    // age labels/fade as points get older, even with no pan/zoom or CoT update.
+    // Only ticks while the overlay is enabled, so the default path is unaffected.
+    val stalenessOverlay = userPrefs.stalenessOverlayEnabled
+    var stalenessTick by remember { mutableStateOf(0) }
+    LaunchedEffect(stalenessOverlay) {
+        while (stalenessOverlay) {
+            kotlinx.coroutines.delay(30_000L)
+            stalenessTick++
+        }
+    }
+    LaunchedEffect(visibleContacts, mapboxMap, stalenessOverlay, stalenessTick) {
         mapboxMap?.let { m ->
             soy.engindearing.omnitak.mobile.ui.components.ContactMarkerRenderer
-                .update(m, appContext, visibleContacts)
+                .update(m, appContext, visibleContacts, stalenessOverlay)
         }
     }
     // #152 — render user drawings AND the transient range rings through the
@@ -1785,6 +1796,9 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
             initialCotType = editingMarker?.type,
             initialIconsetPath = editingMarker?.iconsetPath,
             initialCourseHeading = editingMarker?.courseHeading,
+            // #178 / #180 — pass the live contact so the sheet can show point
+            // age + data source. Null when dropping a brand-new marker.
+            contact = editingMarker,
             editing = editingMarker != null,
             onSave = { result ->
                 val ll = markerSheetLatLng
@@ -1808,6 +1822,9 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
                         iconsetPath = result.iconsetPath,
                         colorArgb = result.argbHex?.toLong(16)?.toInt(),
                         courseHeading = result.courseHeading ?: editingMarker?.courseHeading,
+                        // #180 — operator-created marker; tag the transport as
+                        // local so the detail sheet doesn't mislabel its origin.
+                        source = soy.engindearing.omnitak.mobile.data.CoTSource.LOCAL,
                     )
                     app.contactStore.ingest(event)
                     val verb = if (editingMarker != null) Loc.t("marker.verb.updated")
@@ -1935,6 +1952,7 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
                             hae = 0.0,
                             callsign = "Marker ${contacts.size + 1}",
                             remarks = "",
+                            source = soy.engindearing.omnitak.mobile.data.CoTSource.LOCAL,
                         )
                         app.contactStore.ingest(event)
                         // Same broadcast contract as MarkerEditSheet —
@@ -1976,6 +1994,7 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
                             callsign = picked.name,
                             remarks = picked.remarks,
                             iconsetPath = picked.icon.iconsetPath,
+                            source = soy.engindearing.omnitak.mobile.data.CoTSource.LOCAL,
                         )
                     )
                     // Broadcast to every enabled server so peers with the
@@ -2175,6 +2194,7 @@ fun MapScreen(onOpenTab: (String) -> Unit = {}) {
                         lon = pos.longitude,
                         callsign = result.type.name,
                         remarks = result.reportText,
+                        source = soy.engindearing.omnitak.mobile.data.CoTSource.LOCAL,
                     )
                     app.contactStore.ingest(event)
                     reportsSheetOpen = false

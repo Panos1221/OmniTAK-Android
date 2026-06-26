@@ -58,14 +58,28 @@ object ContactMarkerRenderer {
     private var ctx: Context? = null
     private var contacts: List<CoTEvent> = emptyList()
     private var idleListener: MapLibreMap.OnCameraIdleListener? = null
+    // #178 — when true, a contact pin shows its age and fades as it goes stale.
+    private var stalenessOverlay: Boolean = false
 
     // Cap live annotations so a flood of CoT contacts can't jank the main thread.
     private const val MAX_MARKERS = 500
 
-    /** Replace the rendered contacts; (re)registers the camera-idle re-render. */
-    fun update(map: MapLibreMap, context: Context, contacts: Collection<CoTEvent>) {
+    /**
+     * Replace the rendered contacts; (re)registers the camera-idle re-render.
+     *
+     * #178 — [stalenessOverlay] turns on the per-pin age label + staleness fade.
+     * Off by default so the existing marker look is unchanged when the operator
+     * hasn't opted in.
+     */
+    fun update(
+        map: MapLibreMap,
+        context: Context,
+        contacts: Collection<CoTEvent>,
+        stalenessOverlay: Boolean = false,
+    ) {
         this.ctx = context
         this.contacts = contacts.toList()
+        this.stalenessOverlay = stalenessOverlay
         if (boundMap !== map) {
             idleListener?.let { l -> runCatching { boundMap?.removeOnCameraIdleListener(l) } }
             boundMap = map
@@ -88,14 +102,26 @@ object ContactMarkerRenderer {
         val factory = IconFactory.getInstance(context)
         val added = ArrayList<Marker>()
         var budget = MAX_MARKERS
+        // #178 — single clock read for this whole render pass so every pin's age
+        // bucket is computed against the same "now".
+        val now = System.currentTimeMillis()
         for (c in contacts) {
             if (budget <= 0) break
             if (c.lat.isNaN() || c.lon.isNaN()) continue
             val ll = LatLng(c.lat, c.lon)
             if (bounds != null && !bounds.contains(ll)) continue
             val label = c.callsign?.takeIf { it.isNotBlank() } ?: c.uid
-            val icon = iconCache.getOrPut(cacheKey(c.displayColor, label)) {
-                factory.fromBitmap(buildContactPin(c.displayColor, label))
+            // #178 — staleness overlay: fade by age bucket + append an age label
+            // (e.g. "ALPHA  3m"). Only when the operator opted in AND we have a
+            // received-at stamp; otherwise the pin renders exactly as before.
+            val ageLabel = if (stalenessOverlay) {
+                soy.engindearing.omnitak.mobile.data.CoTAge.shortLabel(c.receivedAtMs, now)
+            } else null
+            val alpha = if (stalenessOverlay && c.receivedAtMs > 0L) {
+                soy.engindearing.omnitak.mobile.data.CoTAge.alpha(now - c.receivedAtMs)
+            } else 1.0f
+            val icon = iconCache.getOrPut(cacheKey(c.displayColor, label, ageLabel, alpha)) {
+                factory.fromBitmap(buildContactPin(c.displayColor, label, ageLabel, alpha))
             }
             runCatching {
                 map.addMarker(MarkerOptions().position(ll).title(label).icon(icon))
@@ -122,9 +148,17 @@ object ContactMarkerRenderer {
      *  isn't constructible on the JVM. */
     internal fun contactForMarkerId(id: Long): CoTEvent? = markerContacts[id]
 
-    /** Stable cache key: one bitmap per (color, callsign) pair. */
-    internal fun cacheKey(colorArgb: Int, label: String): String =
-        "${colorArgb.toUInt().toString(16)}|$label"
+    /** Stable cache key: one bitmap per (color, callsign[, age, alpha]) tuple.
+     *  The age label + opacity ride the key so the #178 staleness overlay gets a
+     *  fresh bitmap as a point ages, and the plain (color,label) call still works
+     *  for callers/tests that don't use the overlay. */
+    internal fun cacheKey(
+        colorArgb: Int,
+        label: String,
+        ageLabel: String? = null,
+        alpha: Float = 1.0f,
+    ): String =
+        "${colorArgb.toUInt().toString(16)}|$label|${ageLabel ?: ""}|$alpha"
 
     /**
      * Pure viewport test mirroring [render]'s cull, exposed for unit tests
@@ -148,17 +182,27 @@ object ContactMarkerRenderer {
      * Centering the symbol on the point restores the old ContactLayer behavior
      * where the visual and the hit/lasso target coincide.
      */
-    private fun buildContactPin(colorArgb: Int, callsign: String): Bitmap {
-        val text = if (callsign.length > 24) callsign.take(23) + "…" else callsign
+    private fun buildContactPin(
+        colorArgb: Int,
+        callsign: String,
+        ageLabel: String? = null,
+        alpha: Float = 1.0f,
+    ): Bitmap {
+        // #178 — append the age (e.g. "ALPHA  3m") so the label carries freshness
+        // inline; the symbol itself fades via [alpha].
+        val base = if (callsign.length > 24) callsign.take(23) + "…" else callsign
+        val text = if (ageLabel != null) "$base  $ageLabel".trim() else base
+        // Clamp opacity so a faded-but-stale pin never fully disappears.
+        val a = (alpha.coerceIn(0.25f, 1.0f) * 255f).toInt()
         val r = 16f          // symbol radius — small, so center↔coordinate offset is minimal
         val ring = 3f
         val fill = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             color = Color.WHITE; textSize = 30f; textAlign = Paint.Align.CENTER
-            typeface = Typeface.DEFAULT_BOLD
+            typeface = Typeface.DEFAULT_BOLD; this.alpha = a
         }
         val halo = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             color = Color.parseColor("#CC000000"); textSize = 30f; textAlign = Paint.Align.CENTER
-            typeface = Typeface.DEFAULT_BOLD; style = Paint.Style.STROKE; strokeWidth = 6f
+            typeface = Typeface.DEFAULT_BOLD; style = Paint.Style.STROKE; strokeWidth = 6f; this.alpha = a
         }
         val labelH = if (text.isBlank()) 0f else 40f
         val pad = 12f
@@ -172,11 +216,11 @@ object ContactMarkerRenderer {
         // Symbol center sits one radius above the bottom-center anchor, so the
         // dot's lower edge touches the coordinate — keeps the visual on the point.
         val cy = h - r - ring
-        canvas.drawCircle(cx, cy, r, Paint(Paint.ANTI_ALIAS_FLAG).apply { color = colorArgb; style = Paint.Style.FILL })
+        canvas.drawCircle(cx, cy, r, Paint(Paint.ANTI_ALIAS_FLAG).apply { color = colorArgb; style = Paint.Style.FILL; this.alpha = a })
         canvas.drawCircle(cx, cy, r, Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = Color.parseColor("#1A1A1A"); style = Paint.Style.STROKE; strokeWidth = ring
+            color = Color.parseColor("#1A1A1A"); style = Paint.Style.STROKE; strokeWidth = ring; this.alpha = a
         })
-        canvas.drawCircle(cx, cy, r * 0.34f, Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE; style = Paint.Style.FILL })
+        canvas.drawCircle(cx, cy, r * 0.34f, Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE; style = Paint.Style.FILL; this.alpha = a })
 
         // Callsign label above the dot (not a hit target; the dot is).
         if (text.isNotBlank()) {

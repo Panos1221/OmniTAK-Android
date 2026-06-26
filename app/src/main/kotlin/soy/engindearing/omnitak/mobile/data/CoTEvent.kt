@@ -90,6 +90,20 @@ data class CoTEvent(
     val courseHeading: Double? = null,
     /** TAK team role from `<__group role="Team Member|…"/>`. Null when absent. */
     val teamRole: String? = null,
+    /**
+     * #178 — wall-clock epoch-millis when this event was last received/ingested
+     * (NOT the CoT `time` attribute — that's [timeIso], which is the producer's
+     * clock and can lag the link). Stamped by [ContactStore.ingest]. 0 means
+     * "never ingested through the store" (e.g. a freshly-built local marker
+     * before ingest, or an old persisted marker decoded without this field).
+     */
+    val receivedAtMs: Long = 0L,
+    /**
+     * #180 — which transport carried this event (TAK server vs mesh), tagged at
+     * the ingest point. Null when unknown (e.g. an old persisted marker, or a
+     * locally-built event before the source is attached).
+     */
+    val source: CoTSource? = null,
 ) {
     val affiliation: CoTAffiliation
         get() {

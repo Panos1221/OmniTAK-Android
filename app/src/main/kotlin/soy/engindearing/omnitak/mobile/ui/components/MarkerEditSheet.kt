@@ -106,6 +106,11 @@ fun MarkerEditSheet(
     /** Current course heading in degrees for this marker. */
     initialCourseHeading: Double? = null,
     editing: Boolean = false,
+    /** #178 / #180 — the live contact this sheet is editing, when it's an
+     *  existing received/dropped contact (null for a brand-new dropped marker).
+     *  Used only to surface read-only metadata (point age + data source); none
+     *  of its fields drive the editable form. */
+    contact: soy.engindearing.omnitak.mobile.data.CoTEvent? = null,
     /** When true, shows lat/lon override fields (for self-marker repositioning). */
     editingSelf: Boolean = false,
     /** Initial latitude for self-position editing. */
@@ -181,6 +186,12 @@ fun MarkerEditSheet(
                     style = MaterialTheme.typography.bodyMedium,
                 )
             }
+
+            // #178 / #180 — read-only point metadata. Age tells the operator how
+            // old the position is ("4m ago") so a stale fix isn't taken at face
+            // value; Source shows how the point arrived (TAK server vs which mesh)
+            // for comms debugging. Both only render for an existing contact.
+            ContactMetaRows(contact)
 
             Spacer(Modifier.height(16.dp))
             OutlinedTextField(
@@ -473,6 +484,52 @@ private fun MarkerSymbolRow(
             imageVector = Icons.Filled.ChevronRight,
             contentDescription = null,
             tint = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.5f),
+        )
+    }
+}
+
+/**
+ * #178 / #180 — read-only metadata block under the coordinate line: point age
+ * (relative time, auto-refreshing) + data source label. Renders nothing when
+ * [contact] is null or carries no age/source (e.g. a never-ingested marker), so
+ * the Drop-Marker sheet for a fresh point stays unchanged.
+ */
+@Composable
+private fun ContactMetaRows(contact: soy.engindearing.omnitak.mobile.data.CoTEvent?) {
+    if (contact == null) return
+    // Tick once a second so "Ns ago" / "Nm ago" stays live while the sheet is open.
+    var now by remember { mutableStateOf(System.currentTimeMillis()) }
+    androidx.compose.runtime.LaunchedEffect(contact.uid) {
+        while (true) {
+            now = System.currentTimeMillis()
+            kotlinx.coroutines.delay(1_000L)
+        }
+    }
+    val age = soy.engindearing.omnitak.mobile.data.CoTAge.relative(contact.receivedAtMs, now)
+    val source = contact.source?.label
+
+    if (age != null || source != null) {
+        Spacer(Modifier.height(8.dp))
+        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            age?.let { ContactMetaRow(label = "Age", value = it) }
+            source?.let { ContactMetaRow(label = "Source", value = it) }
+        }
+    }
+}
+
+@Composable
+private fun ContactMetaRow(label: String, value: String) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Text(
+            "$label: ",
+            color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.55f),
+            style = MaterialTheme.typography.bodySmall,
+        )
+        Text(
+            value,
+            color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.85f),
+            style = MaterialTheme.typography.bodySmall,
+            fontWeight = FontWeight.SemiBold,
         )
     }
 }

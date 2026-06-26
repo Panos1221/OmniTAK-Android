@@ -376,7 +376,14 @@ class OmniTAKApp : Application() {
                             // GeoChat (no-op for our own echoes / blank text).
                             meshChatNotifier.notify(chatMsg)
                         }
-                        MeshCoTRouter.Destination.CONTACT -> contactStore.ingest(event)
+                        // #180 — tag the mesh transport so the detail sheet
+                        // shows "Mesh: Meshtastic".
+                        MeshCoTRouter.Destination.CONTACT -> contactStore.ingest(
+                            event.copy(
+                                source = soy.engindearing.omnitak.mobile.data.CoTSource
+                                    .mesh("Meshtastic"),
+                            ),
+                        )
                     }
                 }
             }
@@ -464,7 +471,14 @@ class OmniTAKApp : Application() {
                             // #173 — notify on incoming MeshCore GeoChat.
                             meshChatNotifier.notify(chatMsg)
                         }
-                        MeshCoTRouter.Destination.CONTACT -> contactStore.ingest(event)
+                        // #180 — tag the mesh transport so the detail sheet
+                        // shows "Mesh: MeshCore".
+                        MeshCoTRouter.Destination.CONTACT -> contactStore.ingest(
+                            event.copy(
+                                source = soy.engindearing.omnitak.mobile.data.CoTSource
+                                    .mesh("MeshCore"),
+                            ),
+                        )
                     }
                 }
             }

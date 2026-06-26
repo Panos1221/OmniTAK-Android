@@ -141,6 +141,10 @@ data class UserPrefs(
     /** When true, render the self-marker as a triangle pointing in heading
      *  direction instead of the MIL-STD disc / puck. Rotates with compass. */
     val selfMarkerTriangle: Boolean = false,
+    /** #178 — when true, contact pins on the map carry an age label and fade as
+     *  the point goes stale (fresh <1m full opacity, aging 1–5m, stale >5m). Off
+     *  by default — opt-in so the default map look is unchanged. */
+    val stalenessOverlayEnabled: Boolean = false,
 )
 
 class UserPrefsStore(private val context: Context) {
@@ -184,6 +188,7 @@ class UserPrefsStore(private val context: Context) {
     private val KEY_NORTH_UP_LOCKED = booleanPreferencesKey("north_up_locked")
     private val KEY_KEEP_SCREEN_ON  = booleanPreferencesKey("keep_screen_on")
     private val KEY_SELF_MARKER_TRIANGLE = booleanPreferencesKey("selfMarkerTriangle")
+    private val KEY_STALENESS_OVERLAY = booleanPreferencesKey("staleness_overlay_enabled")
 
     val prefs: Flow<UserPrefs> = context.userPrefsDataStore.data.map { p -> readFrom(p) }
 
@@ -228,6 +233,7 @@ class UserPrefsStore(private val context: Context) {
             p[KEY_NORTH_UP_LOCKED] = next.northUpLocked
             p[KEY_KEEP_SCREEN_ON]  = next.keepScreenOn
             p[KEY_SELF_MARKER_TRIANGLE] = next.selfMarkerTriangle
+            p[KEY_STALENESS_OVERLAY] = next.stalenessOverlayEnabled
         }
     }
 
@@ -348,6 +354,7 @@ class UserPrefsStore(private val context: Context) {
         northUpLocked  = p[KEY_NORTH_UP_LOCKED] ?: false,
         keepScreenOn   = p[KEY_KEEP_SCREEN_ON]  ?: false,
         selfMarkerTriangle = p[KEY_SELF_MARKER_TRIANGLE] ?: false,
+        stalenessOverlayEnabled = p[KEY_STALENESS_OVERLAY] ?: false,
     )
 
     // ATAK / OpenTakServer canonical team names are Title Case ("Cyan",
